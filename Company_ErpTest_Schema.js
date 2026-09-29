@@ -381,3 +381,11 @@ var ET_FIELD_INVENTORY = {
     "W": []
   }
 };
+
+var ET_FORMULA_COLS = {
+  "erp_test_chart_of_accounts": [
+    "كود المستوى",
+    "اسم الحساب الرئيسي",
+    "اسم المستوى الثاني_1"
+  ]
+};

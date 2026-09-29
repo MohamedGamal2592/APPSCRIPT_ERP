@@ -61,9 +61,9 @@ function seed(name, headers, rows) {
 seed('erp_test_manufacture_orders', ['unique_id', 'id', 'mo_number', 'mo_date', 'product_id', 'planned_qty', 'produced_qty', 'materials_cost', 'extra_cost', 'total_cost', 'unit_cost', 'production_status', 'completion_date', 'completed_by', 'cancelled_at', 'cancelled_by', 'notes', 'approval_status', 'approval', 'approval_time', 'user', 'created_at', 'updated_at', 'deleted_at', 'deleted_by', 'version']);
 seed('erp_test_manufacture_lines', ['unique_id', 'id', 'mo_unique_id', 'product_id', 'planned_qty', 'consumed_qty', 'unit_cost', 'total_cost', 'notes', 'user', 'created_at', 'updated_at', 'deleted_at', 'deleted_by', 'version']);
 
-// ET_MODE=read runs the whole suite with ET_SJS_READ on (packs); ET_MODE=write adds ET_SJS_WRITE.
-if (process.env.ET_MODE === 'read' || process.env.ET_MODE === 'write') ET.setFlag_('ET_SJS_READ', true);
-if (process.env.ET_MODE === 'write') ET.setFlag_('ET_SJS_WRITE', true);
+// ET_MODE=read runs the whole suite with ET_SJS_READ on (packs). The write layer
+// (ET_SJS_WRITE) has its own harness: tools/verify/erptest_write_vm.js.
+if (process.env.ET_MODE === 'read') ET.setFlag_('ET_SJS_READ', true);
 const SU = { isSuperAdmin: true, email: 'boss@test', company: '37fc50edf1424abd' };
 let failed = 0;
 function ok(v, msg) { console.log((v ? '  PASS  ' : '  FAIL  ') + msg); if (!v) failed++; }

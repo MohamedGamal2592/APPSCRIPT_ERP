@@ -370,6 +370,15 @@ replaceOnce("      const eq = sq + (purchQtyIn[pid] || 0) - (salesQtyIn[pid] || 
 replaceOnce("    const cogs = startVal + purchVal - endVal;", "    const cogs = startVal + purchVal + mfgExtra - endVal;");
 replaceOnce("        purchVal: purchVal,\n", "        purchVal: purchVal,\n        mfgExtra: mfgExtra,\n");
 
+// ---------- P10 prep — every sheet handle in the business code goes through
+// etSheet_, so a running write transaction can hand out its overlay. (Done before
+// the P9/P10 blocks are inserted: those read their own tabs from the real sheet.) ----------
+{
+  const n = count(s, 'getSheet_(');
+  if (n !== 18) problems.push('expected 18 getSheet_( sites before P9/P10, found ' + n);
+  s = s.split('getSheet_(').join('etSheet_(');
+}
+
 // ---------- P9 — JSON read layer (flag ET_SJS_READ, default false) ----------
 replaceOnce("const ErpTest = (function () {\n",
   "const ErpTest = (function () {\n  // P9-P11 feature flags (plan: all false until P12 turns them on).\n" +
@@ -424,6 +433,25 @@ replaceOnce("  function incomeStatementCore_(dbId, dateFrom, dateTo) {",
   "    return _etIsMemo[k];\n" +
   "  }\n  function incomeStatementCoreBase_(dbId, dateFrom, dateTo) {");
 replaceOnce('    schemaCheck_: etSchemaCheck_,', '    schemaCheck_: etSchemaCheck_,\n    setFlag_: etSetFlag_,');
+
+// ---------- P10 — JSON write layer (flag ET_SJS_WRITE, default false) ----------
+replaceOnce("  function erpTestThemeCss_() {",
+  fs.readFileSync(path.join(__dirname, 'sjs_write.inc.js'), 'utf8') + "\n  function erpTestThemeCss_() {");
+replaceOnce("    return actions[action](payload.data, user, dbId);\n  }",
+  "    if (ET_SJS_WRITE && ET_WRITE_VERBS.test(action)) {\n" +
+  "      return etInTx_(dbId, user, payload.data, function () { return actions[action](payload.data, user, dbId); }, action);\n" +
+  "    }\n" +
+  "    return actions[action](payload.data, user, dbId);\n  }");
+replaceOnce("  function etRecords_(dbId, sheetName) {\n",
+  "  function etRecords_(dbId, sheetName) {\n    if (etTxTouched_(dbId, sheetName)) return etTxRecords_(sheetName);\n");
+replaceOnce("    if (ET_SJS_READ) return etRows_(dbId, table);", "    if (ET_SJS_READ && !etTxTouched_(dbId, table)) return etRows_(dbId, table);");
+replaceOnce('    setFlag_: etSetFlag_,', '    setFlag_: etSetFlag_,\n    compact_: etCompact_,\n    onSheetEdit_: etInvalidateOnEdit_,\n    reconcile_: etReconcile_,\n    atomicProbe_: etAtomicProbe_,');
+s += `
+// P10.3-10.5 trigger entry points (global; the owner installs the triggers once).
+function etCompactJob_() { return ErpTest.compact_(getCompanySpreadsheetId_('37fc50edf1424abd')); }
+function etOnSheetEdit_(e) { return ErpTest.onSheetEdit_(getCompanySpreadsheetId_('37fc50edf1424abd'), e); }
+function etReconcileJob_() { return ErpTest.reconcile_(getCompanySpreadsheetId_('37fc50edf1424abd')); }
+`;
 
 // ---------- finalize ----------
 if (problems.length) {

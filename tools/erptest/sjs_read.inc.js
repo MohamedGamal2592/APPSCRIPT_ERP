@@ -86,10 +86,15 @@
       var sh = getSheet_(t, dbId);
       return { t: t, lastRow: Math.max(1, sh.getLastRow()), lastCol: Math.max(1, sh.getLastColumn()) };
     });
-    var res = etBatchGet_(dbId, metas.map(function (m) { return etQuote_(m.t) + '!A1:' + etColLetter_(m.lastCol) + m.lastRow; }),
-      { valueRenderOption: 'UNFORMATTED_VALUE', dateTimeRenderOption: 'SERIAL_NUMBER' });
+    var ranges = metas.map(function (m) { return etQuote_(m.t) + '!A1:' + etColLetter_(m.lastCol) + m.lastRow; });
+    // pack.seq is the journal position the pack includes (0 before any journal).
+    var withJournal = false;
+    if (ET_SJS_WRITE) { try { getSheet_(ET_JOURNAL_SHEET, dbId); withJournal = true; } catch (eJ) { withJournal = false; } }
+    if (withJournal) ranges.push(etQuote_(ET_JOURNAL_SHEET) + '!A:A');
+    var res = etBatchGet_(dbId, ranges, { valueRenderOption: 'UNFORMATTED_VALUE', dateTimeRenderOption: 'SERIAL_NUMBER' });
     var vrs = (res && res.valueRanges) || [];
-    var head = Number(etHead_(dbId)) || 0;
+    var head = 0;
+    if (withJournal) ((vrs[metas.length] && vrs[metas.length].values) || []).forEach(function (r) { var q = Number(r[0]); if (isFinite(q) && q > head) head = q; });
     var out = {};
     metas.forEach(function (m, i) {
       var values = (vrs[i] && vrs[i].values) || [];
@@ -169,11 +174,18 @@
     try { return JSON.parse(json); } catch (e2) { return null; }
   }
 
+  // Journal ops of one table after `seq`, and the journal head (max seq of ANY table):
+  // a replayed pack is current up to the head, not just up to its own last op.
   function etJournalSince_(dbId, table, seq) {
     var rows;
-    try { rows = etSysRecords_(getSheet_(ET_JOURNAL_SHEET, dbId)); } catch (e) { return []; }
-    return rows.filter(function (r) { return String(r.table) === String(table) && Number(r.seq) > Number(seq); })
-      .sort(function (a, b) { return Number(a.seq) - Number(b.seq); });
+    try { rows = etSysRecords_(getSheet_(ET_JOURNAL_SHEET, dbId)); } catch (e) { return { ops: [], head: Number(seq) || 0 }; }
+    var head = Number(seq) || 0;
+    rows.forEach(function (r) { var q = Number(r.seq); if (isFinite(q) && q > head) head = q; });
+    return {
+      head: head,
+      ops: rows.filter(function (r) { return String(r.table) === String(table) && Number(r.seq) > Number(seq); })
+        .sort(function (a, b) { return Number(a.seq) - Number(b.seq); })
+    };
   }
 
   // Apply journal ops ({op, key, data_json}) to a pack in place.
@@ -207,7 +219,11 @@
     var pack = null;
     if (ET_SJS_WRITE) {
       var snap = etPackLoadSnapshot_(dbId, table);
-      if (snap) pack = etPackApply_(snap, etJournalSince_(dbId, table, snap.seq));
+      if (snap) {
+        var since = etJournalSince_(dbId, table, snap.seq);
+        pack = etPackApply_(snap, since.ops);
+        pack.seq = since.head;
+      }
     }
     if (!pack) {
       pack = etPackBuild_(dbId, [table])[table];
