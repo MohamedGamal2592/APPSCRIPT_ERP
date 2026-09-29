@@ -259,6 +259,38 @@ ok(rec && rec.ok === true, 'nightly reconcile: cached packs match the source (' 
 const edit = ET.onSheetEdit_('write-db-B', { range: { getSheet: function () { return { getName: function () { return 'erp_test_products'; } }; } } });
 ok(edit.status === 'success', 'manual-edit trigger invalidates the edited table');
 
+/* ── P11 get_et_sync (server side) ── */
+(function () {
+  const DB = 'write-db-B';
+  ET.setFlag_('ET_SJS_READ', true); ET.setFlag_('ET_SJS_WRITE', true);
+  const sync = function (tables) { H.advance(3); return ET.dispatch_({ module_action: 'get_et_sync', data: { tables: tables } }, SU, DB); };
+  ok(sync({ erp_test_sales_invoices: -1 }).client_packs === false, 'ET_CLIENT_PACKS off -> client_packs:false');
+  ET.setFlag_('ET_CLIENT_PACKS', true);
+  H.cacheStore.clear();
+  const full = sync({ erp_test_sales_invoices: -1 }).tables.erp_test_sales_invoices;
+  ok(full.mode === 'full' && full.pack.rows.length === 1, 'unknown client seq -> full pack (' + (full.pack && full.pack.rows.length) + ' live invoices)');
+  ok(sync({ erp_test_sales_invoices: full.seq }).tables.erp_test_sales_invoices.mode === 'same', 'current seq -> same');
+  const C = H.call('getAllRecords_', DB, 'erp_test_customer_vendor').map(function (r) { return r.id; });
+  const P = H.call('getAllRecords_', DB, 'erp_test_products').map(function (r) { return r.id; });
+  ET.dispatch_({ module_action: 'add_et_party', data: { name: 'طرف جديد', customer_direction: 'عميل' } }, SU, DB);
+  ok(sync({ erp_test_sales_invoices: full.seq }).tables.erp_test_sales_invoices.mode === 'same', 'a write to another table does not disturb this table');
+  const add = ET.dispatch_({ module_action: 'add_et_sales', data: { header: { customer_id: C[0], invoice_date: '2025-06-01', discount_percent: 0 }, lines: [{ product_id: P[0], product_tax: 0, product_qty: 1, product_price: 5, product_discount: 0 }] } }, SU, DB);
+  ok(add.status === 'success', 'add_et_sales under the write layer');
+  const js = wb.openById(DB).getSheetByName('erp_test__journal').getDataRange().getValues();
+  ok(Number(js[js.length - 1][0]) > 71, 'journal seq continues past the compaction floor (' + js[js.length - 1][0] + ')');
+  ok(sync({ erp_test_sales_invoices: full.seq }).tables.erp_test_sales_invoices.mode === 'full', 'a client seq below the compaction floor -> full pack');
+  const base = sync({ erp_test_sales_invoices: -1 }).tables.erp_test_sales_invoices;
+  const add2 = ET.dispatch_({ module_action: 'add_et_sales', data: { header: { customer_id: C[0], invoice_date: '2025-06-02', discount_percent: 0 }, lines: [{ product_id: P[0], product_tax: 0, product_qty: 1, product_price: 5, product_discount: 0 }] } }, SU, DB);
+  const d = sync({ erp_test_sales_invoices: base.seq }).tables.erp_test_sales_invoices;
+  ok(d.mode === 'delta' && d.ops.length === 1 && d.ops[0].op === 'insert' && d.ops[0].key === add2.unique_id, 'seq above the floor -> delta with exactly the one new insert');
+  const cash = sync({ erp_test_cash_bank_movement: -1 }).tables.erp_test_cash_bank_movement;
+  ok(cash.mode === 'changed' && cash.pack === undefined && cash.ops === undefined, 'cash: only its seq, never rows');
+  ET.onSheetEdit_(DB, { range: { getSheet: function () { return { getName: function () { return 'erp_test_sales_invoices'; } }; } } });
+  H.cacheStore.clear();
+  ok(sync({ erp_test_sales_invoices: d.seq }).tables.erp_test_sales_invoices.mode === 'full', 'after a manual edit (reset marker) the client gets a full pack');
+  ET.setFlag_('ET_CLIENT_PACKS', false);
+})();
+
 ET.setFlag_('ET_SJS_READ', false); ET.setFlag_('ET_SJS_WRITE', false);
 console.log('\n' + (failed ? failed + ' write-layer check(s) FAILED.' : 'erp_test write layer (T-WRITE, T-ATOMIC) passes.') + '\n');
 process.exit(failed ? 1 : 0);

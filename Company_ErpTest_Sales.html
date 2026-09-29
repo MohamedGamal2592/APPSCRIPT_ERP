@@ -7,6 +7,7 @@
   <?!= include('CSS_Tokens'); ?>
   <?!= include('UI_Components'); ?>
   <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_ErpTest_Packs'); ?>
   <?!= include('Company_ErpTest_Nav'); ?>
   <?!= getCompanyThemeCSS_('37fc50edf1424abd') ?>
 </head>
@@ -573,6 +574,7 @@
   }
 
 
+  if (window.ET_PACKS) companyCall = ET_PACKS.wrapCall(companyCall, { page: 'et_sales', list: 'get_et_sales_headers', refresh: function () { renderList(__loadedAll, true); } });
   load();
 </script>
 </body>

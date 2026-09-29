@@ -446,6 +446,19 @@ replaceOnce("  function etRecords_(dbId, sheetName) {\n",
   "  function etRecords_(dbId, sheetName) {\n    if (etTxTouched_(dbId, sheetName)) return etTxRecords_(sheetName);\n");
 replaceOnce("    if (ET_SJS_READ) return etRows_(dbId, table);", "    if (ET_SJS_READ && !etTxTouched_(dbId, table)) return etRows_(dbId, table);");
 replaceOnce('    setFlag_: etSetFlag_,', '    setFlag_: etSetFlag_,\n    compact_: etCompact_,\n    onSheetEdit_: etInvalidateOnEdit_,\n    reconcile_: etReconcile_,\n    atomicProbe_: etAtomicProbe_,');
+// ---------- P11 — browser local packs: get_et_sync (flag ET_CLIENT_PACKS, default false) ----------
+replaceOnce("  function erpTestThemeCss_() {",
+  fs.readFileSync(path.join(__dirname, 'sjs_client.inc.js'), 'utf8') + "\n  function erpTestThemeCss_() {");
+replaceOnce("    'prefetch_refs': { handler: prefetchRefs_,",
+  "    'get_et_sync': { handler: getEtSync_, page: 'et_dashboard', access: 'read', primaryLogTable: '' },\n    'prefetch_refs': { handler: prefetchRefs_,");
+replaceOnce("  register('get_page_versions', getPageVersions_);",
+  "  register('get_page_versions', getPageVersions_);\n  register('get_et_sync', getEtSync_);");
+replaceOnce('    setFlag_: etSetFlag_,', '    setFlag_: etSetFlag_,\n    clientPacks_: etClientPacksOn_,');
+s += `
+// P11 — read by Company_ErpTest_Packs.html when a page is rendered.
+function etClientPacksEnabled_() { return ErpTest.clientPacks_(); }
+`;
+
 s += `
 // P10.3-10.5 trigger entry points (global; the owner installs the triggers once).
 function etCompactJob_() { return ErpTest.compact_(getCompanySpreadsheetId_('37fc50edf1424abd')); }

@@ -90,11 +90,18 @@
     // pack.seq is the journal position the pack includes (0 before any journal).
     var withJournal = false;
     if (ET_SJS_WRITE) { try { getSheet_(ET_JOURNAL_SHEET, dbId); withJournal = true; } catch (eJ) { withJournal = false; } }
-    if (withJournal) ranges.push(etQuote_(ET_JOURNAL_SHEET) + '!A:A');
+    if (withJournal) ranges.push(etQuote_(ET_JOURNAL_SHEET) + '!A:D');
     var res = etBatchGet_(dbId, ranges, { valueRenderOption: 'UNFORMATTED_VALUE', dateTimeRenderOption: 'SERIAL_NUMBER' });
     var vrs = (res && res.valueRanges) || [];
-    var head = 0;
-    if (withJournal) ((vrs[metas.length] && vrs[metas.length].values) || []).forEach(function (r) { var q = Number(r[0]); if (isFinite(q) && q > head) head = q; });
+    // head: journal position the pack includes; cseq[t]: last journal op on table t.
+    var head = 0, cseq = {};
+    if (withJournal) ((vrs[metas.length] && vrs[metas.length].values) || []).forEach(function (r) {
+      var q = Number(r[0]);
+      if (!isFinite(q)) return;
+      if (q > head) head = q;
+      var t = String(r[3] == null ? '' : r[3]);
+      if (t && q > (cseq[t] || 0)) cseq[t] = q;
+    });
     var out = {};
     metas.forEach(function (m, i) {
       var values = (vrs[i] && vrs[i].values) || [];
@@ -126,7 +133,7 @@
         if (delCol !== -1 && String(row[delCol] == null ? '' : row[delCol]).trim() !== '') continue;
         rows.push(row);
       }
-      out[m.t] = { t: m.t, seq: head, schemaHash: etSha1_(physical.join('\u0001')), builtAt: new Date().getTime(), cols: cols, rows: rows };
+      out[m.t] = { t: m.t, seq: head, cseq: cseq[m.t] || 0, schemaHash: etSha1_(physical.join('\u0001')), builtAt: new Date().getTime(), cols: cols, rows: rows };
     });
     return out;
   }
@@ -204,6 +211,7 @@
       Object.keys(rec).forEach(function (c) { row[pack.cols.indexOf(c)] = rec[c]; });
       if (at === -1) pack.rows.push(row);
       pack.seq = Math.max(Number(pack.seq) || 0, Number(j.seq) || 0);
+      pack.cseq = Math.max(Number(pack.cseq) || 0, Number(j.seq) || 0);
     });
     return pack;
   }

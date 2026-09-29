@@ -33,6 +33,22 @@ const B3_TABS = ['products', 'categories', 'customer_vendor', 'chart_of_accounts
   'cash_bank_movement', 'box_account_codes'].sort((a, b) => b.length - a.length);
 
 const all = (s, a, b) => s.split(a).join(b);
+
+const PACK_PAGES = {
+  Products: { page: 'et_products', list: 'get_et_products', refresh: 'fetchProducts();' },
+  Customers: { page: 'et_customers', list: 'get_et_parties', refresh: 'fetchParties();' },
+  Sales: { page: 'et_sales', list: 'get_et_sales_headers', refresh: 'renderList(__loadedAll, true);' },
+  Purchasing: { page: 'et_purchasing', list: 'get_et_purchasing_headers', refresh: 'renderList(true);' },
+  Sales_Offer: { page: 'et_sales_offer', list: 'get_et_sales_offer_headers', refresh: 'renderList(true);' },
+};
+function addPacks(s, p, cfg) {
+  const inc = "  <?!= include('Client_Helpers'); ?>\n";
+  const boot = '\n  load();\n';
+  if (s.split(inc).length !== 2 || s.split(boot).length !== 2) { console.error('STOP — packs anchors not found once in ' + p); process.exit(1); }
+  s = s.replace(inc, inc + "  <?!= include('Company_ErpTest_Packs'); ?>\n");
+  return s.replace(boot, "\n  if (window.ET_PACKS) companyCall = ET_PACKS.wrapCall(companyCall, { page: '" + cfg.page + "', list: '" + cfg.list +
+    "', refresh: function () { " + cfg.refresh + " } });\n  load();\n");
+}
 const missing = PAGES.filter((p) => !fs.existsSync(`${ROOT}/Company_TopLight_${p}.html`));
 if (missing.length) { console.error('STOP — missing Top Light templates: ' + missing.join(', ')); process.exit(1); }
 
@@ -61,6 +77,8 @@ PAGES.forEach((p) => {
     if (s.split(a).length !== 2) { console.error('STOP — Income_Statement purchases row not found once'); process.exit(1); }
     s = s.replace(a, a + "      row('تكاليف تصنيع إضافية', money(s.mfgExtra || 0), '—', false) +\n");
   }
+  // P11.3 — browser local packs on the six list pages (inert while ET_CLIENT_PACKS is off).
+  if (PACK_PAGES[p]) s = addPacks(s, p, PACK_PAGES[p]);
   fs.writeFileSync(`${ROOT}/Company_ErpTest_${p}.html`, s, 'utf8');
 });
 console.log('wrote ' + PAGES.length + ' Company_ErpTest_*.html pages');

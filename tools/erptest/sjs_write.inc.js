@@ -183,7 +183,8 @@
       var jrows = js.__tx.rows;
       var jh = (jrows[0] || []).map(function (h) { return String(h).trim(); });
       var seqIdx = jh.indexOf('seq');
-      var maxSeq = 0;
+      // Monotonic across compaction: never below the compaction floor.
+      var maxSeq = Number(etMetaGet_(tx.dbId, 'compact_floor')) || 0;
       for (var i = 1; i < jrows.length; i++) { var q = Number(jrows[i][seqIdx]); if (isFinite(q) && q > maxSeq) maxSeq = q; }
       var now = new Date();
       var at = js.getLastRow() + 1;
@@ -331,6 +332,7 @@
     names = names.filter(function (n) { return ET_PACK_TABLES.indexOf(n) !== -1; });
     if (!names.length) return { status: 'ignored' };
     etBumpHead_(dbId, names);
+    etJournalReset_(dbId, names);
     try {
       var sheet = getSheet_(ET_PACKS_SHEET, dbId);
       var v = etSysRows_(sheet);

@@ -1,0 +1,199 @@
+<script>
+/**
+ * Company_ErpTest_Packs.html — P11 browser local packs for the Testing System.
+ *
+ * Inert unless the server has ET_CLIENT_PACKS on (window.ET_CLIENT_PACKS below,
+ * and every get_et_sync reply's client_packs). When on:
+ *   - table packs live in IndexedDB `erp_packs_37fc50edf1424abd_<email>`, store
+ *     `packs`, kept current by get_et_sync (same / delta / full);
+ *   - a converted page renders its last list reply at once (store `views`), then
+ *     syncs, and only asks the server for the list again when a table changed;
+ *   - a save's returned journal ops are applied locally, and the page's cached
+ *     view is dropped so the next list read is fresh;
+ *   - erp_test_cash_bank_movement is never stored; entries older than 7 days are
+ *     discarded; logout, and a different signed-in email, clear the database.
+ */
+window.ET_CLIENT_PACKS = <?!= (typeof etClientPacksEnabled_ === 'function' && etClientPacksEnabled_()) ? 'true' : 'false' ?>;
+(function () {
+  var COMPANY = '37fc50edf1424abd';
+  var NEVER = { erp_test_cash_bank_movement: true };
+  var MAX_AGE = 7 * 24 * 3600 * 1000;
+  var LAST_EMAIL_KEY = 'erp_packs_last_email_' + COMPANY;
+  var dbPromise = null;
+  var dirtyViews = {};
+
+  function email() {
+    var s = {};
+    try { s = (window.API && API.getSession && API.getSession()) || {}; } catch (e) { s = {}; }
+    return String(window.AUTH_USER_EMAIL || (s.user && s.user.email) || s.email || '').trim().toLowerCase();
+  }
+  function enabled() { return !!window.ET_CLIENT_PACKS && typeof indexedDB !== 'undefined' && !!email(); }
+  function dbName(e) { return 'erp_packs_' + COMPANY + '_' + (e || email()); }
+  function req(r) { return new Promise(function (res, rej) { r.onsuccess = function () { res(r.result); }; r.onerror = function () { rej(r.error); }; }); }
+
+  function open() {
+    if (!enabled()) return Promise.reject(new Error('packs off'));
+    if (dbPromise) return dbPromise;
+    var me = email();
+    var last = '';
+    try { last = localStorage.getItem(LAST_EMAIL_KEY) || ''; } catch (e) {}
+    var cleanup = Promise.resolve();
+    if (last && last !== me) cleanup = req(indexedDB.deleteDatabase(dbName(last))).catch(function () {});
+    try { localStorage.setItem(LAST_EMAIL_KEY, me); } catch (e2) {}
+    dbPromise = cleanup.then(function () {
+      var r = indexedDB.open(dbName(me), 1);
+      r.onupgradeneeded = function () {
+        var db = r.result;
+        if (!db.objectStoreNames.contains('packs')) db.createObjectStore('packs');
+        if (!db.objectStoreNames.contains('views')) db.createObjectStore('views');
+      };
+      return req(r);
+    });
+    return dbPromise;
+  }
+  function store(name, mode) { return open().then(function (db) { return db.transaction(name, mode).objectStore(name); }); }
+  function fresh(entry) { return entry && (Date.now() - (entry.ts || 0)) < MAX_AGE ? entry : null; }
+
+  function get(table) {
+    if (NEVER[table]) return Promise.resolve(null);
+    return store('packs', 'readonly').then(function (s) { return req(s.get(table)); })
+      .then(function (e) { return fresh(e) ? e.pack : null; }).catch(function () { return null; });
+  }
+  function put(table, pack) {
+    if (NEVER[table]) return Promise.resolve();
+    return store('packs', 'readwrite').then(function (s) { return req(s.put({ ts: Date.now(), pack: pack }, table)); }).catch(function () {});
+  }
+  function applyOps(pack, ops, key) {
+    var kIdx = pack.cols.indexOf(key);
+    (ops || []).forEach(function (j) {
+      var at = -1;
+      if (kIdx !== -1) for (var i = 0; i < pack.rows.length; i++) if (String(pack.rows[i][kIdx]) === String(j.key)) { at = i; break; }
+      if (j.op === 'softDelete') { if (at !== -1) pack.rows.splice(at, 1); return; }
+      Object.keys(j.data || {}).forEach(function (c) { if (pack.cols.indexOf(c) === -1) { pack.cols.push(c); pack.rows.forEach(function (r) { r.push(''); }); } });
+      var row = at === -1 ? pack.cols.map(function () { return ''; }) : pack.rows[at];
+      Object.keys(j.data || {}).forEach(function (c) { row[pack.cols.indexOf(c)] = j.data[c]; });
+      if (at === -1) pack.rows.push(row);
+      pack.seq = Math.max(Number(pack.seq) || 0, Number(j.seq) || 0);
+    });
+    return pack;
+  }
+  var KEYS = { erp_test_sales_invoices: 'invoice_unique_id', erp_test_sales_offer: 'invoice_unique_id', erp_test_products: 'id',
+    erp_test_categories: 'id', erp_test_customer_vendor: 'id' };
+  function keyOf(table) { return KEYS[table] || 'unique_id'; }
+
+  // Apply journal ops ({seq, table, op, key, data}) returned by a save.
+  function apply(journal) {
+    if (!enabled() || !journal || !journal.length) return Promise.resolve();
+    var byTable = {};
+    journal.forEach(function (j) { if (!NEVER[j.table]) (byTable[j.table] = byTable[j.table] || []).push(j); });
+    return Promise.all(Object.keys(byTable).map(function (t) {
+      return get(t).then(function (p) { if (p) return put(t, applyOps(p, byTable[t], keyOf(t))); });
+    }));
+  }
+
+  // Sync the packs of a page. `hint` ({table: seq}) supplies the seq of tables that
+  // are not stored (cash). Resolves {changed, seqs, client_packs}.
+  function sync(call, page, hint) {
+    if (!enabled()) return Promise.resolve({ changed: true, seqs: {}, client_packs: false });
+    hint = hint || {};
+    var tkey = 'erp_packs_tables_' + COMPANY + '_' + page;
+    var names = Object.keys(hint);
+    if (!names.length) { try { names = JSON.parse(localStorage.getItem(tkey) || '[]'); } catch (e) { names = []; } }
+    return Promise.all(names.map(get)).then(function (packs) {
+      var have = {};
+      names.forEach(function (t, i) { have[t] = NEVER[t] ? (hint[t] !== undefined ? Number(hint[t]) : -1) : (packs[i] ? Number(packs[i].seq) : -1); });
+      return call('get_et_sync', { page: page, tables: have }).then(function (r) {
+        if (r && r.client_packs === false) { window.ET_CLIENT_PACKS = false; return { changed: true, seqs: {}, client_packs: false }; }
+        var changed = false, seqs = {}, writes = [];
+        Object.keys((r && r.tables) || {}).forEach(function (t) {
+          var e = r.tables[t];
+          seqs[t] = e.seq;
+          if (NEVER[t]) return;
+          if (e.mode === 'same') return;
+          changed = true;
+          if (e.mode === 'full') writes.push(put(t, e.pack));
+          else if (e.mode === 'delta') writes.push(get(t).then(function (p) { return p ? put(t, applyOps(p, e.ops, keyOf(t))) : null; }));
+        });
+        try { localStorage.setItem(tkey, JSON.stringify(Object.keys(seqs))); } catch (e2) {}
+        return Promise.all(writes).then(function () { return { changed: changed, seqs: seqs, client_packs: true }; });
+      });
+    });
+  }
+
+  function viewGet(k) { return store('views', 'readonly').then(function (s) { return req(s.get(k)); }).then(fresh).catch(function () { return null; }); }
+  function viewPut(k, v) { return store('views', 'readwrite').then(function (s) { return req(s.put(Object.assign({ ts: Date.now() }, v), k)); }).catch(function () {}); }
+  function sameSeqs(a, b) {
+    var ka = Object.keys(a || {}), kb = Object.keys(b || {});
+    if (!ka.length || ka.length !== kb.length) return false;
+    return ka.every(function (k) { return a[k] === b[k]; });
+  }
+
+  /* Wrap a page's companyCall. cfg: { page, list, refresh }.
+     - list reads render the cached view at once, then sync; the list is fetched
+       again (refresh) only when a table of the page changed;
+     - write replies apply their journal and drop the page's cached views. */
+  function wrapCall(call, cfg) {
+    var bypass = false;
+    var wrapped = function (action, data) {
+      if (!enabled()) return call(action, data);
+      if (action !== cfg.list) {
+        return call(action, data).then(function (r) {
+          if (r && r.journal) { dirtyViews[cfg.page] = true; apply(r.journal); }
+          return r;
+        });
+      }
+      var vk = cfg.page + '|' + JSON.stringify(data || {});
+      var goNetwork = function () {
+        return Promise.all([call(action, data), sync(call, cfg.page, null)]).then(function (res) {
+          dirtyViews[cfg.page] = false;
+          viewPut(vk, { resp: res[0], seqs: res[1].seqs });
+          return res[0];
+        });
+      };
+      if (bypass || dirtyViews[cfg.page]) { bypass = false; return goNetwork(); }
+      return viewGet(vk).then(function (view) {
+        if (!view) return goNetwork();
+        // Warm render now; check freshness in the background.
+        setTimeout(function () {
+          sync(call, cfg.page, view.seqs || {}).then(function (s) {
+            if (s.client_packs && sameSeqs(view.seqs, s.seqs)) return;
+            bypass = true;
+            try { cfg.refresh(); } catch (e) {}
+          }).catch(function () {});
+        }, 0);
+        return view.resp;
+      });
+    };
+    return wrapped;
+  }
+
+  function clearAll() {
+    var me = email();
+    dbPromise = null;
+    if (typeof indexedDB === 'undefined') return Promise.resolve();
+    var names = [me];
+    try {
+      var last = localStorage.getItem(LAST_EMAIL_KEY); if (last && last !== me) names.push(last); localStorage.removeItem(LAST_EMAIL_KEY);
+      Object.keys(localStorage).forEach(function (k) { if (k.indexOf('erp_packs_tables_' + COMPANY + '_') === 0) localStorage.removeItem(k); });
+    } catch (e) {}
+    return Promise.all(names.filter(Boolean).map(function (e) { return req(indexedDB.deleteDatabase(dbName(e))).catch(function () {}); }));
+  }
+
+  // Logout (Client_Helpers is shared and not edited): clear the packs first.
+  function hookLogout() {
+    if (window.SESSION && typeof SESSION.logout === 'function' && !SESSION.logout.__etPacks) {
+      var orig = SESSION.logout;
+      SESSION.logout = function () { var self = this, args = arguments; clearAll().then(function () { orig.apply(self, args); }); };
+      SESSION.logout.__etPacks = true;
+    }
+    if (typeof window.logout === 'function' && !window.logout.__etPacks) {
+      var origL = window.logout;
+      window.logout = function () { var self = this, args = arguments; clearAll().then(function () { origL.apply(self, args); }); };
+      window.logout.__etPacks = true;
+    }
+  }
+  hookLogout();
+
+  window.ET_PACKS = { open: open, get: get, put: put, apply: apply, sync: sync, clearAll: clearAll, wrapCall: wrapCall, enabled: enabled };
+})();
+</script>
