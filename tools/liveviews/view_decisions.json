@@ -1,0 +1,118 @@
+{
+  "_about": "Curated P0 decisions, keyed by page file. serverPage: the page id whose PAGE_VIEWS entry this file feeds. rename: move a scanned view to another name (report/detail pages share their server page with the list page). views.<v>.replace drops the scan for that view; add/drop adjust it; every added table carries its reason.",
+  "Company_ValleyFoods_CashBoxBalances.html": {
+    "rename": {
+      "list": "report",
+      "form": "report"
+    },
+    "_note": "report page served under vf_cash"
+  },
+  "Company_ValleyFoods_CashExpenses.html": {
+    "rename": {
+      "list": "report",
+      "form": "report"
+    },
+    "_note": "report page served under vf_cash"
+  },
+  "Company_ValleyFoods_CashIncomes.html": {
+    "rename": {
+      "list": "report",
+      "form": "report"
+    },
+    "_note": "report page served under vf_cash"
+  },
+  "Company_ValleyFoods_MfgClientReport.html": {
+    "rename": {
+      "list": "report",
+      "form": "report"
+    },
+    "_note": "report page served under vf_mfg_orders"
+  },
+  "Company_ValleyFoods_MfgOrderView.html": {
+    "rename": {
+      "list": "detail",
+      "form": "detail"
+    },
+    "_note": "single-order page served under vf_mfg_orders; everything on it is one detail view"
+  },
+  "Company_ValleyFoods_HR_Emp.html": {
+    "serverPage": "vf_hr_shifts",
+    "_note": "The page starts three watches in a loop and each watchPage call stops the previous one, so only vf_hr_shifts is polled today. Its PAGE_VIEWS entry therefore carries every tab's tables; the page calls setView('tab:<TAB>') in render().",
+    "views": {
+      "tab:employees": {
+        "add": {
+          "valley_employee_info": "the employees tab lists employees",
+          "valley_employee_status": "the employees tab shows each employee's current status",
+          "valley_title_index": "the employees tab shows the job title name"
+        }
+      },
+      "tab:status": {
+        "add": {
+          "valley_employee_status": "the status tab lists status rows",
+          "valley_employee_info": "the status tab shows the employee name"
+        }
+      },
+      "tab:shift": {
+        "add": {
+          "valley_employee_shift_assignment": "the shift tab lists assignments",
+          "valley_employee_shift_schedule": "the shift tab shows the shift name and hours",
+          "valley_employee_info": "the shift tab shows the employee name"
+        }
+      }
+    }
+  },
+  "Company_TopChemical_BudgetHR.html": {
+    "views": {
+      "tab:employees": {
+        "add": {
+          "legal_employee_info": "the employees tab lists legal employees",
+          "title_index": "the employees tab shows the job title name"
+        }
+      },
+      "tab:salaries": {
+        "add": {
+          "legal_salaries": "the salaries tab lists budget salaries",
+          "legal_employee_info": "the salaries tab shows the employee name"
+        }
+      }
+    }
+  },
+  "Company_TopChemical_StockRevision.html": {
+    "views": {
+      "list": {
+        "add": {
+          "stock_revision": "get_stock_revision lists the count rows",
+          "products": "the list shows each counted product's name (productRefs_)"
+        }
+      }
+    }
+  },
+  "Company_ValleyFoods_Contracts.html": {
+    "_note": "get_contracts_data is called from the page load; the list shows its rows"
+  },
+  "Company_ValleyFoods_Attendance.html": {
+    "_note": "sessions, exceptions and review are all visible on the main screen"
+  },
+  "Company_ValleyFoods_Sales.html": {
+    "views": {
+      "form": {
+        "add": {
+          "valley_legal_customer_vendor": "the invoice form's customer picker (get_valley_sales_bootstrap)",
+          "valley_current_products": "the form shows live available stock per batch",
+          "valley_product_purchasing": "purchases move the available stock the form shows",
+          "valley_sales_returns": "returns move the available stock the form shows",
+          "valley_warehouse_movement": "warehouse movements move the available stock the form shows"
+        }
+      }
+    }
+  },
+  "Company_ValleyFoods_SalesReturns.html": {
+    "views": {
+      "form": {
+        "add": {
+          "valley_legal_customer_vendor": "the return form shows the invoice's customer"
+        }
+      }
+    }
+  }
+}
