@@ -101,31 +101,34 @@
     });
   }
 
+  /* The modal's حفظ button already wraps its onclick in UI.submitOnce (see
+     UIC.openModal in UI_Components.html), so this handler runs synchronously
+     and hands the save straight to UIC.Live.save for the optimistic-JSON
+     path — same shape as CASH_PAGE.save in Company_ValleyFoods_Cash.html. */
   function saveCategory(id) {
-    var btn = document.querySelector('#category-modal .btn-primary');
-    UI.submitOnce(btn, function () {
-      var data = UIC.collectForm('category-form');
-      if (!UIC.validateForm('category-form')) return Promise.reject();
-      if (id) data.id = id;
-      if (!window.__categories) window.__categories = [];
-      return UIC.Live.save({
-        call: companyCall,
-        action: id ? 'edit_et_category' : 'add_et_category',
-        data: data,
-        list: window.__categories,
-        key: 'id',
-        draft: Object.assign({}, data),
-        render: function () { renderCategories(window.__categories); },
-        modal: 'category-modal',
-        message: 'تم الحفظ',
-        recordOf: function (r) {
-          var rec = (r && r.record) || null;
-          if (rec && !rec.id) rec.id = r.assignedId || r.unique_id;
-          return rec;
-        },
-        reload: fetchCategories
-      }).catch(function () { /* Live.save already toasted and rolled back */ });
-    });
+    if (!UIC.validateForm('category-form')) return;
+    var data = UIC.collectForm('category-form');
+    if (id) data.id = id;
+    if (!window.__categories) window.__categories = [];
+    var draft = { name_ar: data.name_ar, name_eng: data.name_eng };
+    if (id) draft.id = id;
+    UIC.Live.save({
+      call: companyCall,
+      action: id ? 'edit_et_category' : 'add_et_category',
+      data: data,
+      list: window.__categories,
+      key: 'id',
+      draft: draft,
+      render: function () { renderCategories(window.__categories); },
+      modal: 'category-modal',
+      message: 'تم الحفظ',
+      recordOf: function (r) {
+        var rec = (r && r.record) || null;
+        if (rec && !rec.id) rec.id = r.assignedId || r.unique_id;
+        return rec;
+      },
+      reload: fetchCategories
+    }).catch(function () { /* Live.save already toasted and rolled back */ });
   }
 
   function showError(e) {
