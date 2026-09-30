@@ -1,7 +1,7 @@
 # Plan: a per-page, per-view "new changes" notice
 
 **Date:** 2026-09-30
-**Status:** Plan only. Nothing here has been executed.
+**Status:** Plan only. Nothing here has been executed. Phases P0–P7; the agent runs them all without stopping.
 **Scope:** every page that calls `UIC.Live.watchPage`: 76 pages (Valley Foods 34, Top Chemical 25, Testing System 7, Top Light 6, Assessment 4).
 
 ---
@@ -14,6 +14,7 @@ After this plan:
 - A notice appears only when **another user or tab** saved to a table that is **shown in the part of the page the user has open right now** (its *view*).
 - The notice names what changed, who changed it and when, for example «تم تحديث المبيعات بواسطة أحمد منذ دقيقة · اضغط للتحديث».
 - Changes to tables that are not on screen do not interrupt. They are remembered, and the view that shows them refreshes when the user opens it.
+- **Pages open fast from JSON kept on the device** (P6). Each view's last server reply is stored locally and painted at once. It becomes usable the moment the cheap stamp check confirms that none of its tables changed. The same stamps drive the notice, so with many people working at once nobody works on data another user has already changed without being told.
 
 ---
 
@@ -155,14 +156,51 @@ Rules for the notice:
   - **Top Light and Testing System:** easy. Every write already passes through `tlDbCreate_`, `tlDbPatch_`, `tlDbSoftDelete_`, `tlDbSoftDeleteWhere_` and `tlDbAppendValues*_`.
   - **Valley Foods and Top Chemical:** needs a per-saver inventory first (Phase 0 lists the savers).
 
+### D6. Fast views from JSON, kept honest by the same stamps (P6)
+
+The pieces already exist:
+- `UIC.Cache` (UI_Components ~6984): localStorage JSON store with an LRU cap, a key per company + user + action + payload, `version` tags, and `swr()`.
+- The inert "last paint" (`saveLastPaint` / `.rt-stale`).
+
+No page uses `UIC.Cache.swr` for its list, and every load still does a full server fetch. P6 makes each **view** a cached JSON reply that is trusted exactly as far as the stamps allow.
+
+1. **Cache entry per view.** Key: company + user + page + view + action + payload (the existing `keyFor` scope). Value: the server reply.
+   - Tag: `stampsOf(viewTables)`, a stable string of each view table's stamp time `t`.
+   - The cache index also records the entry's table list, so a bust can be exact (below).
+
+2. **Load.** `UIC.Live.loadView({view, action, payload, call, render})`:
+   - If a cached reply exists, paint it at once but **inert** (`.rt-stale`, buttons disabled). Rows could have been deleted or renumbered, so nothing on it may be clicked yet.
+   - In parallel, run one `get_page_versions` (the cheap poll, no sheet read). It also sets the watch baseline, so the watch's first tick no longer spends a poll only to learn the baseline.
+   - The cached reply is **trusted** when the view's stamps equal its tag, it is younger than `maxAge` (default 10 min), and no stamp is missing (a cache eviction means unknown). Then make it live and skip the list call.
+   - Otherwise call the list action, render, and store the reply with the new tag.
+   - If no reply is cached, do today's full fetch.
+
+3. **While the page is open,** the notice machinery (D3) decides:
+   - **In-view change:** refetch that view, or show the notice when the user is busy; the refetch stores the new reply.
+   - **Off-view change:** drop only the cache entries whose table list contains the moved tables. This replaces today's `UIC.Cache.bust()` of everything on any change.
+   - **My own save:** drop the current view's entry. The stamp is recognised as mine (D3.1), so there is no notice, and the next load fetches fresh.
+
+4. **Concurrency guarantee.**
+   - On load, cached data is never usable before the stamps confirm it.
+   - While a page is open, a change by someone else reaches it within one poll (30s) as a refresh or a notice.
+   - Every save still passes the server's row-version check (`checkRowVersion_`), so a stale screen cannot overwrite a newer row.
+   - The only gap is edits typed directly into the Google Sheet (no stamp); `maxAge` (10 min) bounds it (see OD6).
+
+5. **Limits.**
+   - Replies over 400 KB are not cached (`loadAll` lists usually are).
+   - Pages on the opt-out list (OD7) are never cached.
+   - When the Testing System's own browser packs are on (`window.ET_PACKS && ET_PACKS.enabled()`), those pages keep that path and skip this one.
+   - Logout: keys are already per user (`principalId`). Also clear `erp_c_*` in the logout hook, as `Company_ErpTest_Packs.html` does for its database.
+
 ---
 
 ## PART E — Phases
 
 Rules:
-- Phases run in order.
-- Each phase ends with a DONE-CHECK and one commit `live-notice Pn: <title>`.
-- Nothing is pushed with clasp by the agent. The owner pushes after P2, then after each company in P3.
+- Phases run in order: P0 → P6, then P7.
+- Each phase ends with its DONE-CHECK and one commit `live-notice Pn: <title>`.
+- **The agent does not stop between phases.** When a phase's DONE-CHECK passes, it commits, pushes the branch and starts the next phase. Owner reviews and owner checks are collected in `tools/liveviews/OWNER_RUNBOOK.md` for the end.
+- The agent never runs `clasp push` or `clasp deploy`, and never writes to a Google Sheet or to Firestore.
 - Keep every existing test green. The affected ones are `tools/verify/rt3_stamp_coverage.js`, `s13_forms_filters.js`, `s18_live_saves.js`, `s19_live_rollout.js`, `s20_quiet_refresh.js`, `erptest_clone_static.js`, plus `npm run verify` overall: no new failures against the base commit.
 
 ### P0 — Inventory (read-only)
@@ -179,7 +217,7 @@ Rules:
 
 0.3 Output `tools/liveviews/labels.md`: every table name with a proposed Arabic label. Reuse `labelAr` from the Registry `tables` catalogs (20 exist) and page titles.
 
-**DONE-CHECK P0:** the owner reviews `inventory.md` and `labels.md` and replies `PASS P0`, with corrections if any. This is the one step that needs business judgement, "what does this screen actually show".
+**DONE-CHECK P0:** `inventory.json`, `inventory.md` and `labels.md` exist for all 76 pages. The agent decides each view's tables itself, applying the rule in D2 ("every table whose data is visible in that view"), and writes its reason next to every table. The owner reviews them at the end (runbook item). The agent does not wait for that review.
 
 ### P1 — Server: stamps with writer and request, views and labels
 
@@ -227,7 +265,7 @@ For the Testing System, make the change in `tools/erptest/gen_actions.js` (or th
 | 9 | Page without `PAGE_VIEWS` | today's behaviour (all tables in view), generic text if no labels |
 | 10 | Old server (no `meta`/`views` in reply) | today's behaviour exactly |
 
-**DONE-CHECK P2:** new test green, existing live tests green. **Owner** pushes and checks on one page that their own save no longer shows the notice.
+**DONE-CHECK P2:** new test green, existing live tests green. (Owner check at the end, in the runbook: after `clasp push`, their own save no longer shows the notice.)
 
 ### P3 — Page adoption, one company at a time
 
@@ -247,9 +285,9 @@ For each page:
 
 3.4 For each company, extend `live_notice_client.js` with one real page from that company (load the page through `pageharness.js`, drive list → form → list, and assert the view switches and the stale refresh).
 
-**DONE-CHECK P3 (per company):** tests green. **Owner** pushes and tries the two-browser check on two pages: user A on the list, user B saves.
+**DONE-CHECK P3 (per company):** tests green. (Owner check at the end, in the runbook: the two-browser check on two pages per company, user A on the list, user B saves.)
 
-### P4 — Pages that are not watched yet (optional, owner decides)
+### P4 — Pages that are not watched yet (skipped by default, OD4)
 
 Dashboards, KPI, reports and print pages have no `watchPage` today. For each one the owner wants:
 - add `watchPage` with `view: 'report'`;
@@ -257,11 +295,60 @@ Dashboards, KPI, reports and print pages have no `watchPage` today. For each one
 
 Reports never auto-refresh (they can be long); they always show the notice. Keep the 30s poll cost in mind: every open tab is one Apps Script execution per poll.
 
-### P5 — Record level for open forms (optional)
+### P5 — Record level for open forms (Top Light and Testing System by default, OD5)
 
 - Per D5: `noteRecordChange_` in the write layers, the stamp's `k`, `setView('form', {key, table})`, and the conflict notice.
 - Top Light and Testing System first, then Valley Foods and Top Chemical per the P0 saver list.
 - Test: another user edits the invoice I have open → conflict notice while I am typing; another user edits a different invoice → my form is not interrupted, and the list refreshes when I close the form.
+
+### P6 — Fast views from JSON (D6)
+
+6.1 In `UI_Components.html`:
+- `UIC.Live.loadView(...)` per D6.2;
+- inert paint, then live after stamp confirmation;
+- a `get_page_versions` confirmation that also seeds the watch baseline;
+- cache entries tagged with their table list;
+- an exact per-table bust in place of the global `UIC.Cache.bust()` when tables move;
+- drop the current view's entry after the user's own save;
+- the 400 KB cap and the OD7 opt-out list;
+- the logout clearing hook.
+
+Keep `UIC.Cache`'s guarded storage access and its LRU cap exactly as they are.
+
+6.2 Page adoption, same order as P3: every page's **list** view loads through `UIC.Live.loadView`.
+- Form option lists that already come from a `get_*_options` action use `UIC.Cache.swr` with the form view's stamp tag.
+- For Testing System pages, apply the change through `tools/erptest/gen_pages.js`, then regenerate.
+
+6.3 Tests: new `tools/verify/live_views_cache.js`, localStorage + fake poll, one real page per company through `pageharness.js`:
+
+| # | Situation | Expected |
+|---|---|---|
+| 1 | First visit | full fetch; reply stored with tag |
+| 2 | Second visit, stamps unchanged | inert paint at once → live after the poll; **no list call** |
+| 3 | Second visit, a view table's stamp moved | inert paint → list call → live new reply |
+| 4 | Stamp missing (evicted) | list call |
+| 5 | Entry older than `maxAge` | list call even with matching stamps |
+| 6 | While open, another user changes an off-view table | only entries containing that table dropped; nothing on screen moves |
+| 7 | While open, my own save | no notice; this view's entry dropped; next visit fetches |
+| 8 | Different user on the same browser | never reads the first user's entry |
+| 9 | Logout | `erp_c_*` cleared |
+| 10 | Reply > 400 KB, or page on the opt-out list | never stored |
+| 11 | Clicking a row while the inert paint shows | ignored |
+
+**DONE-CHECK P6:** new test green, all live tests green, `npm run verify` shows no new failures against the base commit.
+
+### P7 — Wrap-up
+
+7.1 `npm run verify`: compare with the base commit; no new failures (list any pre-existing ones).
+
+7.2 Write `tools/liveviews/OWNER_RUNBOOK.md`:
+- review `inventory.md` / `labels.md`;
+- `clasp push`;
+- the two-browser check per company (A on the list, B saves → A sees the named notice or an in-place refresh; A's own save → no notice);
+- the fast-load check (open a list, navigate away and back → instant paint, no list request in the network tab when nothing changed);
+- how to switch the view cache off (OD7 list, or `UIC.Live.VIEW_CACHE = false`).
+
+7.3 Final commit and push; report what was done, what was verified, and what is left for the owner.
 
 ---
 
@@ -275,6 +362,8 @@ Reports never auto-refresh (they can be long); they always show the notice. Keep
 | OD4 | Include Phase 4 (reports, dashboards)? | **No** until asked (quota). |
 | OD5 | Include Phase 5 (record-level conflict)? | **Yes for Top Light and Testing System**; the others after P3. |
 | OD6 | Manual edits typed straight into a Google Sheet | **Out of scope.** They create no stamp today (only the Testing System's P10 edit trigger does, and it is off). Say if you want an `onEdit` trigger per company that stamps the edited tab. |
+| OD7 | Pages whose data is never cached on the device (P6) | **Salaries, HR, deductions, overtime, attendance, cash and bank pages**. The agent lists the exact page ids in `inventory.md`. |
+| OD8 | How long a cached view may be trusted without a server list call (P6 `maxAge`) | **10 minutes**, even when the stamps match (this bounds manual sheet edits, OD6). |
 
 ---
 
@@ -286,4 +375,6 @@ Reports never auto-refresh (they can be long); they always show the notice. Keep
 | Cache eviction loses the writer list | Detection still works (a new `t`); the text falls back to the generic wording. |
 | A view list misses a table | The view shows stale data until the next manual refresh, which is today's behaviour. P0 review and the P3 two-browser check are the guard. |
 | Old clients during rollout | `versions` keeps its shape; new fields are additive. |
+| Cached view shown with stale rows | Painted inert until the stamps confirm it; any stamp difference, missing stamp or age over `maxAge` forces a list call; saves are still version-checked on the server. |
+| localStorage full or blocked (private mode) | `UIC.Cache`'s guarded access degrades to a normal fetch; the page never breaks. |
 | Privacy of writer names | Only names of people who wrote to tables the viewer already has read access to (same page gate). OD1 lets the owner turn names off. |
