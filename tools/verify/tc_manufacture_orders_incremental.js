@@ -24,7 +24,7 @@ async function main() {
     isSuperAdmin: true,
     containers: ['tc-root', 'mo-content', 'mo-table-host', 'mo-load-more-control'],
     scriptlets: { CURRENT_ACTION: "'tc_manufacture_orders'" },
-    expose: ['load', 'loadMoreHeaders', 'showLatestHeaders', 'headersState=H'],
+    expose: ['load', 'loadMoreHeaders', 'retryLoadingHeaders', 'headersState=H'],
     call: (action, data) => {
       calls.push({ action, data: Object.assign({}, data) });
       if (action === 'get_manufacture_refs') return { products: [], products_full: [], warehouses: [], statuses: [] };
@@ -40,7 +40,7 @@ async function main() {
   });
 
   s.exported('load')();
-  for (let i = 0; i < 8; i++) await flush();
+  for (let i = 0; i < 12; i++) await flush();
   const state = s.__EXPORTS.headersState;
   const check = (ok, label) => {
     console.log((ok ? '  PASS  ' : '  FAIL  ') + label);
@@ -48,33 +48,29 @@ async function main() {
   };
   const first = calls.find(c => c.action === 'get_manufacture_headers');
   check(first && first.data.limit === 20 && first.data.offset === 0,
-    'navigation starts with a bounded 20-header request');
+    'navigation starts with a bounded 20-header request (fast first paint)');
+  /* The rest now loads by itself; the injected failure stops the chain. */
   check(state.rows.length === 20 && state.total === 450 &&
-    s.html('mo-load-more-control').includes('تم تحميل 20 من 450 سجل'),
-    'the first headers render and show progress without downloading all orders');
+    s.html('mo-load-more-control').includes('تعذر تحميل المزيد') &&
+    s.html('mo-load-more-control').includes('إعادة المحاولة'),
+    'the background continuation starts on its own and a failure keeps the rows with an inline retry');
 
   const table = s.window.__dtStore && s.window.__dtStore['mo-table'];
   if (table) s.UIC.filterPaged('mo-table', 'mo-1');
-  await s.exported('loadMoreHeaders')();
-  for (let i = 0; i < 5; i++) await flush();
-  check(state.rows.length === 20 && s.html('mo-load-more-control').includes('تعذر تحميل المزيد') &&
-    s.html('mo-load-more-control').includes('إعادة المحاولة'),
-    'a failed continuation keeps existing rows and exposes inline retry');
-
-  await s.exported('loadMoreHeaders')();
-  for (let i = 0; i < 5; i++) await flush();
+  s.exported('retryLoadingHeaders')();
+  for (let i = 0; i < 12; i++) await flush();
   const headerCalls = calls.filter(c => c.action === 'get_manufacture_headers');
-  check(headerCalls.length === 3 && headerCalls[1].data.limit === 200 && headerCalls[1].data.offset === 20 &&
-    headerCalls[2].data.offset === 20,
-    'retry uses the same offset and each continuation is bounded to 200');
-  check(state.rows.length === 220 && state.total === 450 &&
-    s.html('mo-load-more-control').includes('تم تحميل 220 من 450 سجل'),
-    'the next window appends and updates the loaded count');
+  check(headerCalls.length === 3 && headerCalls[1].data.limit === 1000 && headerCalls[1].data.offset === 20 &&
+    headerCalls[2].data.offset === 20 && headerCalls[2].data.limit === 1000,
+    'retry resumes at the same offset; each continuation is one bounded 1000-row JSON window');
+  check(state.rows.length === 450 && state.loadedAll === true &&
+    s.html('mo-load-more-control').includes('تم تحميل كل السجلات'),
+    'every order ends up in the browser with no click');
   const tableAfter = s.window.__dtStore && s.window.__dtStore['mo-table'];
-  check(tableAfter && tableAfter.originalRows.length === 220 && tableAfter.searchTerm === 'mo-1',
-    'the shared table retains its universal search as new rows append');
+  check(tableAfter && tableAfter.originalRows.length === 450 && tableAfter.searchTerm === 'mo-1',
+    'the shared table keeps its search while the remaining rows append');
   check(headerCalls.every(c => c.data.loadAll !== true),
-    'the page no longer sends a full-catalog request');
+    'no unbounded full-catalog request is sent');
 
   if (!process.exitCode) console.log('tc_manufacture_orders_incremental: all assertions pass');
 }

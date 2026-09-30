@@ -234,6 +234,8 @@
     .mo-form-grid .form-field { margin: 0; }
     .mo-form-full { grid-column: 1 / -1; }
 
+    .mo-product-pick { min-width: 260px; }
+    .mo-pending-row td { opacity: .6; }
     .mo-empty {
       text-align: center;
       padding: 40px 20px;
@@ -285,9 +287,20 @@
     loadingMore: false,
     loadMoreError: ''
   };
-  var MO_FIRST_LIMIT = 20, MO_MORE_LIMIT = 200, MO_REQUEST_SEQ = 0, MO_MORE_SEQ = 0;
-  /* dropdown refs — used only to resolve product names to Arabic labels */
+  /* JSON loading: the newest 20 orders paint first, then the rest arrive by
+     themselves in 1000-row windows (the server's per-request ceiling), each
+     one a single JSON aggregate. Every order ends up in the browser, and
+     search, sort and paging run on that local copy with no further calls. */
+  var MO_FIRST_LIMIT = 20, MO_MORE_LIMIT = 1000, MO_REQUEST_SEQ = 0, MO_MORE_SEQ = 0;
+  /* dropdown refs — every product (id -> name_ar, code, unit) for the
+     searchable product pickers and for resolving product_id to its name. */
   var REFS = { products: [], products_full: [], warehouses: [], statuses: [] };
+  var REFS_READY = null;          /* promise: settles once refs are usable */
+  var MO_COMPANY = '3fe1b5cb67b7223e';
+  var MO_REFS_VERSION = 'mo-refs-all-products-v1';
+  /* Footer lines per order, kept after the first read: reopening an order's
+     lines paints at once from here while a fresh read runs behind it. */
+  var FOOT_CACHE = {};
 
   /* ── real PK column — confirmed from schema ── */
   var H_PK = 'id';
@@ -436,8 +449,25 @@
       else showHeaderLoadError(e);
     }).finally(function () {
       UI.hideSpinner();
-      try { schedulePrefetch(); } catch (e) {}
+      if (requestSeq === MO_REQUEST_SEQ) continueLoadingHeaders();
     });
+  }
+
+  /* Keep pulling windows until every order is in the browser. Stops on the
+     first failure and leaves an inline retry; a new fetchHeaders (refresh)
+     supersedes a running chain through MO_REQUEST_SEQ. */
+  function continueLoadingHeaders() {
+    if (H.loadedAll || H.loadingMore || H.loadMoreError || !H.rows.length) return;
+    var p = loadMoreHeaders();
+    if (p && typeof p.then === 'function') {
+      p.then(function () {
+        if (!H.loadedAll && !H.loadMoreError) setTimeout(continueLoadingHeaders, 0);
+      });
+    }
+  }
+  function retryLoadingHeaders() {
+    H.loadMoreError = '';
+    continueLoadingHeaders();
   }
 
   function requestHeaderWindow(count) {
@@ -494,15 +524,25 @@
 
   /* ══════════════════ DATA — dropdown refs ══════════════════
      Empty lists are NOT an error: selects degrade to free-text inputs. */
+  function applyRefs(res) {
+    res = res || {};
+    REFS.products   = res.products   || [];
+    REFS.products_full = res.products_full || [];
+    REFS.warehouses = res.warehouses || [];
+    REFS.statuses   = res.statuses   || [];
+  }
+  /* The product list is JSON kept on this device (UIC.Cache, scoped to this
+     company + user, cleared on logout): the next visit has every product in
+     the pickers at once, and a fresh copy replaces it as soon as it arrives. */
   function fetchRefs() {
-    companyCall('get_manufacture_refs', {})
-      .then(function (res) {
-        REFS.products   = res.products   || [];
-        REFS.products_full = res.products_full || [];
-        REFS.warehouses = res.warehouses || [];
-        REFS.statuses   = res.statuses   || [];
-      })
+    var read = (UIC.Cache && UIC.Cache.swr)
+      ? UIC.Cache.swr({ company: MO_COMPANY, action: 'get_manufacture_refs', payload: {},
+          version: MO_REFS_VERSION, maxAge: 30 * 60 * 1000, call: companyCall, onFresh: applyRefs })
+      : companyCall('get_manufacture_refs', {});
+    REFS_READY = Promise.resolve(read)
+      .then(applyRefs)
       .catch(function () { REFS = { products: [], products_full: [], warehouses: [], statuses: [] }; });
+    return REFS_READY;
   }
 
   /* ══════════════════ FOOTERS modal (view for all, edit for CAN_WRITE) ══════════════════
@@ -513,22 +553,47 @@
   var MO_EDITING = null;
 
   function openFootersModal(hid) {
-    FOOTMOD = { hid: String(hid), columns: [], rows: [], draft: null };
+    hid = String(hid);
+    var cached = FOOT_CACHE[hid];
+    FOOTMOD = { hid: hid, columns: cached ? cached.columns : [], rows: cached ? cached.rows : [], draft: null };
     UIC.openModal('mo-foot-modal', {
-      title: '📦 بنود الأمر #' + FMT.escape(String(hid)),
+      title: '📦 بنود الأمر #' + FMT.escape(hid),
       body: '<div class="mo-empty">⏳ جاري سحب البنود من قاعدة البيانات…</div>',
       footer: false,
       size: 'xl'
     });
-    companyCall('get_manufacture_footers', { manufacture_header_id: String(hid) })
-      .then(function (res) {
-        FOOTMOD.columns = res.columns || [];
-        FOOTMOD.rows = res.rows || [];
-        paintFootModal();
+    /* The product pickers need the product list, so the grid is drawn once
+       refs are in (instant from the device cache after the first visit). */
+    var refs = REFS_READY || fetchRefs();
+    if (cached) refs.then(function () { if (FOOTMOD.hid === hid) paintFootModal(); });
+    Promise.all([refs, companyCall('get_manufacture_footers', { manufacture_header_id: hid })])
+      .then(function (both) {
+        var res = both[1] || {};
+        var fresh = { columns: res.columns || [], rows: res.rows || [] };
+        var prev = FOOT_CACHE[hid];
+        /* Lines this page is still saving stay on screen until they settle. */
+        var pending = prev ? prev.rows.filter(function (r) { return r.__pending; }) : [];
+        var same = prev && !pending.length && JSON.stringify(prev.rows) === JSON.stringify(fresh.rows);
+        if (!same) {
+          var byId = {};
+          pending.forEach(function (r) { byId[String(r.id)] = r; });
+          fresh.rows = fresh.rows.map(function (r) { return byId[String(r.id)] || r; })
+            .concat(pending.filter(function (r) { return String(r.id).indexOf('__tmp_') === 0; }));
+          FOOT_CACHE[hid] = fresh;
+        }
+        if (FOOTMOD.hid !== hid) return;
+        var draft = FOOTMOD.draft;
+        FOOTMOD.columns = FOOT_CACHE[hid].columns;
+        FOOTMOD.rows = FOOT_CACHE[hid].rows;
+        FOOTMOD.draft = draft;
+        if (!same || !cached) paintFootModal();
       })
       .catch(function (err) {
-        var host = document.querySelector('#mo-foot-modal .modal-body');
-        if (host) host.innerHTML = '<div class="mo-empty">تعذر تحميل البنود</div>';
+        if (FOOTMOD.hid !== hid) return;
+        if (!cached) {
+          var host = document.querySelector('#mo-foot-modal .modal-body');
+          if (host) host.innerHTML = '<div class="mo-empty">تعذر تحميل البنود</div>';
+        }
         showError(err);
       });
   }
@@ -562,16 +627,19 @@
     html += '</tr></thead><tbody>';
     rows.forEach(function (row) {
       var fid = row.id !== undefined && row.id !== null ? String(row.id) : '';
-      html += '<tr>';
-      if (CAN_WRITE) {
+      var pending = !!row.__pending;
+      html += '<tr' + (pending ? ' class="mo-pending-row" aria-busy="true"' : '') + '>';
+      if (CAN_WRITE && pending) {
+        html += '<td style="white-space:nowrap;color:var(--text-muted);font-size:12px;">⏳ جاري الحفظ…</td>';
+      } else if (CAN_WRITE) {
         html += '<td style="white-space:nowrap;">' +
           '<button class="btn btn-sm btn-outline" onclick="saveFooterInline(\'' + FMT.escape(fid) + '\')">💾 حفظ</button> ' +
           '<button class="btn btn-sm" style="background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;" onclick="askDeleteFooter(\'' + FMT.escape(fid) + '\')">🗑️</button></td>';
       }
       cols.forEach(function (c) {
         if (skip[c]) return;
-        if (CAN_WRITE && !F_READ_ONLY[c] && !F_DISPLAY_ONLY[c]) {
-          html += '<td>' + footerInput(fid, c, row[c]) + '</td>';
+        if (CAN_WRITE && !pending && !F_READ_ONLY[c] && !F_DISPLAY_ONLY[c]) {
+          html += '<td>' + footerInput(fid, c, row[c], row) + '</td>';
           return;
         }
         var v = row[c];
@@ -583,6 +651,8 @@
         } else if (c === 'product_id') {
           var nm = productNameFor(row);
           cell = '<b>' + FMT.escape(nm || String(v)) + '</b>';
+        } else if (c === 'id' && String(v).indexOf('__tmp_') === 0) {
+          cell = '<span style="color:var(--text-muted);font-size:11px">—</span>';
         } else if (c === 'productQuantity' || c === 'id' || c === 'warehouse_id') {
           cell = '<span class="cell-num">' + FMT.escape(String(v)) + '</span>';
         } else {
@@ -614,22 +684,21 @@
   }
 
   /* editable control per footer column; selects fall back to REFS labels */
-  function footerInput(fid, col, val) {
+  function footerInput(fid, col, val, row) {
     var hid = FOOTMOD.hid;
     var v = (val !== null && val !== undefined) ? String(val) : '';
     var id = 'mof_' + hid + '_' + fid + '_' + col;
     if (col === 'product_id') {
-      if (!REFS.products || !REFS.products.length) {
-        return '<select class="input mo-inline-input" id="' + id + '" disabled>' +
-          '<option value="">لا توجد أصناف – حدّث المراجع</option>' +
-        '</select>';
-      }
-      return '<select class="input mo-inline-input" id="' + id + '" onchange="onFooterProductChange(\'' + FMT.escape(String(fid)) + '\')">' +
-        '<option value="">— اختر الصنف —</option>' +
-        REFS.products.map(function (o) {
-          return '<option value="' + FMT.escape(o.value) + '"' + (String(o.value) === v ? ' selected' : '') + '>' + FMT.escape(o.label) + '</option>';
-        }).join('') +
-      '</select>';
+      /* manufacture_footers.product_id -> products.id. The picker SHOWS
+         products.name_ar and STORES products.id (the combo's hidden input,
+         id = this cell's id, is what footVal reads). */
+      return '<div class="mo-product-pick">' + UIC.combo({
+        key: id, inline: true,
+        options: productOptions(v, row && row.product_name_ar),
+        value: v,
+        placeholder: 'ابحث باسم الصنف أو رقمه…',
+        onChange: function () { onFooterProductChange(fid); }
+      }) + '</div>';
     }
     if (col === 'warehouse_id' && REFS.warehouses.length) {
       return '<select class="input mo-inline-input" id="' + id + '">' +
@@ -648,6 +717,20 @@
   function footVal(fid, col) {
     var el = document.getElementById('mof_' + FOOTMOD.hid + '_' + fid + '_' + col);
     return el ? el.value : '';
+  }
+
+  /* Picker options: every product as {value: products.id, label: name_ar}.
+     A saved id the list does not contain (e.g. refs not loaded yet) is still
+     offered, under the name the server joined onto the row, so an existing
+     line always shows its product and never silently loses it on save. */
+  function productOptions(currentId, currentName) {
+    var list = REFS.products_full.length ? REFS.products_full : REFS.products;
+    var opts = list.map(function (o) { return { value: String(o.value), label: String(o.label || o.value) }; });
+    var cur = currentId === null || currentId === undefined ? '' : String(currentId);
+    if (cur && !opts.some(function (o) { return o.value === cur; })) {
+      opts.unshift({ value: cur, label: currentName ? String(currentName) : ('#' + cur) });
+    }
+    return opts;
   }
 
   function productRef(pid) {
@@ -679,27 +762,62 @@
     if (unitEl) unitEl.value = ref ? ref.unit : '';
   }
 
+  /* ── footer writes: JSON first, server behind ──────────────────────────
+     Every write changes this order's line list (FOOT_CACHE[hid].rows) and
+     repaints at once; the request runs behind it. A line waiting on the
+     server shows «جاري الحفظ…» and offers no buttons. On failure the list is
+     put back exactly as it was and the error is shown. Rows are looked up by
+     id when the reply lands, because a background refresh may have swapped
+     the array in the meantime. */
+  function footRows(hid) {
+    if (!FOOT_CACHE[hid]) FOOT_CACHE[hid] = { columns: FOOTMOD.columns || [], rows: FOOTMOD.rows || [] };
+    return FOOT_CACHE[hid].rows;
+  }
+  function footIndex(hid, fid) {
+    var rows = footRows(hid);
+    for (var i = 0; i < rows.length; i++) if (String(rows[i].id) === String(fid)) return i;
+    return -1;
+  }
+  function repaintFoot(hid) {
+    if (FOOTMOD.hid !== hid) return;
+    FOOTMOD.rows = footRows(hid);
+    if (document.getElementById('mo-foot-modal')) paintFootModal();
+  }
+
   function saveFooterInline(fid) {
-    var row = null;
-    FOOTMOD.rows.forEach(function (r) { if (String(r.id) === String(fid)) row = r; });
-    if (!row) { UIC.toast('البند غير موجود', 'error'); return; }
+    var hid = FOOTMOD.hid;
+    var at = footIndex(hid, fid);
+    if (at === -1) { UIC.toast('البند غير موجود', 'error'); return; }
+    var was = footRows(hid)[at];
     var payload = { id: fid };
     footModCols().forEach(function (col) {
       if (F_READ_ONLY[col] || F_DISPLAY_ONLY[col] || F_HIDE_VIEW[col]) return;
       payload[col] = footVal(fid, col);
     });
-    UI.showSpinner('جاري حفظ البند…');
+    var draft = Object.assign({}, was);
+    Object.keys(payload).forEach(function (k) { draft[k] = payload[k]; });
+    if (Object.prototype.hasOwnProperty.call(payload, 'product_id')) {
+      refreshJoinedProductFields(draft, payload.product_id);
+      /* The server re-withdraws code/unit from products on a product change. */
+      if (draft.product_code_ref) draft.product_code = draft.product_code_ref;
+      if (draft.product_unit_ref) draft.productUnit = draft.product_unit_ref;
+    }
+    draft.__pending = true;
+    footRows(hid)[at] = draft;
+    repaintFoot(hid);
     companyCall('save_manufacture_footer', payload)
       .then(function () {
+        var i = footIndex(hid, fid);
+        if (i !== -1) delete footRows(hid)[i].__pending;
+        repaintFoot(hid);
         UIC.toast('تم حفظ البند ✓', 'success');
-        Object.keys(payload).forEach(function (k) { row[k] = payload[k]; });
-        if (Object.prototype.hasOwnProperty.call(payload, 'product_id')) {
-          refreshJoinedProductFields(row, payload.product_id);
-        }
-        paintFootModal();
       })
-      .catch(showError)
-      .finally(function () { UI.hideSpinner(); });
+      .catch(function (err) {
+        var i = footIndex(hid, fid);
+        if (i !== -1) footRows(hid)[i] = was;
+        repaintFoot(hid);
+        showError(err);
+      });
   }
 
   function newFooterRow() {
@@ -714,25 +832,45 @@
 
   function saveFooterDraft() {
     if (!FOOTMOD.draft) return;
-    var payload = { manufacture_header_id: String(FOOTMOD.hid) };
+    var hid = FOOTMOD.hid;
+    var payload = { manufacture_header_id: String(hid) };
     footModCols().forEach(function (col) {
       if (F_READ_ONLY[col] || F_DISPLAY_ONLY[col] || F_HIDE_VIEW[col]) return;
       payload[col] = footVal('new', col);
     });
+    if (!String(payload.product_id || '').trim()) { UIC.toast('اختر الصنف أولاً', 'error'); return; }
     /* warehouse stays at its default 1 — hidden from view, server fills it. */
-    UI.showSpinner('جاري إضافة البند…');
+    var tmpId = '__tmp_' + Math.random().toString(36).slice(2, 10);
+    var newRow = { id: tmpId, manufacture_header_id: String(hid), __pending: true };
+    Object.keys(payload).forEach(function (k) { if (k !== 'manufacture_header_id') newRow[k] = payload[k]; });
+    refreshJoinedProductFields(newRow, newRow.product_id);
+    if (!newRow.product_code && newRow.product_code_ref) newRow.product_code = newRow.product_code_ref;
+    if (!newRow.productUnit && newRow.product_unit_ref) newRow.productUnit = newRow.product_unit_ref;
+    footRows(hid).push(newRow);
+    FOOTMOD.draft = null;
+    repaintFoot(hid);
     companyCall('add_manufacture_footer', payload)
       .then(function (res) {
+        var i = footIndex(hid, tmpId);
+        if (i !== -1) {
+          var row = footRows(hid)[i];
+          row.id = (res && res.id) || row.id;
+          delete row.__pending;
+        }
+        repaintFoot(hid);
         UIC.toast('تمت إضافة البند ✓', 'success');
-        var newRow = { id: (res && res.id) || null, manufacture_header_id: String(FOOTMOD.hid) };
-        Object.keys(payload).forEach(function (k) { if (k !== 'manufacture_header_id') newRow[k] = payload[k]; });
-        refreshJoinedProductFields(newRow, newRow.product_id);
-        FOOTMOD.rows.push(newRow);
-        FOOTMOD.draft = null;
-        paintFootModal();
       })
-      .catch(showError)
-      .finally(function () { UI.hideSpinner(); });
+      .catch(function (err) {
+        var i = footIndex(hid, tmpId);
+        if (i !== -1) footRows(hid).splice(i, 1);
+        /* Give the typed line back so the user can correct and resend it. */
+        if (FOOTMOD.hid === hid && !FOOTMOD.draft) {
+          FOOTMOD.draft = {};
+          Object.keys(payload).forEach(function (k) { if (k !== 'manufacture_header_id') FOOTMOD.draft[k] = payload[k]; });
+        }
+        repaintFoot(hid);
+        showError(err);
+      });
   }
 
   function askDeleteFooter(fid) {
@@ -746,22 +884,34 @@
   }
 
   function doDeleteFooter(fid) {
-    UI.showSpinner('جاري حذف البند…');
+    var hid = FOOTMOD.hid;
+    var at = footIndex(hid, fid);
+    try { UIC.closeModal('mo-delete-modal'); } catch (e) {}
+    if (at === -1) return;
+    var removed = footRows(hid).splice(at, 1)[0];
+    repaintFoot(hid);
     companyCall('delete_manufacture_footer', { id: fid })
-      .then(function () {
-        UIC.toast('تم حذف البند ✓', 'success');
-        UIC.closeModal('mo-delete-modal');
-        FOOTMOD.rows = FOOTMOD.rows.filter(function (r) { return String(r.id) !== String(fid); });
-        paintFootModal();
-      })
-      .catch(showError)
-      .finally(function () { UI.hideSpinner(); });
+      .then(function () { UIC.toast('تم حذف البند ✓', 'success'); })
+      .catch(function (err) {
+        var rows = footRows(hid);
+        rows.splice(Math.min(at, rows.length), 0, removed);
+        repaintFoot(hid);
+        showError(err);
+      });
   }
 
   /* ══════════════════ HEADER EDIT + SOFT DELETE (CAN_WRITE) ══════════════════ */
   function openHeaderEdit(pkVal) {
     var row = (H.rows).find(function (r) { return String(r[H_PK]) === String(pkVal); });
     if (!row) { UIC.toast('السجل غير موجود في الذاكرة', 'error'); return; }
+    if (!REFS.products.length && !openHeaderEdit.__waited) {
+      /* First open before the product list has arrived: wait for it once so
+         the picker is complete, then open. */
+      openHeaderEdit.__waited = true;
+      (REFS_READY || fetchRefs()).then(function () { openHeaderEdit(pkVal); });
+      return;
+    }
+    openHeaderEdit.__waited = false;
     MO_EDITING = pkVal;
     /* full server column set — hidden-from-view columns stay editable here */
     var cols = H.columns.length ? H.columns : Object.keys(row);
@@ -788,12 +938,14 @@
           '<select class="input" id="mof_' + col + '">' +
           '<option value="0"' + (!on ? ' selected' : '') + '>0 — لا</option>' +
           '<option value="1"' + (on ? ' selected' : '') + '>1 — نعم</option></select></div>';
-      } else if (col === 'product_id' && REFS.products.length) {
-        formHtml += '<div class="form-field"><label class="form-label">' + FMT.escape(label) + '</label>' +
-          '<select class="input" id="mof_' + col + '"><option value="">— اختر الصنف —</option>' +
-          REFS.products.map(function (o) {
-            return '<option value="' + FMT.escape(o.value) + '"' + (String(o.value) === String(val !== null && val !== undefined ? val : '') ? ' selected' : '') + '>' + FMT.escape(o.label) + '</option>';
-          }).join('') + '</select></div>';
+      } else if (col === 'product_id') {
+        /* Searchable: shows products.name_ar, stores products.id. */
+        formHtml += UIC.combo({
+          key: 'mof_' + col, label: FMT.escape(label),
+          options: productOptions(val, row.product_label),
+          value: val !== null && val !== undefined ? String(val) : '',
+          placeholder: 'ابحث باسم الصنف أو رقمه…'
+        });
       } else if (H_DATES[col]) {
         var dtv = val ? String(val).slice(0, 16).replace(' ', 'T') : '';
         formHtml += '<div class="form-field"><label class="form-label">' + FMT.escape(label) + '</label>' +
@@ -815,12 +967,34 @@
     });
   }
 
+  /* Re-derive the shared table from H.rows without a rebuild, so the
+     user's search, sort and page survive the change. */
+  function refreshHeaderTable() {
+    var st = window.__dtStore && window.__dtStore['mo-table'];
+    if (!st) { renderMoTable(); updateHeaderLoadControl(); return; }
+    var page = st.page || 1;
+    st.originalRows = H.rows.map(mapHeaderRow);
+    st.rows = st.originalRows;
+    UIC.filterPaged('mo-table', st.searchTerm || '');
+    st = window.__dtStore && window.__dtStore['mo-table'];
+    if (st && page > 1) {
+      st.page = Math.min(page, Math.max(1, Math.ceil(st.filtered.length / (st.pageSize || 50))));
+      UIC._dtRenderBody('mo-table');
+      UIC._dtRefreshPager('mo-table');
+    }
+    updateHeaderLoadControl();
+  }
+
+  /* JSON first: the edited order replaces its row in H.rows and the table
+     at once, the dialog closes, and the request runs behind. A failure puts
+     the old row back and says why. */
   function saveHeaderEdit() {
     var pkVal = MO_EDITING;
     if (!pkVal) { UIC.toast('لا يوجد سجل محدد', 'error'); return; }
-    var row = (H.rows).find(function (r) { return String(r[H_PK]) === String(pkVal); });
-    if (!row) { UIC.toast('السجل غير موجود', 'error'); return; }
-    var cols = H.columns.length ? H.columns : Object.keys(row);
+    var at = H.rows.findIndex(function (r) { return String(r[H_PK]) === String(pkVal); });
+    if (at === -1) { UIC.toast('السجل غير موجود', 'error'); return; }
+    var was = H.rows[at];
+    var cols = H.columns.length ? H.columns : Object.keys(was);
     var payload = {};
     payload[H_PK] = pkVal;
     cols.forEach(function (col) {
@@ -828,20 +1002,22 @@
       var el = document.getElementById('mof_' + col);
       if (el) payload[col] = el.value;
     });
-    UI.showSpinner('جاري حفظ التعديلات…');
+    var draft = Object.assign({}, was, payload);
+    if (Object.prototype.hasOwnProperty.call(payload, 'product_id')) {
+      var headerProduct = productRef(payload.product_id);
+      draft.product_label = headerProduct ? headerProduct.label : '';
+    }
+    H.rows[at] = draft;
+    try { UIC.closeModal('mo-edit-modal'); } catch (e) {}
+    refreshHeaderTable();
     companyCall('save_manufacture_header', payload)
-      .then(function () {
-        UIC.toast('تم الحفظ بنجاح ✓', 'success');
-        UIC.closeModal('mo-edit-modal');
-        Object.keys(payload).forEach(function (k) { row[k] = payload[k]; });
-        if (Object.prototype.hasOwnProperty.call(payload, 'product_id')) {
-          var headerProduct = productRef(payload.product_id);
-          row.product_label = headerProduct ? headerProduct.label : '';
-        }
-        renderPage();
-      })
-      .catch(showError)
-      .finally(function () { UI.hideSpinner(); });
+      .then(function () { UIC.toast('تم الحفظ بنجاح ✓', 'success'); })
+      .catch(function (err) {
+        var i = H.rows.findIndex(function (r) { return String(r[H_PK]) === String(pkVal); });
+        if (i !== -1) H.rows[i] = was;
+        refreshHeaderTable();
+        showError(err);
+      });
   }
 
   function askDeleteHeader(pkVal) {
@@ -855,17 +1031,20 @@
   }
 
   function doDeleteHeader(pkVal) {
-    UI.showSpinner('جاري الحذف الناعم…');
+    var at = H.rows.findIndex(function (r) { return String(r[H_PK]) === String(pkVal); });
+    try { UIC.closeModal('mo-delete-modal'); } catch (e) {}
+    if (at === -1) return;
+    var removed = H.rows.splice(at, 1)[0];
+    H.total = Math.max(0, H.total - 1);
+    refreshHeaderTable();
     companyCall('delete_manufacture_header', { id: pkVal })
-      .then(function () {
-        UIC.toast('تم الحذف الناعم ✓', 'success');
-        UIC.closeModal('mo-delete-modal');
-        H.rows = H.rows.filter(function (r) { return String(r[H_PK]) !== String(pkVal); });
-        H.total = Math.max(0, H.total - 1);
-        renderPage();
-      })
-      .catch(showError)
-      .finally(function () { UI.hideSpinner(); });
+      .then(function () { UIC.toast('تم الحذف الناعم ✓', 'success'); })
+      .catch(function (err) {
+        H.rows.splice(Math.min(at, H.rows.length), 0, removed);
+        H.total += 1;
+        refreshHeaderTable();
+        showError(err);
+      });
   }
 
   /* ══════════════════ RENDER — unified table ══════════════════ */
@@ -909,16 +1088,14 @@
     if (count) count.textContent = FMT.number(H.rows.length);
     if (mode) mode.textContent = H.loadedAll ? 'كل السجلات محمّلة' : 'تحميل تدريجي';
     if (!host) return;
-    var status = message || H.loadMoreError || ('تم تحميل ' + H.rows.length + ' من ' + H.total + ' سجل');
+    var status = message || H.loadMoreError ||
+      (H.loadedAll ? ('تم تحميل كل السجلات (' + H.rows.length + ')')
+                   : ('جاري تحميل باقي السجلات… تم تحميل ' + H.rows.length + ' من ' + H.total + ' سجل'));
     host.innerHTML = '<span style="font-size:12px;color:var(--text-muted);">' + FMT.escape(status) +
-      ' — البحث يشمل السجلات المحملة فقط</span>' +
-      (!H.loadedAll ? '<button type="button" class="btn ' + (H.loadMoreError ? 'btn-outline' : 'btn-primary') + '" onclick="loadMoreHeaders()" ' +
-        (H.loadingMore ? 'disabled' : '') + '>' + (H.loadMoreError ? 'إعادة المحاولة' : 'تحميل المزيد') + '</button>' :
-        '<span class="mo-badge">تم تحميل كل السجلات</span>') +
-      (H.rows.length > MO_FIRST_LIMIT ? '<button type="button" class="btn btn-outline" onclick="showLatestHeaders()">عرض آخر 20 سجل</button>' : '');
+      (H.loadedAll ? '' : ' — البحث يشمل السجلات المحملة حتى الآن') + '</span>' +
+      (H.loadMoreError ? '<button type="button" class="btn btn-outline" onclick="retryLoadingHeaders()">إعادة المحاولة</button>' : '') +
+      (H.loadedAll ? '<span class="mo-badge">تم تحميل كل السجلات</span>' : '');
   }
-
-  function showLatestHeaders() { fetchHeaders(false); }
 
   function showHeaderLoadError(err) {
     var content = document.getElementById('mo-content');

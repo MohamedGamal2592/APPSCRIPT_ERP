@@ -663,7 +663,7 @@ const TopChemical = (function () {
       dbClientBalanceSheetsList_: [0, 'existing balance columns', 200],
       dbManufactureList_: [0, 'existing header columns', 200],
       dbManufactureGetFooters_: [0, 'existing footer columns', 'all lines of one header'],
-      dbManufactureRefs_: [0, 'id,label,code,unit,status', '500 products/warehouses; all statuses'],
+      dbManufactureRefs_: [0, 'id,label,code,unit,status', 'all products (20000 guard); 500 warehouses; all statuses'],
       dbStockScanProducts_: [60, 'id,name_ar,number_of_cartons_bags,code', 'exact ID/code or bounded name-prefix search'],
       dbStockScanWarehouses_: [300, 'id,location', 'warehouse labels'],
       dbStockScanBalance_: [30, 'id,warehouse_id,current_qty', 'one product-warehouse pair'],
@@ -12729,6 +12729,9 @@ const valueMap = {};
   var DB_MANUFACTURE_FOOTER_JOIN_COLUMNS = [
     'product_name_ar', 'product_code_ref', 'product_unit_ref'
   ];
+  /* Runaway guard for the product dropdown (dbManufactureRefs_): the whole
+     products table is the option list, so this is a ceiling, not a page. */
+  var DB_MANUFACTURE_PRODUCTS_MAX = 20000;
 
   /* JSON_ARRAYAGG does not guarantee element order. Carry a row number inside
      the JSON payload, validate the complete aggregate, then restore the same
@@ -13096,15 +13099,20 @@ const valueMap = {};
     var conn;
     try {
       conn = dbGetConnection_();
-      products = tryLabelList_(conn, [
-        'SELECT `id`, `name_ar` AS `label` FROM `products` ORDER BY `id` ASC LIMIT 500',
-        'SELECT `id`, `name` AS `label` FROM `products` ORDER BY `id` ASC LIMIT 500'
-      ]);
-      // Full option rows so the page can auto-fill code/unit on product change
-      // and show the Arabic name next to raw product_id values.
+      // Every product, in ONE query. This used to stop at the first 500 ids,
+      // so a footer whose product_id was past that had no option to select:
+      // the edit dropdown showed «— اختر الصنف —» instead of products.name_ar
+      // and saving the line blanked its product. The bound is a runaway guard,
+      // not a page size. `products` (value/label) is derived from the same
+      // rows instead of a second scan of the table.
       productsFull = tryFullList_(conn, [
-        'SELECT `id`, `name_ar`, `code`, `unit` FROM `products` ORDER BY `id` ASC LIMIT 500'
+        'SELECT `id`, `name_ar`, `code`, `unit` FROM `products` ORDER BY `id` ASC LIMIT ' + DB_MANUFACTURE_PRODUCTS_MAX
       ]);
+      products = productsFull.length
+        ? productsFull.map(function (p) { return { value: p.value, label: p.label }; })
+        : tryLabelList_(conn, [
+            'SELECT `id`, `name` AS `label` FROM `products` ORDER BY `id` ASC LIMIT ' + DB_MANUFACTURE_PRODUCTS_MAX
+          ]);
       warehouses = tryLabelList_(conn, [
         'SELECT `id`, `name_ar` AS `label` FROM `warehouses` ORDER BY `id` ASC LIMIT 500',
         'SELECT `id`, `name` AS `label` FROM `warehouses` ORDER BY `id` ASC LIMIT 500'
