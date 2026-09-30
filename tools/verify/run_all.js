@@ -128,6 +128,7 @@ const STEPS = [
   ['erptest_mfg_vm.js', 'ET-MFG — Testing System T-MFG / T-STOCK on the real erp_test headers'],
   ['erptest_parity_vm.js', 'ET-PARITY — Testing System reads equal Top Light (legacy and packs)'],
   ['erptest_write_vm.js', 'ET-WRITE — Testing System write layer: T-WRITE, T-ATOMIC, compaction, reconcile, get_et_sync'],
+  ['erptest_instant_insert.js', 'ET-INSTANT — instant inserts stay gated and box_balance stays in the lock'],
   ['live_notice_server.js', 'LIVE-NOTICE P1 — stamps carry writer and request; get_page_versions returns views, labels and the union of tables'],
   ['live_notice_client.js', 'LIVE-NOTICE P2 — own saves are silent, off-view changes go stale, the notice names what/who/when'],
   ['live_views_cache.js', 'LIVE-NOTICE P6 — views from device JSON: inert paint, trusted only when the stamps match, exact bust, per-user, logout, limits'],

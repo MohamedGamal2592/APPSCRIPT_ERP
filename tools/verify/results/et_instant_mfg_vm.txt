@@ -1,0 +1,45 @@
+  PASS  add_et_product ┘à┘╪ز╪ش A
+  PASS  add_et_product ┘à┘╪ز╪ش B
+  PASS  add_et_product ┘à┘╪ز╪ش F
+  PASS  get_et_sales_options succeeds on the real erp_test headers
+  PASS  add_et_sales succeeds
+  PASS  sales header lands in the English erp_test columns (invoice_number, invoice_net_value, client_id)
+  PASS  sales line FK lands in erp_test_sales_header_id
+  PASS  get_et_sales_headers reads the invoice back
+  PASS  delete_et_sales (restore stock for the manufacturing tests)
+  PASS  add_et_sales_offer succeeds
+  PASS  offer key stored in offer_unique_id
+  PASS  offer replay with the same request_key adds no row
+  PASS  approve_et_sales_offer finds the row through keyColumn offer_unique_id
+  PASS  live stock: A = 10, B = 10 from purchases
+  PASS  T-MFG 1: mo_number MO-1-2023
+  PASS  T-MFG 1: Pending/Open
+  PASS  T-MFG 1: materials_cost = 4┬╖uc(A) + 2┬╖uc(B)
+  PASS  T-MFG 2: finished product as material refused
+  PASS  T-MFG 3: duplicate material refused
+  PASS  T-MFG 4: complete before approve refused
+  PASS  T-MFG 5: approve
+  PASS  T-MFG 5: Completed
+  PASS  T-MFG 5: unit_cost = total/5 (total = 50 materials + 7 extra)
+  PASS  T-MFG 6: edit of completed order refused
+  PASS  T-MFG 7: second order added and approved
+  PASS  T-MFG 7: over-consumption refused with available 6
+  PASS  T-MFG 8: cancel
+  PASS  T-MFG 8: Cancelled
+  PASS  T-MFG 8: complete after cancel refused
+  PASS  T-MFG 9: replay returns the committed order, no new row
+  PASS  edit an open order
+  PASS  edit replaces the line generation with fresh line ids
+  PASS  cancel the edited order (keeps T-STOCK quantities unchanged)
+  PASS  approving an already-approved order is refused by the transition table
+  PASS  T-STOCK: A = 6, B = 8, F = 5
+  PASS  template: last non-cancelled order for F has 2 material lines
+  PASS  T-STOCK: product movement shows one manufacture_in of 5
+  PASS  T-STOCK: income statement mfgExtra = 7
+  PASS  T-STOCK: selling F├ù5 allowed
+  PASS  T-STOCK: (undo the F├ù5 sale)
+  PASS  T-STOCK: selling F├ù6 fails with the stock error (╪د┘┘â┘à┘è╪ر ╪ز╪ز╪ش╪د┘ê╪▓ ╪د┘╪▒╪╡┘è╪» ╪د┘┘à╪ز╪د╪ص ┘┘┘à┘╪ز╪ش (╪د┘┘à╪ز╪د╪ص: 5))
+  PASS  etSchemaCheck_ ok:true on the real erp_test headers
+
+erp_test acceptance (T-MFG, T-STOCK) passes.
+

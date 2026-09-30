@@ -1,0 +1,56 @@
+  PASS  legacy run completed (39 write actions)
+  PASS  ET_SJS_READ+ET_SJS_WRITE run completed (39 write actions)
+  PASS  ET_SJS_WRITE run completed (39 write actions)
+  PASS  T-WRITE [B write layer] erp_test_products identical (3 rows)
+  PASS  T-WRITE [B write layer] erp_test_categories identical (0 rows)
+  PASS  T-WRITE [B write layer] erp_test_customer_vendor identical (2 rows)
+  PASS  T-WRITE [B write layer] erp_test_purchasing_costing identical (2 rows)
+  PASS  T-WRITE [B write layer] erp_test_product_purchasing identical (5 rows)
+  PASS  T-WRITE [B write layer] erp_test_sales_invoices identical (2 rows)
+  PASS  T-WRITE [B write layer] erp_test_sales_products identical (3 rows)
+  PASS  T-WRITE [B write layer] erp_test_sales_returns identical (2 rows)
+  PASS  T-WRITE [B write layer] erp_test_sales_offer identical (2 rows)
+  PASS  T-WRITE [B write layer] erp_test_sales_offer_products identical (3 rows)
+  PASS  T-WRITE [B write layer] erp_test_cash_bank_movement identical (4 rows)
+  PASS  T-WRITE [B write layer] erp_test_manufacture_orders identical (3 rows)
+  PASS  T-WRITE [B write layer] erp_test_manufacture_lines identical (6 rows)
+  PASS  T-WRITE [C packs + write layer, ids masked] erp_test_products identical (3 rows)
+  PASS  T-WRITE [C packs + write layer, ids masked] erp_test_categories identical (0 rows)
+  PASS  T-WRITE [C packs + write layer, ids masked] erp_test_customer_vendor identical (2 rows)
+  PASS  T-WRITE [C packs + write layer, ids masked] erp_test_purchasing_costing identical (2 rows)
+  PASS  T-WRITE [C packs + write layer, ids masked] erp_test_product_purchasing identical (5 rows)
+  PASS  T-WRITE [C packs + write layer, ids masked] erp_test_sales_invoices identical (2 rows)
+  PASS  T-WRITE [C packs + write layer, ids masked] erp_test_sales_products identical (3 rows)
+  PASS  T-WRITE [C packs + write layer, ids masked] erp_test_sales_returns identical (2 rows)
+  PASS  T-WRITE [C packs + write layer, ids masked] erp_test_sales_offer identical (2 rows)
+  PASS  T-WRITE [C packs + write layer, ids masked] erp_test_sales_offer_products identical (3 rows)
+  PASS  T-WRITE [C packs + write layer, ids masked] erp_test_cash_bank_movement identical (4 rows)
+  PASS  T-WRITE [C packs + write layer, ids masked] erp_test_manufacture_orders identical (3 rows)
+  PASS  T-WRITE [C packs + write layer, ids masked] erp_test_manufacture_lines identical (6 rows)
+  PASS  ET_SJS_WRITE: at most one batchUpdate per write request (39 for 39 requests)
+  PASS  journal rows written in the same batchUpdate (71)
+  PASS  journal seq is 1..n without gaps
+  PASS  every add response carries its journal ops
+  PASS  approvals (approveStep_) are journaled too
+  PASS  legacy run writes no journal
+  PASS  T-ATOMIC: valid insert + bad sheetId -> exception, no row written
+  PASS  a rejected commit leaves the sheet untouched (handler writes were only in the overlay)
+  PASS  a handler exception inside the transaction propagates
+  PASS  compaction snapshots every journaled table and empties the journal ({"status":"success","compacted":71,"floor":71})
+  PASS  snapshots saved in erp_test__packs
+  PASS  reads after compaction come from snapshot + journal
+  PASS  nightly reconcile: cached packs match the source ([])
+  PASS  manual-edit trigger invalidates the edited table
+  PASS  ET_CLIENT_PACKS off -> client_packs:false
+  PASS  unknown client seq -> full pack (1 live invoices)
+  PASS  current seq -> same
+  PASS  a write to another table does not disturb this table
+  PASS  add_et_sales under the write layer
+  PASS  journal seq continues past the compaction floor (75)
+  PASS  a client seq below the compaction floor -> full pack
+  PASS  seq above the floor -> delta with exactly the one new insert
+  PASS  cash: only its seq, never rows
+  PASS  after a manual edit (reset marker) the client gets a full pack
+
+erp_test write layer (T-WRITE, T-ATOMIC) passes.
+

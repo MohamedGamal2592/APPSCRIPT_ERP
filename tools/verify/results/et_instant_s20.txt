@@ -1,0 +1,25 @@
+
+1 ظ¤ every `quiet` reference is in scope
+
+  PASS  no page references `quiet` outside a function that declares it
+
+2 ظ¤ a refresh that suppresses the overlay also suppresses hiding it
+
+  PASS  every quiet-aware refresh guards its hideSpinner too
+
+3 ظ¤ every change watch names a real page and a real function
+
+  PASS  77 page(s) register a change watch
+  PASS  every watch names a real page id and a real function
+
+4 ظ¤ a converted page does not still block on its own writes
+
+  PASS  34 ValleyFoods page(s) converted
+  PASS  no converted page blocks on a refresh it triggered itself
+
+5 ظ¤ a save that raises the overlay also lowers it
+
+  PASS  31 write path(s) raise the loading overlay
+  PASS  every one of them lowers it on success too, not just on error
+
+S20 ظ¤ the quiet-refresh rollout is consistent.

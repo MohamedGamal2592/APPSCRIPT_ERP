@@ -1,0 +1,40 @@
+  PASS  the test route ran through apiRouter_
+  PASS  _liveReqMeta_ during the request = {rid, who (lower-cased email), name}
+  PASS  _liveReqMeta_ is cleared when the request ends
+  PASS  stamp after a routed write: w[0].r = request id, w[0].u = email, w[0].n = name, t = w[0].t
+  PASS  _liveReqMeta_ is cleared after a failing request too
+  PASS  five writes keep five entries, newest first
+  PASS  a sixth write drops the oldest
+  PASS  the same request writing again keeps ONE entry, and t still moves
+  PASS  two writes in one millisecond still give two different t
+  PASS  parseTableStamp_ reads an old bare number as {t, w:[]}
+  PASS  missing or unreadable stamps read as t:0
+  PASS  a write over an old numeric stamp upgrades it to JSON
+  PASS  a trigger write (no request) stamps u:"system", r:""
+  PASS  noteTableChange_ still never throws
+  PASS  get_page_versions answers for tl_sales
+  PASS  views.list names what the list shows (customers, returns)
+  PASS  views.form names the live stock table
+  PASS  tables = PAGE_TABLES ظêز every view table
+  PASS  labels name the tables in Arabic
+  PASS  versions keeps its shape: sheet -> raw stamp string
+  PASS  meta carries the parsed writer list
+  PASS  now is still the server clock as a string
+  PASS  a caller without read access to the page is refused with NOT_AUTHORIZED
+  PASS  the same caller with read access gets the reply
+  PASS  a page without PAGE_VIEWS answers views:null and its PAGE_TABLES (here none)
+  PASS  a table with no stamp is seeded with s:1 and no writers
+  PASS  the seeded stamp is stable across polls
+  PASS  a real write replaces the seed (t moves, s gone)
+  PASS  TopChemical: get_page_versions(tc_barcode) returns views and labels
+  PASS  ValleyFoods: get_page_versions(vf_asset_technical) returns views and labels
+  PASS  Assessment: get_page_versions(ac_assessments) returns views and labels
+  PASS  ErpTest: get_page_versions(et_cash) returns views and labels
+  PASS  noteRecordChange_ adds keys to the request's own entry: five, then "ظخ"
+  PASS  the same request stamping the table again keeps its keys
+  PASS  a background write records its key under u:"system"
+  PASS  get_page_versions meta carries the record keys
+  PASS  Top Light add_party then edit_party: each write's entry names record 1 (tlDbCreate_/tlDbPatch_)
+  PASS  tlDbCreate_, tlDbPatch_ (soft delete) and tlDbSoftDeleteWhere_ record keys in Top Light and the Testing System
+
+live_notice_server: OK

@@ -1,0 +1,35 @@
+node : erptest_clone_static: FAIL (28)
+At line:1 char:1
++ node tools/verify/erptest_clone_static.js > tools/verify/results/et_i ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (erptest_clone_static: FAIL (28):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  Company_ErpTest_Actions.js: ACTION_DEFINITIONS key not allowed: get_et_categories
+  Company_ErpTest_Actions.js: ACTION_DEFINITIONS key not allowed: add_et_category
+  Company_ErpTest_Actions.js: ACTION_DEFINITIONS key not allowed: edit_et_category
+  Company_TopLight_Actions.js: differs from HEAD
+  Company_TopLight_Cash.html: differs from HEAD
+  Company_TopLight_Cash_Report.html: differs from HEAD
+  Company_TopLight_Customers.html: differs from HEAD
+  Company_TopLight_Customer_Statement.html: differs from HEAD
+  Company_TopLight_Dashboard.html: differs from HEAD
+  Company_TopLight_Financial_Position.html: differs from HEAD
+  Company_TopLight_Income_Statement.html: differs from HEAD
+  Company_TopLight_KPI.html: differs from HEAD
+  Company_TopLight_Nav.html: differs from HEAD
+  Company_TopLight_Products.html: differs from HEAD
+  Company_TopLight_Product_Movement.html: differs from HEAD
+  Company_TopLight_Purchase_Needs.html: differs from HEAD
+  Company_TopLight_Purchase_Print.html: differs from HEAD
+  Company_TopLight_Purchasing.html: differs from HEAD
+  Company_TopLight_Registry.js: differs from HEAD
+  Company_TopLight_Sales.html: differs from HEAD
+  Company_TopLight_Sales_Analysis.html: differs from HEAD
+  Company_TopLight_Sales_Costing_Analysis.html: differs from HEAD
+  Company_TopLight_Sales_Costing_Print.html: differs from HEAD
+  Company_TopLight_Sales_Offer.html: differs from HEAD
+  Company_TopLight_Sales_Offer_Print.html: differs from HEAD
+  Company_TopLight_Sales_Print.html: differs from HEAD
+  Company_TopLight_Sales_Release.html: differs from HEAD
+  Company_TopLight_Sales_Returns.html: differs from HEAD
