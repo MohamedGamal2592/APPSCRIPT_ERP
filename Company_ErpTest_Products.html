@@ -88,7 +88,7 @@
       { key: 'id', label: 'المعرف' },
       { key: 'name_ar', label: 'الاسم العربي' },
       { key: 'name_en', label: 'الاسم الإنجليزي' },
-      { key: 'category', label: 'الفئة' },
+      { key: 'category', label: 'التصنيف' },
       { key: 'unit', label: 'الوحدة' },
       { key: 'carton', label: 'الكرتونة' },
       { key: 'current_qty', label: 'الرصيد الحالي', numeric: true },
@@ -138,7 +138,7 @@
       UIC.field({ key: 'carton', label: 'الكرتونة', value: p ? p.carton : '', required: true }) +
       UIC.field({ key: 'asset_code', label: 'كود الأصل', type: 'select', required: true,
         options: assetCodeOptions, placeholder: 'اختر كود الأصل...', value: p ? p.asset_code : '' }) +
-      UIC.enumSelect({ key: 'category', label: 'الفئة', value: p ? p.category : '', options: categoryOptions, required: true, placeholder: 'اختر الفئة...' }) +
+      UIC.combo({ key: 'category', label: 'التصنيف', value: p ? p.category : '', options: categoryOptions, required: true, placeholder: 'اختر التصنيف...' }) +
       UIC.field({ key: 'sales_tax', label: 'ضريبة المبيعات', type: 'select', required: true,
         options: [{ value: '0.14', label: '14%' }, { value: '0.10', label: '10%' }, { value: '0.05', label: '5%' }],
         value: p ? String(p.sales_tax) : '0.14' }) +
@@ -159,13 +159,7 @@
         if (data[k] === '__new__') data[k] = data[k + '_custom'] || '';
         delete data[k + '_custom'];
       });
-      if (data.category === '__new__') {
-        data.category_new = data.category_custom || '';
-        delete data.category;
-        delete data.category_custom;
-      } else {
-        delete data.category_custom;
-      }
+      delete data.category_custom;
       if (id) data.id = id;
       /* [RT-4] Optimistic. The rotating reassurance messages are deleted with
          the wait they were reassuring about. */

@@ -57,6 +57,11 @@
       "erp_test_chart_of_accounts"
      ]
     },
+    "et_categories": {
+     "list": [
+      "erp_test_categories"
+     ]
+    },
     "et_purchasing": {
      "list": [
       "erp_test_purchasing_costing",

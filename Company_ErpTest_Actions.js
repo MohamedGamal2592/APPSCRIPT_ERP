@@ -208,6 +208,9 @@ const ErpTest = (function () {
     'get_et_products': { handler: getProducts_, page: 'et_products', access: 'read', primaryLogTable: PRODUCTS_SHEET },
     'add_et_product': { handler: addProduct_, page: 'et_products', access: 'write', primaryLogTable: PRODUCTS_SHEET },
     'edit_et_product': { handler: editProduct_, page: 'et_products', access: 'full', primaryLogTable: PRODUCTS_SHEET },
+    'get_et_categories': { handler: getCategories_, page: 'et_categories', access: 'read', primaryLogTable: CATEGORIES_SHEET },
+    'add_et_category': { handler: addCategory_, page: 'et_categories', access: 'write', primaryLogTable: CATEGORIES_SHEET },
+    'edit_et_category': { handler: editCategory_, page: 'et_categories', access: 'full', primaryLogTable: CATEGORIES_SHEET },
     'get_et_parties': { handler: getParties_, page: 'et_customers', access: 'read', primaryLogTable: CUSTOMERS_SHEET },
     'add_et_party': { handler: addParty_, page: 'et_customers', access: 'write', primaryLogTable: CUSTOMERS_SHEET },
     'edit_et_party': { handler: editParty_, page: 'et_customers', access: 'full', primaryLogTable: CUSTOMERS_SHEET },
@@ -352,6 +355,9 @@ const ErpTest = (function () {
     },
     'et_products': {
       'list': [PRODUCTS_SHEET, CURRENT_PRODUCTS_SHEET, PURCHASING_LINES_SHEET, SALES_LINES_SHEET, SALES_RETURNS_SHEET, CATEGORIES_SHEET, CHART_SHEET]
+    },
+    'et_categories': {
+      'list': [CATEGORIES_SHEET]
     },
     'et_purchasing': {
       'list': [PURCHASING_SHEET, CURRENT_PRODUCTS_SHEET, PURCHASING_LINES_SHEET, SALES_LINES_SHEET, SALES_RETURNS_SHEET, CUSTOMERS_SHEET, PRODUCTS_SHEET, CHART_SHEET],
@@ -1183,6 +1189,69 @@ const ErpTest = (function () {
       total_cost_sign: st.cost
     };
     return { status: 'success', message: 'تم تحديث المنتج', record: savedRecord2, unique_id: String(id), assignedId: id };
+  }
+
+  // =========================================
+  // Categories — list / add / edit  (backs page et_categories)
+  // =========================================
+  function getCategories_(data, user, dbId) {
+    const rows = tlDbList_(dbId, CATEGORIES_SHEET);
+    const categories = rows.map(function (c) {
+      return {
+        id: c.id,
+        name_ar: c.name_ar,
+        name_eng: c.name_eng,
+        user: c.user,
+        created_at: c.created_at
+      };
+    });
+    return { status: 'success', categories: categories };
+  }
+
+  function addCategory_(data, user, dbId) {
+    const nameAr = String((data && data.name_ar) || '').trim();
+    const nameEng = String((data && data.name_eng) || '').trim();
+    if (!nameAr) throw new Error('الاسم العربي مطلوب');
+    if (!nameEng) throw new Error('الاسم الإنجليزي مطلوب');
+    var _newVals = { name_ar: nameAr, name_eng: nameEng, user: user.email };
+    const created = tlDbCreate_(dbId, CATEGORIES_SHEET, _newVals, { user: user });
+    const id = created.assignedId;
+    const record = created.record;
+    try { var _uid = 'create_erp_test_categories_' + id; logHistory_(dbId, CATEGORIES_SHEET, _uid, String(id), (user && user.email) || '', 'create', _newVals, null); } catch (e) {}
+    bumpTlRefsVersion_(dbId);
+    invalidateRefsCache_(dbId, 'categories');
+    var savedRecord = {
+      id: id,
+      name_ar: nameAr,
+      name_eng: nameEng,
+      user: user.email,
+      created_at: new Date()
+    };
+    return { status: 'success', message: 'تمت إضافة التصنيف', data: record, record: savedRecord, assignedId: id, unique_id: String(id) };
+  }
+
+  function editCategory_(data, user, dbId) {
+    const id = Number((data && data.id));
+    if (!id) throw new Error('معرف التصنيف مطلوب');
+    const nameAr = String((data && data.name_ar) || '').trim();
+    const nameEng = String((data && data.name_eng) || '').trim();
+    if (!nameAr) throw new Error('الاسم العربي مطلوب');
+    if (!nameEng) throw new Error('الاسم الإنجليزي مطلوب');
+    var _newVals = { name_ar: nameAr, name_eng: nameEng };
+    const patched = tlDbPatch_(dbId, CATEGORIES_SHEET, id, _newVals, { keyField: 'id', user: user, version: data && data.version });
+    if (!patched) throw new Error('التصنيف غير موجود');
+    var _old = patched.oldRecord;
+    try { var _uid = (_old && _old.record_uid) ? String(_old.record_uid) : 'update_erp_test_categories_' + id; logHistory_(dbId, CATEGORIES_SHEET, _uid, String(id), (user && user.email) || '', 'update', _newVals, _old); } catch (e) {}
+    bumpTlRefsVersion_(dbId);
+    invalidateRefsCache_(dbId, 'categories');
+    var savedRecord = {
+      id: id,
+      name_ar: nameAr,
+      name_eng: nameEng,
+      user: (_old && _old.user) || (user && user.email) || '',
+      created_at: (_old && _old.created_at) || ''
+    };
+    return { status: 'success', message: 'تم تحديث التصنيف', record: savedRecord, unique_id: String(id), assignedId: id };
   }
 
   // =========================================
@@ -4364,6 +4433,9 @@ const ErpTest = (function () {
   register('get_et_products', getProducts_);
   register('add_et_product', addProduct_);
   register('edit_et_product', editProduct_);
+  register('get_et_categories', getCategories_);
+  register('add_et_category', addCategory_);
+  register('edit_et_category', editCategory_);
   register('get_et_parties', getParties_);
   register('add_et_party', addParty_);
   register('edit_et_party', editParty_);

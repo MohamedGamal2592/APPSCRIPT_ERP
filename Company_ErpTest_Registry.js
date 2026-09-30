@@ -19,6 +19,7 @@ function registerErpTest_() {
     // §2.1 Table Catalog — metadata only, no schema change, validated at runtime via getHeaders_
     tables: [
       { id: 'et_products_tbl', sheetName: 'erp_test_products', pkColumn: 'id', labelAr: 'المنتجات', pageId: 'et_products' },
+      { id: 'et_categories_tbl', sheetName: 'erp_test_categories', pkColumn: 'id', labelAr: 'التصنيفات', pageId: 'et_categories' },
       { id: 'et_customers_tbl', sheetName: 'erp_test_customer_vendor', pkColumn: 'id', labelAr: 'العملاء والموردون', pageId: 'et_customers' },
       { id: 'et_purchasing_tbl', sheetName: 'erp_test_purchasing_costing', pkColumn: 'unique_id', labelAr: 'المشتريات', pageId: 'et_purchasing' },
       { id: 'et_sales_tbl', sheetName: 'erp_test_sales_invoices', pkColumn: 'invoice_unique_id', labelAr: 'المبيعات', pageId: 'et_sales' },
@@ -29,7 +30,8 @@ function registerErpTest_() {
       { action: 'et_dashboard', template: 'Company_ErpTest_Dashboard', title: 'Testing System — Dashboard', label: 'لوحة التحكم' },
       { action: 'et_kpi', template: 'Company_ErpTest_KPI', title: 'Testing System — المؤشرات', label: 'المؤشرات' },
       { action: 'et_analysis_review', template: 'Company_ErpTest_Dashboard', title: 'مراجعة تحليل المبيعات', nav: false },
-      { action: 'et_products', template: 'Company_ErpTest_Products', title: 'Testing System — المنتجات', label: 'المنتجات' },
+      { action: 'et_products', template: 'Company_ErpTest_Products', title: 'Testing System — الاصناف', nav: false },
+      { action: 'et_categories', template: 'Company_ErpTest_Categories', title: 'Testing System — التصنيفات', nav: false },
       { action: 'et_customers', template: 'Company_ErpTest_Customers', title: 'Testing System — العملاء والموردون', label: 'العملاء والموردون' },
       { action: 'et_purchasing', template: 'Company_ErpTest_Purchasing', title: 'Testing System — المشتريات', label: 'المشتريات' },
       { action: 'et_purchase_print', template: 'Company_ErpTest_Purchase_Print', title: 'أمر شراء', nav: false },

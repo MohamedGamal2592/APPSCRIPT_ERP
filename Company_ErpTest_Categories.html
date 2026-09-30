@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Testing System — التصنيفات</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_ErpTest_Nav'); ?>
+  <?!= include('ERP_Flow'); ?>
+  <?!= include('ERP_Modal'); ?>
+  <?!= getCompanyThemeCSS_('37fc50edf1424abd') ?>
+</head>
+<body>
+<div id="tl-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('37fc50edf1424abd') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+  var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+  var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
+
+  if (window.UIC && UIC.Live && UIC.Live.viewCache) companyCall = UIC.Live.viewCache(companyCall, { company: '37fc50edf1424abd', page: 'et_categories', view: 'list', lists: ['get_et_categories'] });
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '37fc50edf1424abd',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function load() {
+    var contentId = 'categories-content';
+    UIC.appShell('tl-root', {
+      menuGroups: window.ERPTEST_MENU || [],
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=et_dashboard&sessionToken=' + SESSION_TOKEN,
+      companyLogoTitle: 'النظام التجريبي',
+      breadcrumb: 'النظام التجريبي / التصنيفات',
+      contentId: contentId
+    });
+    fetchCategories();
+  }
+
+  function fetchCategories() {
+    UIC.readSkeleton('categories-content', { message: [
+      'جاري تحميل التصنيفات...',
+      'لحظة، جاري عرض الجدول...'
+    ] });
+    companyCall('get_et_categories')
+      .then(function (r) { renderCategories(r.categories || []); })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function renderCategories(list) {
+    window.__categories = list;
+    var rows = list.map(function (c) {
+      return {
+        id: c.id,
+        name_ar: c.name_ar || '-',
+        name_eng: c.name_eng || '-',
+        actions: UIC.actionBtns(UIC.canFull_() ? [{ label: 'تعديل', onclick: "openCategoryModal('" + FMT.escape(c.id) + "')" }] : [])
+      };
+    });
+    var headers = [
+      { key: 'id', label: 'المعرف' },
+      { key: 'name_ar', label: 'الاسم العربي' },
+      { key: 'name_eng', label: 'الاسم الإنجليزي' },
+      { key: 'actions', label: 'إجراءات' }
+    ];
+    var body = document.getElementById('categories-content');
+    body.innerHTML = '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;gap:8px;">' +
+      (CAN_WRITE ? '<button class="btn btn-primary" onclick="openCategoryModal(\'\')">+ إضافة تصنيف</button>' : '') +
+      '</div>' +
+      UIC.dataTable('categories-table', {
+        title: 'التصنيفات',
+        headers: headers,
+        rows: rows,
+        emptyText: 'لا توجد تصنيفات'
+      });
+    UIC.initTableSort('categories-table');
+  }
+
+  function openCategoryModal(id) {
+    var c = (window.__categories || []).find(function (x) { return String(x.id) === String(id); });
+    var body =
+      '<form id="category-form">' +
+      UIC.field({ key: 'name_ar', label: 'الاسم العربي', value: c ? c.name_ar : '', required: true }) +
+      UIC.field({ key: 'name_eng', label: 'الاسم الإنجليزي', value: c ? c.name_eng : '', required: true }) +
+      '</form>';
+    UIC.openModal('category-modal', {
+      title: c ? 'تعديل تصنيف' : 'إضافة تصنيف',
+      body: body,
+      onSave: 'saveCategory(\'' + (c ? c.id : '') + '\')'
+    });
+  }
+
+  function saveCategory(id) {
+    var btn = document.querySelector('#category-modal .btn-primary');
+    UI.submitOnce(btn, function () {
+      var data = UIC.collectForm('category-form');
+      if (!UIC.validateForm('category-form')) return Promise.reject();
+      if (id) data.id = id;
+      if (!window.__categories) window.__categories = [];
+      return UIC.Live.save({
+        call: companyCall,
+        action: id ? 'edit_et_category' : 'add_et_category',
+        data: data,
+        list: window.__categories,
+        key: 'id',
+        draft: Object.assign({}, data),
+        render: function () { renderCategories(window.__categories); },
+        modal: 'category-modal',
+        message: 'تم الحفظ',
+        recordOf: function (r) {
+          var rec = (r && r.record) || null;
+          if (rec && !rec.id) rec.id = r.assignedId || r.unique_id;
+          return rec;
+        },
+        reload: fetchCategories
+      }).catch(function () { /* Live.save already toasted and rolled back */ });
+    });
+  }
+
+  function showError(e) {
+    var body = document.getElementById('categories-content');
+    if (body) body.innerHTML = '<div class="empty-state"><span>' + FMT.escape(e.message || 'خطأ') + '</span></div>';
+  }
+
+  load();
+
+  UIC.Live.watchPage({
+    call: companyCall,
+    page: 'et_categories',
+    onChange: function () { UIC.Live.arrive(function () { fetchCategories(); }); }
+  });
+  if (UIC.Live.setView) UIC.Live.setView('list', { refresh: function () { fetchCategories(); } });
+</script>
+</body>
+</html>
