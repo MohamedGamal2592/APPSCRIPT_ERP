@@ -89,7 +89,11 @@
         telephone: p.telephone || '-',
         address: p.address || '-',
         balance: FMT.number(p.balance),
-        actions: UIC.actionBtns([
+        /* Tier A: a __pending row is the form's own JSON drawn before the
+           server answers. Its buttons would name a client-side __tmp_ id the
+           server has never seen, so it offers none until the saved record
+           replaces it — as on et_categories, et_products and et_cash. */
+        actions: p.__pending ? '…' : UIC.actionBtns([
           { label: 'كشف حساب', onclick: "openStatement('" + FMT.escape(p.id) + "')" }
         ].concat(UIC.canFull_() ? [{ label: 'تعديل', onclick: "openPartyModal('" + FMT.escape(p.id) + "')" }] : []))
       };
