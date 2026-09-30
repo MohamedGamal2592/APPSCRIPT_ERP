@@ -319,6 +319,7 @@ async function main() {
   }
 
   await realPages();
+  await recordLevel();
 
   console.log(failed ? '\nlive_notice_client: FAIL (' + failed + ')' : '\nlive_notice_client: OK');
   process.exit(failed ? 1 : 0);
@@ -482,6 +483,67 @@ async function realPages() {
     const chip = sb.document.getElementById('uic-live-fresh');
     check(chip && /أرصدة المخزون/.test(chip.innerHTML) && /ahmed/.test(chip.innerHTML), 'with the invoice dialog open, the stock change is on screen: «تم تحديث أرصدة المخزون بواسطة ahmed …»', chip && chip.innerHTML);
     sb.UIC.closeModal('vf-inv-modal');
+  }
+}
+
+/* ── P5 — record level for an open form (Top Light and Testing System) ── */
+async function recordLevel() {
+  for (const [company, file, page, table] of [
+    ['TopLight', 'Company_TopLight_Sales.html', 'tl_sales', 'top_light_sales_invoices'],
+    ['ErpTest', 'Company_ErpTest_Sales.html', 'et_sales', 'erp_test_sales_invoices']]) {
+    console.log('\nP5 — ' + company + ': another user edits the invoice I have open\n');
+    const srv = pageServer(company, page);
+    const calls = [];
+    const listAction = company === 'ErpTest' ? 'get_et_sales_headers' : 'get_sales_headers';
+    const sb = bootPage({
+      page: file, isSuperAdmin: true, containers: ['tl-content'],
+      scriptlets: { CURRENT_ACTION: "'" + page + "'" },
+      call: (a) => {
+        calls.push(a);
+        if (a === 'get_page_versions') return srv.reply();
+        return { status: 'success', headers: [{ invoice_unique_id: 'INV-1' }, { invoice_unique_id: 'INV-2' }], lines: [], options: {} };
+      }
+    });
+    const count = a => calls.filter(x => x === a).length;
+    /* Writes whose stamp entry carries record keys, as noteRecordChange_ stores them. */
+    const baseReply = srv.reply;
+    const keyed = {};
+    const writeKeyed = (t, who, keys) => {
+      srv.write(t, who);
+      const st = JSON.parse(baseReply().versions[t]);
+      st.w[0].k = keys;
+      st.w.slice(1).forEach(w => { const prev = (keyed[t] || { w: [] }).w.find(x => x.t === w.t); if (prev) w.k = prev.k; });
+      keyed[t] = st;
+    };
+    srv.reply = () => {
+      const r = baseReply();
+      Object.keys(keyed).forEach(t => { r.versions[t] = JSON.stringify(keyed[t]); r.meta[t] = JSON.parse(r.versions[t]); });
+      return r;
+    };
+    await drive(sb);
+    sb.openForm('INV-1');
+    await drive(sb);
+    check(sb.UIC.Live.currentView() === 'form', 'editing INV-1: the form view is on screen');
+    sb.document.activeElement = { tagName: 'INPUT' };
+
+    writeKeyed(table, 'ahmed', ['INV-2']);
+    await drive(sb);
+    const chipA = sb.document.getElementById('uic-live-fresh');
+    check(!chipA, 'another user saves INV-2 (a different invoice): my form is not interrupted', chipA && chipA.innerHTML);
+    check(sb.UIC.Live.staleTables().indexOf(table) !== -1, '  and the list is marked stale');
+
+    writeKeyed(table, 'ahmed', ['INV-1']);
+    await drive(sb);
+    const chipB = sb.document.getElementById('uic-live-fresh');
+    check(chipB && /قام <b>ahmed<\/b> بتعديل هذا السجل أثناء فتحه — أعد التحميل قبل الحفظ/.test(chipB.innerHTML),
+      'another user saves INV-1 (mine): the conflict notice shows, even while I am typing', chipB && chipB.innerHTML);
+
+    sb.document.activeElement = null;
+    sb.UIC.Live.dismissFresh();
+    const n0 = count(listAction);
+    sb.showList();
+    await drive(sb);
+    check(count(listAction) === n0 + 1 && sb.UIC.Live.staleTables().indexOf(table) === -1, 'closing the form: the list refreshes once, stale cleared');
   }
 }
 

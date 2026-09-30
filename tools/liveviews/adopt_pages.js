@@ -41,7 +41,7 @@ const MANUAL = {
      "  function renderList(loadAll, quiet) {\n    __loadedAll = arguments.length ? !!loadAll : __loadedAll;\n    " + TAG +
      "\n    UIC.Live.setView('list', { refresh: function () { renderList(__loadedAll, true); }, loading: true });\n"],
     ["    UIC.readSkeleton('tl-content', { message: ['جاري استرجاع خيارات العملاء والأصناف...'] });\n    ensureOptions()\n",
-     "    " + TAG + "\n    if (UIC.Live.setView('form', { refresh: function () { openForm(__editingUid); }, loading: true })) __optionsPromise = null;\n" +
+     "    " + TAG + "\n    if (UIC.Live.setView('form', { refresh: function () { openForm(__editingUid); }, loading: true, key: __editingUid, table: 'top_light_sales_invoices' })) __optionsPromise = null;\n" +
      "    UIC.readSkeleton('tl-content', { message: ['جاري استرجاع خيارات العملاء والأصناف...'] });\n    ensureOptions()\n"]
   ],
   'Company_TopLight_Purchasing.html': [
@@ -49,7 +49,7 @@ const MANUAL = {
      "  function renderList(quiet) {\n    " + TAG + "\n    UIC.Live.setView('list', { refresh: function () { renderList(true); }, loading: true });\n" +
      "    if (!quiet) UIC.readSkeleton('tl-content', { message: [\n      'جاري تحميل عمليات الشراء...',"],
     ["    UIC.readSkeleton('tl-content', { message: ['جاري استرجاع الموردين والأصناف...'] });\n    ensureOptions()\n",
-     "    " + TAG + "\n    if (UIC.Live.setView('form', { refresh: function () { openForm(__editingUid); }, loading: true })) __optionsPromise = null;\n" +
+     "    " + TAG + "\n    if (UIC.Live.setView('form', { refresh: function () { openForm(__editingUid); }, loading: true, key: __editingUid, table: 'top_light_purchasing_costing' })) __optionsPromise = null;\n" +
      "    UIC.readSkeleton('tl-content', { message: ['جاري استرجاع الموردين والأصناف...'] });\n    ensureOptions()\n"]
   ],
   'Company_TopLight_Sales_Offer.html': [
@@ -58,14 +58,14 @@ const MANUAL = {
      "    if (!quiet) UIC.readSkeleton('tl-content', { message: [\n      'جاري تحميل عروض الأسعار...',"],
     ["      if (!record) { UIC.toast('السجل غير موجود — تم تحديث القائمة', 'error'); showList(); return; }\n    }\n    renderForm(record);\n  }",
      "      if (!record) { UIC.toast('السجل غير موجود — تم تحديث القائمة', 'error'); showList(); return; }\n    }\n    " + TAG +
-     "\n    UIC.Live.setView('form', { refresh: function () { openForm(__editingUid); }, loading: true });\n    renderForm(record);\n  }"]
+     "\n    UIC.Live.setView('form', { refresh: function () { openForm(__editingUid); }, loading: true, key: __editingUid, table: 'top_light_sales_offer' });\n    renderForm(record);\n  }"]
   ],
   'Company_ErpTest_Manufacture.html': [
     ["  function renderList(quiet) {\n    if (!quiet) UIC.readSkeleton('tl-content', { message: [\n      'جاري تحميل أوامر التصنيع...',",
      "  function renderList(quiet) {\n    " + TAG + "\n    UIC.Live.setView('list', { refresh: function () { renderList(true); }, loading: true });\n" +
      "    if (!quiet) UIC.readSkeleton('tl-content', { message: [\n      'جاري تحميل أوامر التصنيع...',"],
     ["    UIC.readSkeleton('tl-content', { message: ['جاري استرجاع المنتجات والأرصدة...'] });\n    ensureOptions()\n",
-     "    " + TAG + "\n    if (UIC.Live.setView('form', { refresh: function () { openForm(__editingUid); }, loading: true })) __optionsPromise = null;\n" +
+     "    " + TAG + "\n    if (UIC.Live.setView('form', { refresh: function () { openForm(__editingUid); }, loading: true, key: __editingUid, table: 'erp_test_manufacture_orders' })) __optionsPromise = null;\n" +
      "    UIC.readSkeleton('tl-content', { message: ['جاري استرجاع المنتجات والأرصدة...'] });\n    ensureOptions()\n"]
   ],
   'Company_ValleyFoods_Purchasing.html': [

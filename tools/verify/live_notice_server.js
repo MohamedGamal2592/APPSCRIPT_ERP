@@ -159,5 +159,51 @@ check(p3.versions.top_light_categories !== p1.versions.top_light_categories && !
     file + ': get_page_versions(' + page + ') returns views and labels', err || (r && Object.keys(r)));
 });
 
+/* ── 7. Phase 5: record keys ── */
+H.eval("_liveReqMeta_ = { rid: 'rid-keys-00000000001', who: 'k@x', name: 'K' };");
+['A', 'B', 'A', 'C', 'D', 'E', 'F', 'G'].forEach(k => H.call('noteRecordChange_', 'db5', 'inv', k));
+st = stampOf('db5', 'inv');
+check(st.w.length === 1 && JSON.stringify(st.w[0].k) === JSON.stringify(['A', 'B', 'C', 'D', 'E', '…']),
+  'noteRecordChange_ adds keys to the request\'s own entry: five, then "…"', st.w[0].k);
+H.call('noteTableChange_', 'db5', 'inv');
+check(JSON.stringify(stampOf('db5', 'inv').w[0].k) === JSON.stringify(['A', 'B', 'C', 'D', 'E', '…']), 'the same request stamping the table again keeps its keys');
+H.eval('_liveReqMeta_ = null;');
+H.call('noteRecordChange_', 'db5', 'jobs', 'J1');
+st = stampOf('db5', 'jobs');
+check(st.w[0].u === 'system' && st.w[0].k[0] === 'J1', 'a background write records its key under u:"system"', st.w[0]);
+const pvk = (function () {
+  H.call('noteRecordChange_', 'tl-db', 'top_light_sales_invoices', 'INV-9');
+  return TL.dispatch_({ module_action: 'get_page_versions', data: { page: 'tl_sales' } }, SU, 'tl-db');
+})();
+check(pvk.meta.top_light_sales_invoices.w[0].k && pvk.meta.top_light_sales_invoices.w[0].k[0] === 'INV-9', 'get_page_versions meta carries the record keys');
+
+/* A real Top Light write (workbook stub): the write layer records the key. */
+{
+  const wbs = require('./vf_workbook_stub');
+  const wb = wbs.createWorkbookStub();
+  const H2 = gasstub.createHarness({ workbook: wb, sources: order });
+  H2.override('logHistory_', function () {});
+  H2.override('getCompanySpreadsheetId_', function () { return 'tl-db'; });
+  wb.createSpreadsheet('tl-db', []);
+  wb.openById('tl-db').addSheet('top_light_customer_vendor').__setRows([['id', 'name', 'customer_direction', 'type', 'country', 'region',
+    'registration_number', 'tax_id', 'name_en', 'telephone', 'address', 'created_at', 'updated_at', 'deleted_at', 'deleted_by', 'version']]);
+  const TL2 = H2.eval('TopLight');
+  H2.eval("_liveReqMeta_ = { rid: 'rid-add-party-000001', who: 'ahmed@x', name: 'أحمد' };");
+  TL2.dispatch_({ module_action: 'add_party', data: { name: 'عميل', customer_direction: 'customer' } }, SU, 'tl-db');
+  H2.eval("_liveReqMeta_ = { rid: 'rid-edit-party-00001', who: 'sara@x', name: 'سارة' };");
+  TL2.dispatch_({ module_action: 'edit_party', data: { id: 1, name: 'عميل 2', customer_direction: 'customer' } }, SU, 'tl-db');
+  const s2 = JSON.parse(H2.rawGet('tv_tl-db_top_light_customer_vendor'));
+  check(s2.w.length === 2 && s2.w[0].r === 'rid-edit-party-00001' && s2.w[0].k[0] === '1' && s2.w[1].k[0] === '1',
+    'Top Light add_party then edit_party: each write\'s entry names record 1 (tlDbCreate_/tlDbPatch_)', s2);
+}
+
+/* The Testing System's write layer is generated from Top Light's: same calls. */
+{
+  const et = fs.readFileSync(path.join(ROOT, 'Company_ErpTest_Actions.js'), 'utf8');
+  const tl = fs.readFileSync(path.join(ROOT, 'Company_TopLight_Actions.js'), 'utf8');
+  const n = src => (src.match(/noteRecordChange_\(/g) || []).length;
+  check(n(tl) === 3 && n(et) === 3, 'tlDbCreate_, tlDbPatch_ (soft delete) and tlDbSoftDeleteWhere_ record keys in Top Light and the Testing System', { tl: n(tl), et: n(et) });
+}
+
 console.log(failed ? '\nlive_notice_server: FAIL (' + failed + ')' : '\nlive_notice_server: OK');
 process.exit(failed ? 1 : 0);

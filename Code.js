@@ -898,6 +898,41 @@ function noteTableChange_(scopeId, sheetName) {
 }
 
 /**
+ * [live-notice D5] Add a record key to the current request's entry in a
+ * table's stamp: up to five keys, then '…'. A page with that record open in a
+ * form can then tell "someone changed THIS record" from "someone changed
+ * another one". Never throws.
+ */
+function noteRecordChange_(scopeId, sheetName, key) {
+  if (!scopeId || !sheetName || key === undefined || key === null || String(key).trim() === '') return;
+  try {
+    var cache = CacheService.getScriptCache();
+    var ck = tableVersionKey_(scopeId, sheetName);
+    var rid = _liveReqMeta_ ? String(_liveReqMeta_.rid || '') : '';
+    var mineOf = function (st) {
+      for (var i = 0; i < st.w.length; i++) if (String(st.w[i].r || '') === rid) return st.w[i];
+      return null;
+    };
+    var st = parseTableStamp_(cache.get(ck));
+    var entry = mineOf(st);
+    if (!entry) {
+      noteTableChange_(scopeId, sheetName);
+      st = parseTableStamp_(cache.get(ck));
+      entry = mineOf(st);
+    }
+    if (!entry) return;
+    var keys = Array.isArray(entry.k) ? entry.k : [];
+    var s = String(key).trim();
+    if (keys.indexOf(s) === -1) {
+      if (keys.length < LIVE_STAMP_WRITERS_) keys.push(s);
+      else if (keys[LIVE_STAMP_WRITERS_] !== '…') keys[LIVE_STAMP_WRITERS_] = '…';
+    }
+    entry.k = keys;
+    cache.put(ck, JSON.stringify({ t: st.t, w: st.w }), TABLE_VERSION_TTL_);
+  } catch (e) { /* a stamp is a convenience, never a requirement */ }
+}
+
+/**
  * [live-notice D2] The body every company's get_page_versions returns.
  *
  * `versions` keeps its old shape (sheet -> raw stamp), so an old client keeps

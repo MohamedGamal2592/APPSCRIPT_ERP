@@ -8249,6 +8249,9 @@ UIC.Live = (function () {
   var GENERIC_TEXT = 'هناك تغييرات جديدة · اضغط للتحديث';
   function noticeHtml() {
     var p = pendingNotice;
+    if (p && p.conflict) {
+      return 'قام <b>' + esc(writerName(p.conflict) || 'مستخدم آخر') + '</b> بتعديل هذا السجل أثناء فتحه — أعد التحميل قبل الحفظ';
+    }
     if (!p || p.generic) return esc(GENERIC_TEXT);
     var names = Object.keys(p.tables);
     if (!names.length) return esc(GENERIC_TEXT);
@@ -8395,6 +8398,31 @@ UIC.Live = (function () {
     return out;
   }
 
+  /**
+   * [live-notice D5] With a record open in the form view (setView('form',
+   * {key, table})): which moved tables were changed by others ON THAT RECORD
+   * (conflict), and which only on other records (others — not interrupting).
+   * A write without keys is unknown, so it keeps the ordinary rule.
+   */
+  function recordCheck(tables, writes) {
+    var out = { conflict: null, others: [] };
+    var fv = viewOpts.form;
+    if (!viewAdopted || currentView !== 'form' || !fv || !fv.key) return out;
+    tables.forEach(function (t) {
+      var ws = writes[t] || [];
+      if (!ws.length) return;
+      var hit = null, keyed = true;
+      ws.forEach(function (w) {
+        var k = Array.isArray(w.k) ? w.k : [];
+        if (!k.length || k.indexOf('…') !== -1) keyed = false;
+        if (k.indexOf(fv.key) !== -1 && t === fv.table && !hit) hit = w;
+      });
+      if (hit) out.conflict = hit;
+      else if (keyed) out.others.push(t);
+    });
+    return out;
+  }
+
   /** Drop client-cached replies that depend on these tables. */
   function bustTables(tables, split) {
     void tables; void split;
@@ -8499,10 +8527,21 @@ UIC.Live = (function () {
             if (split.meta) {
               var vis = visibleTables();
               var inView = vis ? moved.filter(function (t) { return vis.indexOf(t) !== -1; }) : moved.slice();
+              /* [live-notice D5] A form with a record open: someone else
+                 changing THAT record is a conflict (shown even while typing);
+                 changes that name only other records do not interrupt it. */
+              var rec = recordCheck(inView, split.writes);
+              if (rec.conflict) {
+                pendingNotice = { tables: {}, generic: false, now: Number(resp && resp.now) || 0, conflict: rec.conflict };
+                noticeHidden = false;
+                freshRefresh = viewRefresh[currentView] || freshRefresh;
+                showFreshChip();
+              }
+              inView = inView.filter(function (t) { return rec.others.indexOf(t) === -1; });
               var offView = moved.filter(function (t) { return inView.indexOf(t) === -1; });
               offView.forEach(function (t) { staleTables[t] = true; });
               try { bustTables(moved.concat(split.silent), split); } catch (e) {}
-              if (!inView.length) { schedule(interval); return; }
+              if (!inView.length || rec.conflict) { schedule(interval); return; }
               mergeNotice(inView, split.writes, false, Number(resp && resp.now) || 0);
               try { o.onChange(inView); } catch (e) {}
               schedule(interval);

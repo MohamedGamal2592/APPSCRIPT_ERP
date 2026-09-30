@@ -203,7 +203,7 @@
       if (!record) { UIC.toast('السجل غير موجود — تم تحديث القائمة', 'error'); showList(); return; }
     }
     /* [live-notice] the view on screen */
-    if (UIC.Live.setView('form', { refresh: function () { openForm(__editingUid); }, loading: true })) __optionsPromise = null;
+    if (UIC.Live.setView('form', { refresh: function () { openForm(__editingUid); }, loading: true, key: __editingUid, table: 'top_light_sales_invoices' })) __optionsPromise = null;
     UIC.readSkeleton('tl-content', { message: ['جاري استرجاع خيارات العملاء والأصناف...'] });
     ensureOptions()
       .then(function () { renderForm(record); })

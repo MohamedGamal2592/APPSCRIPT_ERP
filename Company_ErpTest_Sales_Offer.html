@@ -149,7 +149,7 @@
       if (!record) { UIC.toast('السجل غير موجود — تم تحديث القائمة', 'error'); showList(); return; }
     }
     /* [live-notice] the view on screen */
-    UIC.Live.setView('form', { refresh: function () { openForm(__editingUid); }, loading: true });
+    UIC.Live.setView('form', { refresh: function () { openForm(__editingUid); }, loading: true, key: __editingUid, table: 'erp_test_sales_offer' });
     renderForm(record);
   }
 

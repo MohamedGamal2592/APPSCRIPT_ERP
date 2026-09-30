@@ -399,6 +399,7 @@ const TopLight = (function () {
       if (idIdx !== -1 && String(row[idIdx]).trim() === '') row[idIdx] = getNextIdUnderLock_(dbId, table);
       tlDbDeriveRow_(dbId, table, row, headers, {});
       const rowNumber = tlDbAppendRow_(sheet, row);
+      noteRecordChange_(dbId, table, row[keyIdx]);   // [live-notice D5]
       const record = tlDbRowRecord_(headers, row);
       return { status: 'success', rowNumber: rowNumber, record: record, assignedId: row[keyIdx] };
     });
@@ -475,6 +476,7 @@ const TopLight = (function () {
     sheet.getRange(located.rowNumber, 1, 1, row.length).setValues([row]);
     noteMutation_(sheet);
     noteTableChange_(dbId, table);
+    noteRecordChange_(dbId, table, keyValue);   // [live-notice D5]
     const record = tlDbRowRecord_(headers, row);
     return { record: record, oldRecord: oldRecord, rowNumber: located.rowNumber, version: versionIdx !== -1 ? record[String(headers[versionIdx]).trim()] : currentVersion };
   }
@@ -513,6 +515,7 @@ const TopLight = (function () {
       count++;
     }
     if (count) noteTableChange_(dbId, table);
+    if (count) noteRecordChange_(dbId, table, wanted);   // [live-notice D5] the parent key
     return count;
   }
 
