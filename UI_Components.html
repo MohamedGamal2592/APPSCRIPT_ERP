@@ -8023,16 +8023,41 @@ UIC.Live = (function () {
        so every tab reports the same truth while exactly one tab acts on it. */
     if (!claimLead()) { renderChip(); scheduleRetry(); return; }
 
-    var entry = queue[0];
-    var send = callFor(entry);
-    /* An entry from a build that did not stamp target_system cannot be rebuilt
-       and cannot be sent from this session. It is NOT dropped: the chip goes on
-       saying it is unsaved, which is what it did before, and «تجاهل» is still
-       the only thing that removes it. (Rotating it past the live entries would
-       cost wire bytes this page does not have — headroom 601 B — so a legacy
-       head still waits for the next drain event like it always has. Once any
-       save in this session stamps queue._call, callFor drains it normally.) */
-    if (!send) { renderChip(); return; }
+    /* [§P6] Find the first entry this session can actually send.
+     *
+     * An entry from a build that did not stamp target_system cannot be rebuilt
+     * here. It is still never dropped — but it used to sit at the HEAD forever,
+     * and `return` meant no entry behind it could ever drain either: one
+     * unsendable write froze the queue and the chip until someone pressed
+     * «تجاهل». It is now rotated to the back so the live entries get their
+     * turn, and a pass that finds nothing sendable simply waits for the next
+     * drain event (an `online` event, the next save, the next page load) — the
+     * same wait as before, minus the blockage. Nothing is rescheduled here on
+     * purpose: a timer that re-runs a pass with nothing to send is a loop. */
+    var entry = null, send = null, pass = queue.length;
+    while (pass-- > 0 && queue.length) {
+      var head = queue[0];
+      /* Past ENTRY_MAX_AGE it is not a pending retry any more, and calling it
+         one is how the chip loses its meaning. Retired, named, acknowledged. */
+      if (Date.now() - (Number(head.at) || 0) > ENTRY_MAX_AGE) {
+        queue.shift();
+        dead.push({
+          a: head.action,
+          p: head.page || '',
+          c: head.target_system || '',
+          l: head.label || '',
+          m: 'طلب قديم لم يتأكد حفظه — راجع السجل قبل إعادة إدخاله'
+        });
+        persistQueue();
+        persistDead();
+        continue;
+      }
+      var fn = callFor(head);
+      if (fn) { entry = head; send = fn; break; }
+      queue.push(queue.shift());
+      persistQueue();
+    }
+    if (!entry) { renderChip(); return; }
 
     entry.tries = (entry.tries || 0) + 1;
     persistQueue();
