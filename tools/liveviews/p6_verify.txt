@@ -1319,10 +1319,73 @@ Node.js v22.22.2
 
 8 — stock-scan loading, lookup and scanner behavior (stubbed browser/JDBC)
 
-  FAIL  scan page inline script parses and starts in the browser harness
-        missing ) after argument list
+  PASS  scan page inline script parses and starts in the browser harness
+  FAIL  manual barcode, picker and warehouse controls render while the backend requests are still pending
+  PASS  revision table is mounted below the picker and scheduled separately after controls render
+  FAIL  product picker starts collapsed and searches the server after a 250 ms debounce
+  FAIL  focusing the product field opens its in-field results dropdown
+  FAIL  dropdown closes and camera/photo actions are hidden for now
+  PASS  rapid distinct prefixes dispatch two latest-intent calls after bootstrap settles (no extra retry call)
+  PASS  bounded search results support pagination and discard an out-of-order response
+  PASS  a barcode resolves by exact ID even when that product is absent from loaded search results
+  PASS  exact lookup selects the product as a decimal string and retains per_unit prefill
+  PASS  history starts its own request and loading state without waiting for the product lookup
+  FAIL  revision rows use the shared searchable table with the revision columns and date filters
+  PASS  show-all history is fetched only on demand
+  PASS  name search defaults to 30 visible rows plus one server-side has_more probe
+  PASS  name-search pagination binds LIMIT and OFFSET as JDBC integers
+  PASS  server clamps name search to 50 results, binds pagination and deterministically excludes deleted rows
+  PASS  initial unfiltered picker query uses integer pagination bindings
+  PASS  exact lookup returns no deleted or missing product as a definitive empty result
 
-7 check(s) FAILED.
+8b — index-friendly lookup modes, warehouses and pair balance (stubbed JDBC)
+
+  PASS  ID mode uses exact equality with no functions on the lookup column
+  PASS  code mode uses exact equality and returns every duplicate instead of picking one
+  PASS  name mode is prefix-only: the escaped prefix is followed by %, never preceded by it
+  PASS  literal LIKE wildcards in a name prefix are escaped
+  PASS  all lookup modes filter deleted rows and sort deterministically
+  PASS  a code sent as an ID is rejected instead of misinterpreted
+  PASS  an unknown search mode is rejected
+  PASS  IDs beyond float precision survive as decimal strings
+  PASS  warehouse labels come from warehouse_locations with no invented status columns
+  PASS  warehouse labels are bounded with an explicit truncation flag
+  PASS  an explicit zero balance is valid and ready
+  PASS  a negative balance stays negative
+  PASS  a missing pair row is missing, never zero
+  PASS  a NULL quantity is missing, never zero
+  PASS  duplicate pair rows raise an explicit data-integrity error
+  PASS  the balance query matches BOTH predicates with bound parameters
+  PASS  a balance request without both IDs is rejected
+  PASS  product lookup cache TTL is 60s (was 0)
+  PASS  warehouse labels cache separately for 300s
+  PASS  pair balances cache short-lived for 30s
+  PASS  get_stock_scan_warehouses is gated to page 'tc_stock_scan' (read)
+  PASS  get_stock_scan_balance is gated to page 'tc_stock_scan' (read)
+  PASS  audit tables identify the live MySQL relations
+  PASS  addStockScan_ found
+  PASS  the save re-reads the authoritative pair balance fresh, ignoring any cached value
+  PASS  the save never trusts the client available_amount
+  PASS  the save validates the warehouse ID against the database list
+  PASS  the save persists the warehouse ID to the existing stock sheet and returns its location label
+  PASS  the legacy hard-coded warehouse check still guards the tc_stock_revision path
+
+8c — scan-page workflow: modes, warehouses, pair balance, save discipline
+
+  FAIL  an explicit search-mode control offers name, code and ID
+  FAIL  Arabic helper text teaches prefix search instead of substring search
+  PASS  selected product IDs travel as decimal strings, never through Number()
+  PASS  warehouses load from the database with label mapping and a refresh/retry path
+  PASS  only the explicit confirm action can save — selection and lookup never do
+  PASS  the confirmed count is bound to a fixed product/warehouse pair
+  PASS  late balance responses are ignored unless both IDs and the generation still match
+  PASS  changing either selection clears the previous balance before requesting the new pair
+  PASS  missing pair balances block confirmation and trigger a retry
+  PASS  history resolves warehouse labels through one lookup with raw fallback for legacy values
+  PASS  page adapter paints one immutable pending row, blocks duplicate click, and gives an identical new count a new identity
+TypeError: Cannot read properties of undefined (reading 'length')
+    at verifyStockScanLookupBehavior (/home/user/APPSCRIPT_ERP/tools/verify/s24_stock_scan.js:639:29)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
 
 ── TC-SCAN-CATALOG — instant products dropdown: one bootstrap catalog, local filtering, product-level balances
    FAILED
@@ -1631,9 +1694,9 @@ Node.js v22.22.2
 shared layer boots. UIC symbols: 215, FMT: 10, UI: 5
 
 page templates: 149
-  booted with no error : 142
+  booted with no error : 143
   no inline script     : 0
-  THREW                : 7
+  THREW                : 6
 
   known (also fails at Phase 0)  0_ERP_Management.html  — Cannot set properties of null (setting 'innerHTML')
   known (also fails at Phase 0)  Company_TopChemical_MainReview.html  — Cannot set properties of null (setting 'innerHTML')
@@ -1643,10 +1706,8 @@ page templates: 149
               Cannot read properties of null (reading 'value')
   REGRESSION  Company_TopChemical_ProductsLive_DirectTest.html  block 0 (line 65)
               Cannot read properties of null (reading 'addEventListener')
-  REGRESSION  Company_TopChemical_StockScan.html  block 0 (line 69)
-              missing ) after argument list
 
-3 page(s) newly throw while booting.
+2 page(s) newly throw while booting.
 
 ── B1 — transaction_details parser, over the fixture corpus
    OK
@@ -1837,7 +1898,7 @@ page templates: 149
   FAIL  no page exceeds the 340 KB ceiling — the heaviest page today is 505 KB
         Company_ValleyFoods_MfgOrderView 505 KB
         Company_ValleyFoods_QualitySops 496 KB
-        Company_ValleyFoods_Attendance 478 KB
+        Company_ValleyFoods_Attendance 479 KB
         Company_ValleyFoods_MfgOrders 454 KB
         Company_TopChemical_StockScan 442 KB
         0_ERP_Management 438 KB
@@ -1845,8 +1906,8 @@ page templates: 149
         Company_ValleyFoods_Sales 426 KB
         Company_ValleyFoods_QualityGeneral 421 KB
         Company_TopChemical_FinancialRatios 421 KB
-        Company_TopChemical_BoxAnalysis 415 KB
         Company_ValleyFoods_Purchasing 415 KB
+        Company_TopChemical_BoxAnalysis 415 KB
         Company_ValleyFoods_QualityNcr 408 KB
         Company_TopChemical_ProductsLive 406 KB
         Company_ValleyFoods_Parties 405 KB
@@ -1885,15 +1946,15 @@ page templates: 149
         Company_TopChemical_ClientBalanceSheets 382 KB
         Company_TopChemical_ExecutiveFollowUp 381 KB
         Company_ValleyFoods_HR_Settings 381 KB
-        Company_ValleyFoods_WarehouseMovement 380 KB
-        Company_Assessment_AssessmentForm 380 KB
+        Company_ValleyFoods_WarehouseMovement 381 KB
         Company_TopLight_Sales_Offer 380 KB
+        Company_Assessment_AssessmentForm 380 KB
         Company_TopChemical_StockRevision 379 KB
         Company_TopChemical_BudgetCash 379 KB
         Company_TopChemical_ImportFollow 379 KB
         Company_ErpTest_Customers 378 KB
         Company_TopChemical_CustomsOffice 377 KB
-        Company_TopChemical_Employees 376 KB
+        Company_TopChemical_Employees 377 KB
         0_ERPlogin 376 KB
         Company_Assessment_ResultView 375 KB
         Company_TopChemical_Purchasing 375 KB
@@ -1908,8 +1969,8 @@ page templates: 149
         Company_TopChemical_Trust 372 KB
         Company_Assessment_Batches 372 KB
         Company_ErpTest_Financial_Position 372 KB
-        Company_TopLight_Financial_Position 372 KB
         Company_ValleyFoods_MfgRecipes 372 KB
+        Company_TopLight_Financial_Position 372 KB
         Company_ErpTest_Income_Statement 371 KB
         Company_TopChemical_Debts 371 KB
         Company_TopLight_Income_Statement 371 KB
