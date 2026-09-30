@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>أمر تصنيع</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= getCompanyThemeCSS_('37fc50edf1424abd') ?>
+  <style>
+    @media print {
+      .no-print { display: none !important; }
+      body { background: var(--bg-surface, #fff) !important; }
+      .invoice { border: none !important; }
+    }
+    .invoice { max-width: 900px; margin: 0 auto; padding: 24px; background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 8px; }
+    .invoice-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; border-bottom: 2px solid var(--brand-primary); padding-bottom: 16px; }
+    .invoice-title { font-size: 22px; font-weight: 700; color: var(--brand-primary); }
+    .invoice-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px 16px; margin-bottom: 20px; }
+    .meta-item { font-size: 13px; }
+    .meta-item strong { color: var(--text-muted); font-weight: 600; }
+    @media print, (min-width: 600px) {
+      .inv-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 20px; }
+      .inv-table th, .inv-table td { border: 1px solid var(--border-color); padding: 8px 10px; text-align: right; }
+      .inv-table th { background: var(--bg-subtle); font-weight: 600; }
+    }
+    .inv-totals { margin-right: auto; width: min(300px, 100%); font-size: 14px; }
+    .inv-totals .row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border-color); }
+    .inv-totals .row.total { font-weight: 700; font-size: 16px; color: var(--brand-primary); border-bottom: none; }
+  </style>
+</head>
+<body>
+<div id="invoice-root" dir="rtl"></div>
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  /* The iframe URL carries no query string in production; doGet hands the real
+     one over as pageParams. */
+  var PAGE_PARAMS = <?!= pageParams ?>;
+  var moCode = String((PAGE_PARAMS && PAGE_PARAMS.mo_code) || '');
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('37fc50edf1424abd') ?>';
+
+  function backUrl_() {
+    return UIC.baseUrl() + '?action=et_manufacture&sessionToken=' + encodeURIComponent(SESSION_TOKEN);
+  }
+
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '37fc50edf1424abd',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  function load() {
+    UIC.readSkeleton('invoice-root', { message: ['جاري تحميل أمر التصنيع...', 'لحظة، جاري إعداد أمر التصنيع للطباعة...'] });
+    companyCall('get_et_manufacture_print', { mo_code: moCode })
+      .then(function (r) { renderOrder(r.header || {}, r.lines || []); })
+      .catch(function (e) {
+        document.getElementById('invoice-root').innerHTML =
+          '<div class="empty-state"><span>' + FMT.escape(e.message || 'خطأ') + '</span></div>';
+      })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  var COLS = ['الخامة', 'مخطط', 'مستهلك', 'تكلفة الوحدة', 'الإجمالي'];
+  function row_(cells) {
+    return '<tr>' + cells.map(function (c, i) { return '<td data-label="' + FMT.escape(COLS[i]) + '">' + c + '</td>'; }).join('') + '</tr>';
+  }
+  function head_() { return '<thead><tr>' + COLS.map(function (c) { return '<th>' + c + '</th>'; }).join('') + '</tr></thead>'; }
+  function dateOnly(v) { return v ? String(v).slice(0, 10) : '-'; }
+  function qtyOrDash(v) { return v === '' || v == null ? '-' : FMT.number(v); }
+
+  function renderOrder(h, lines) {
+    var rows = lines.map(function (l) {
+      return row_([FMT.escape(l.product_name || '-'), FMT.number(l.planned_qty), qtyOrDash(l.consumed_qty), FMT.number(l.unit_cost), FMT.number(l.total_cost)]);
+    }).join('');
+    document.getElementById('invoice-root').innerHTML =
+      '<div class="no-print" style="max-width:900px;margin:12px auto;display:flex;justify-content:flex-end;gap:8px;">' +
+      '<button class="btn btn-primary" onclick="window.print()">طباعة</button>' +
+      '<button class="btn btn-outline" onclick="UIC.closeOrBack(backUrl_())">إغلاق</button>' +
+      '</div>' +
+      '<div class="invoice">' +
+      '<div class="invoice-head">' +
+      '<img src="' + (COMPANY_LOGO_URL || '') + '" style="height:42px;" alt="">' +
+      '<div class="invoice-title">أمر تصنيع</div>' +
+      '</div>' +
+      '<div class="invoice-meta">' +
+      metaItem('رقم الأمر', h.mo_number) +
+      metaItem('تاريخ الأمر', dateOnly(h.mo_date)) +
+      metaItem('تاريخ الإكمال', dateOnly(h.completion_date)) +
+      metaItem('المنتج التام', h.product_name) +
+      metaItem('الكمية المخططة', qtyOrDash(h.planned_qty)) +
+      metaItem('الكمية المنتجة', qtyOrDash(h.produced_qty)) +
+      metaItem('الاعتماد', h.approval_status) +
+      metaItem('حالة الإنتاج', h.production_status) +
+      metaItem('ملاحظات', h.notes) +
+      '</div>' +
+      '<table class="inv-table">' + head_() + '<tbody>' + rows + '</tbody></table>' +
+      '<div class="inv-totals">' +
+      '<div class="row"><span>تكلفة الخامات</span><span>' + FMT.number(h.materials_cost) + '</span></div>' +
+      '<div class="row"><span>تكاليف إضافية</span><span>' + FMT.number(h.extra_cost) + '</span></div>' +
+      '<div class="row total"><span>إجمالي التكلفة</span><span>' + FMT.number(h.total_cost) + '</span></div>' +
+      '<div class="row"><span>تكلفة الوحدة</span><span>' + FMT.number(h.unit_cost) + '</span></div>' +
+      '</div>' +
+      '</div>';
+  }
+
+  function metaItem(label, value) {
+    return '<div class="meta-item"><strong>' + label + ':</strong> ' + FMT.escape(value == null || value === '' ? '-' : value) + '</div>';
+  }
+
+  load();
+</script>
+</body>
+</html>

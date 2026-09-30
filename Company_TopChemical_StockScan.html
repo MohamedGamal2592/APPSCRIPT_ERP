@@ -1646,6 +1646,11 @@
       if (currentProduct && currentWarehouse) requestBalance(currentProduct.id, currentWarehouse.id, { refresh: true });
     }); }
   });
+  /* [live-notice] the view on screen */
+  if (UIC.Live.setView) UIC.Live.setView('list', { refresh: function () {
+    loadWarehouses(true);
+    if (currentProduct && currentWarehouse) requestBalance(currentProduct.id, currentWarehouse.id, { refresh: true });
+  } });
 
   load();
 </script>

@@ -49,6 +49,18 @@ function etSetupSheets_() {
   ensureTab('erp_test_manufacture_orders', MO_HEADERS, ['unique_id', 'mo_number']);
   ensureTab('erp_test_manufacture_lines', ML_HEADERS, ['unique_id', 'mo_unique_id']);
 
+  // P9.1 — hidden JSON-layer storage tabs (packs, journal, meta).
+  var PACK_HEADERS = ['pack_id', 'seq', 'built_at', 'row_count', 'bytes', 'hash', 'schema_hash', 'parts'];
+  for (var p = 1; p <= 60; p++) PACK_HEADERS.push('part_' + p);
+  [['erp_test__packs', PACK_HEADERS, ['pack_id']],
+   ['erp_test__journal', ['seq', 'ts', 'user', 'table', 'op', 'key', 'request_key', 'data_json'], ['key', 'request_key', 'data_json']],
+   ['erp_test__meta', ['key', 'value'], ['key', 'value']]
+  ].forEach(function (d) {
+    var existed = !!ss.getSheetByName(d[0]);
+    var sh = ensureTab(d[0], d[1], d[2]);
+    if (!existed) { sh.hideSheet(); changes.push('hid ' + d[0]); }
+  });
+
   console.log(JSON.stringify({ changes: changes }, null, 2));
   return changes;
 }

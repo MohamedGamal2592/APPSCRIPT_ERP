@@ -33,6 +33,8 @@
   var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
   var EMP_FILTERS = { title: '', section: '', category: '', status: '' };
 
+  /* [live-notice D6] list replies from the device cache, trusted by the stamps */
+  if (window.UIC && UIC.Live && UIC.Live.viewCache) companyCall = UIC.Live.viewCache(companyCall, { company: '3fe1b5cb67b7223e', page: 'tc_employee_reg', view: 'list', lists: ['get_employees'] });
   function companyCall(moduleAction, data) {
     return API.call('company_action', {
       target_system: '3fe1b5cb67b7223e',
@@ -356,6 +358,8 @@
     page: 'tc_employee_reg',
     onChange: function () { UIC.Live.arrive(function () { fetchEmployees(true); }); }
   });
+  /* [live-notice] the view on screen */
+  if (UIC.Live.setView) UIC.Live.setView('list', { refresh: function () { fetchEmployees(true); } });
 
   load();
 </script>

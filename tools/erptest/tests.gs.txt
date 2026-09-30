@@ -1,0 +1,108 @@
+// Appendix 2 scripted acceptance tests — OWNER RUNS in the Apps Script editor
+// (paste into a scratch file after `clasp push`, run, then delete the file).
+// They WRITE test rows to the Testing System spreadsheet (never Top Light).
+// Each function logs PASS/FAIL per case and a final summary line.
+//
+//   etTestMfg_()    — T-MFG  (P5)
+//   etTestStock_()  — T-STOCK (P7), run after etTestMfg_ in the same session
+//
+// The same cases run locally, before any push, in tools/verify/erptest_mfg_vm.js.
+
+var ET_TEST_DB = '1rdnnP3rMZTnoyyfG5V3X6w62AXatgIisZljkg0izJzE';
+var ET_TEST_SU = { email: Session.getActiveUser().getEmail() || 'owner@test', isSuperAdmin: true, company: '37fc50edf1424abd' };
+var ET_TEST_STATE_KEY = 'ET_TEST_STATE';
+
+function etT_(action, data) { return ErpTest.dispatch_({ module_action: action, data: data || {} }, ET_TEST_SU, ET_TEST_DB); }
+function etOk_(log, cond, msg) { log.push((cond ? 'PASS  ' : 'FAIL  ') + msg); return !!cond; }
+function etThrows_(log, fn, text, msg) {
+  var got = '';
+  try { fn(); } catch (e) { got = String(e && e.message); }
+  return etOk_(log, got.indexOf(text) !== -1, msg + (got.indexOf(text) === -1 ? ' (got: ' + got + ')' : ''));
+}
+function etQty_(pid) {
+  var o = (etT_('get_et_manufacture_options').options.product_options || []).filter(function (x) { return String(x.value) === String(pid); })[0];
+  return o ? Number(o.current_qty) : 0;
+}
+
+function etTestMfg_() {
+  var log = [];
+  var stamp = Utilities.formatDate(new Date(), 'Africa/Cairo', 'HHmmss');
+  // Seed: A, B components; F finished; one purchase giving A = 10 and B = 10.
+  ['A', 'B', 'F'].forEach(function (n) { etT_('add_et_product', { name_ar: 'TEST-' + n + '-' + stamp, unit: 'قطعة' }); });
+  var prods = etT_('get_et_products').products || [];
+  function idOf(n) { return (prods.filter(function (p) { return p.name_ar === 'TEST-' + n + '-' + stamp; })[0] || {}).id; }
+  var A = idOf('A'), B = idOf('B'), F = idOf('F');
+  etOk_(log, A && B && F, 'seed products A=' + A + ' B=' + B + ' F=' + F);
+  var parties = etT_('get_et_parties').parties || etT_('get_et_parties').rows || [];
+  var vendor = parties.length ? parties[0].id : '';
+  var pur = etT_('add_et_purchasing', { header: { code: 'TEST-' + stamp, receipt_date: Utilities.formatDate(new Date(), 'Africa/Cairo', 'yyyy-MM-dd'),
+      type: 'تصنيع', shipping_type: 'محلي', supplier_name: vendor, currency: 'EGP', exchange_rate: 1, value: 150 },
+    lines: [{ product: A, qty: 10, unit_price: 10, other_cost: 0, sales_value: 0 }, { product: B, qty: 10, unit_price: 5, other_cost: 0, sales_value: 0 }] });
+  etOk_(log, pur.status === 'success', 'seed purchase A=10 (uc 10), B=10 (uc 5)');
+  var qA0 = etQty_(A), qB0 = etQty_(B);
+  etOk_(log, qA0 === 10 && qB0 === 10, 'live stock before: A=' + qA0 + ' B=' + qB0);
+
+  var yyyy = new Date().getFullYear();
+  var k1 = Utilities.getUuid().replace(/-/g, '').slice(0, 16);
+  var today = Utilities.formatDate(new Date(), 'Africa/Cairo', 'yyyy-MM-dd');
+  var add1 = etT_('add_et_manufacture', { request_key: k1, header: { mo_date: today, product_id: F, planned_qty: 5, extra_cost: 7 },
+    lines: [{ product_id: A, planned_qty: 4 }, { product_id: B, planned_qty: 2 }] });
+  var o1 = etT_('get_et_manufacture_print', { mo_code: k1 }).header;
+  etOk_(log, add1.status === 'success' && /^MO-\d+-/.test(o1.mo_number) && String(o1.mo_number).slice(-4) === String(yyyy), '1: mo_number ' + o1.mo_number);
+  etOk_(log, o1.approval_status === 'Pending' && o1.production_status === 'Open', '1: Pending/Open');
+  etOk_(log, Math.abs(Number(o1.materials_cost) - 50) < 1e-6, '1: materials_cost = 4·uc(A) + 2·uc(B) = 50 (got ' + o1.materials_cost + ')');
+  etThrows_(log, function () { etT_('add_et_manufacture', { header: { mo_date: today, product_id: F, planned_qty: 1 }, lines: [{ product_id: F, planned_qty: 1 }] }); }, 'لا يمكن استخدام المنتج التام كخامة', '2: finished product as material');
+  etThrows_(log, function () { etT_('add_et_manufacture', { header: { mo_date: today, product_id: F, planned_qty: 1 }, lines: [{ product_id: A, planned_qty: 1 }, { product_id: A, planned_qty: 1 }] }); }, 'الخامة مكررة في نفس الأمر', '3: duplicate material');
+  etThrows_(log, function () { etT_('complete_et_manufacture', { unique_id: k1, produced_qty: 5, completion_date: today }); }, 'يجب اعتماد الأمر قبل الإكمال', '4: complete before approve');
+  etOk_(log, etT_('approve_et_manufacture', { unique_id: k1, version: 0 }).status === 'success', '5: approve');
+  var l1 = etT_('get_et_manufacture_lines', { parent_id: k1 }).lines;
+  etT_('complete_et_manufacture', { unique_id: k1, produced_qty: 5, completion_date: today,
+    lines: l1.map(function (l) { return { unique_id: l.unique_id, consumed_qty: String(l.product_id) === String(A) ? 4 : 2 }; }) });
+  o1 = etT_('get_et_manufacture_print', { mo_code: k1 }).header;
+  etOk_(log, o1.production_status === 'Completed' && Math.abs(Number(o1.unit_cost) - Number(o1.total_cost) / 5) < 1e-6, '5: Completed, unit_cost = total/5');
+  etThrows_(log, function () { etT_('edit_et_manufacture', { header: { unique_id: k1, mo_date: today, product_id: F, planned_qty: 5 }, lines: [{ product_id: A, planned_qty: 1 }] }); }, 'لا يمكن تعديل أمر معتمد أو مغلق', '6: edit completed order');
+  var k2 = Utilities.getUuid().replace(/-/g, '').slice(0, 16);
+  etT_('add_et_manufacture', { request_key: k2, header: { mo_date: today, product_id: F, planned_qty: 1 }, lines: [{ product_id: A, planned_qty: 7 }] });
+  etT_('approve_et_manufacture', { unique_id: k2, version: 0 });
+  etThrows_(log, function () { etT_('complete_et_manufacture', { unique_id: k2, produced_qty: 1, completion_date: today }); }, 'تتجاوز الرصيد المتاح (المتاح: 6)', '7: over-consumption, available 6');
+  etOk_(log, etT_('cancel_et_manufacture', { unique_id: k2 }).status === 'success', '8: cancel');
+  etThrows_(log, function () { etT_('complete_et_manufacture', { unique_id: k2, produced_qty: 1, completion_date: today }); }, 'الأمر مغلق', '8: complete after cancel');
+  var before = (etT_('get_et_manufacture_headers', { loadAll: true }).headers || []).length;
+  var rep = etT_('add_et_manufacture', { request_key: k1, header: { mo_date: today, product_id: F, planned_qty: 5 }, lines: [{ product_id: A, planned_qty: 4 }, { product_id: B, planned_qty: 2 }] });
+  var after = (etT_('get_et_manufacture_headers', { loadAll: true }).headers || []).length;
+  etOk_(log, rep.status === 'success' && after === before, '9: replay same request_key adds no row');
+
+  PropertiesService.getScriptProperties().setProperty(ET_TEST_STATE_KEY, JSON.stringify({ A: A, B: B, F: F, k1: k1, qA0: qA0, qB0: qB0 }));
+  etReport_('T-MFG', log);
+}
+
+function etTestStock_() {
+  var log = [];
+  var st = JSON.parse(PropertiesService.getScriptProperties().getProperty(ET_TEST_STATE_KEY) || '{}');
+  if (!st.F) { console.log('Run etTestMfg_ first.'); return; }
+  etOk_(log, etQty_(st.A) === st.qA0 - 4 && etQty_(st.B) === st.qB0 - 2 && etQty_(st.F) === 5, 'stock A=' + etQty_(st.A) + ' B=' + etQty_(st.B) + ' F=' + etQty_(st.F) + ' (expect 6/8/5)');
+  var o1 = etT_('get_et_manufacture_print', { mo_code: st.k1 }).header;
+  var mv = etT_('get_et_product_movement', { product_id: st.F });
+  var rows = mv.rows || mv.movements || [];
+  etOk_(log, rows.filter(function (r) { return r.type === 'manufacture_in' && Number(r.qty_in) === 5; }).length === 1, 'movement for F shows one manufacture_in of 5');
+  var y = new Date().getFullYear();
+  var isr = etT_('get_et_income_statement', { date_from: y + '-01-01', date_to: y + '-12-31' });
+  var s = isr.summary || (isr.data && isr.data.summary) || {};
+  etOk_(log, Number(s.mfgExtra) >= Number(o1.extra_cost), 'income statement mfgExtra includes the order extra_cost (' + s.mfgExtra + ')');
+  var today = Utilities.formatDate(new Date(), 'Africa/Cairo', 'yyyy-MM-dd');
+  var parties = etT_('get_et_parties').parties || [];
+  var cust = parties.length ? parties[0].id : 1;
+  var err6 = '';
+  try { var r6 = etT_('add_et_sales', { header: { customer_id: cust, invoice_date: today, discount_percent: 0 }, lines: [{ product_id: st.F, product_tax: 0, product_qty: 6, product_price: 1, product_discount: 0 }] }); if (r6.status !== 'success') err6 = r6.message; } catch (e) { err6 = e.message; }
+  etOk_(log, err6 !== '', 'selling F×6 fails with the stock error (' + err6 + ')');
+  var r5 = etT_('add_et_sales', { header: { customer_id: cust, invoice_date: today, discount_percent: 0 }, lines: [{ product_id: st.F, product_tax: 0, product_qty: 5, product_price: 1, product_discount: 0 }] });
+  etOk_(log, r5.status === 'success', 'selling F×5 is allowed');
+  if (r5.status === 'success') etT_('delete_et_sales', { unique_id: r5.unique_id });
+  etReport_('T-STOCK', log);
+}
+
+function etReport_(name, log) {
+  var fails = log.filter(function (l) { return l.indexOf('FAIL') === 0; }).length;
+  log.forEach(function (l) { console.log(l); });
+  console.log(name + ': ' + (fails ? fails + ' FAIL' : 'PASS'));
+}

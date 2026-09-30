@@ -43,6 +43,8 @@
     return CARTON_FORM_;
   }
 
+  /* [live-notice D6] list replies from the device cache, trusted by the stamps */
+  if (window.UIC && UIC.Live && UIC.Live.viewCache) companyCall = UIC.Live.viewCache(companyCall, { company: '3fe1b5cb67b7223e', page: 'tc_carton_sizes', view: 'list', lists: ['get_carton_sizes'] });
   function companyCall(moduleAction, data) {
     return API.call('company_action', {
       target_system: '3fe1b5cb67b7223e',
@@ -417,6 +419,8 @@
     page: 'tc_carton_sizes',
     onChange: function () { UIC.Live.arrive(function () { fetchSizes(true); }); }
   });
+  /* [live-notice] the view on screen */
+  if (UIC.Live.setView) UIC.Live.setView('list', { refresh: function () { fetchSizes(true); } });
 
   /* Phase B2: the shared refresh control for this list only. Re-fetches the
      current view (newest-10 or the full list) and re-renders this table; the

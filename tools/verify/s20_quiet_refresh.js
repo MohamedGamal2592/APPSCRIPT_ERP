@@ -134,7 +134,7 @@ console.log('\n3 — every change watch names a real page and a real function\n'
   const knownPages = {};
   let m;
   ['Company_ValleyFoods_Actions.js', 'Company_TopChemical_Actions.js',
-   'Company_TopLight_Actions.js', 'Company_Assessment_Actions.js']
+   'Company_TopLight_Actions.js', 'Company_Assessment_Actions.js', 'Company_ErpTest_Actions.js']
     .filter(f => fs.existsSync(path.join(ROOT, f)))
     .forEach(function (f) {
       const src = fs.readFileSync(path.join(ROOT, f), 'utf8');

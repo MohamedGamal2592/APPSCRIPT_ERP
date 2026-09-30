@@ -110,6 +110,8 @@
   }
 
   function switchTab(t) {
+    /* [live-notice] the view on screen */
+    if (UIC.Live.setView) UIC.Live.setView('tab:' + t, { refresh: refreshQuiet });
     TAB = t;
     if (t === 'salaries') fetchSalaries();
     else render();
@@ -690,6 +692,8 @@
     page: 'tc_budget_hr',
     onChange: function () { UIC.Live.arrive(refreshQuiet); }
   });
+  /* [live-notice] the view on screen */
+  if (UIC.Live.setView) UIC.Live.setView('tab:' + TAB, { refresh: refreshQuiet });
 
   load();
 </script>

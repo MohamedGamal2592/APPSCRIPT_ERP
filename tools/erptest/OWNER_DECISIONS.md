@@ -31,3 +31,7 @@ These override the fixed plan `Plan_ErpTest_Clone_JSON_Fast_Data.md`. Recorded s
 - P0 check 3 (positional column indices in `top_light_product_purchasing`) is **retired/reformulated**: under OD-A stock is computed by logical-name lookup, not by position. The check now verifies `product`, `qty`, `total_cost` exist by name in `erp_test_product_purchasing` (they do). Recorded actual top_light indices: product=6(G), qty=9(J), total_cost=12(M); the plan's stated 7/10/13 were off by the `movement_code` column.
 - The 2 FORMULA-CONFLICTs on `erp_test_chart_of_accounts` (`كود المستوى`, `اسم الحساب الرئيسي`) are false positives: chart is a **read-only reference table** the code never writes (Top Light reads the same formula columns). `erp_test_chart_of_accounts` is added to the formula-guard exception alongside `erp_test_current_products`.
 - `movement_code` reclassified R→W (the code's write is guarded by column existence; nothing reads it as a source).
+
+## Implementation note for OD-C / OD-D (P3)
+- The cloned code keeps the Top Light row-builders unchanged (OD1 parity). `tax_system`, `العنوان`, `رقم الموبيل` and the tax-classification columns do not exist on the erp_test sales/offer tabs, so the guarded `set()` writes skip them and reads fall back (`tax_system` -> false). Nothing is stored or read from those columns.
+- `name_vendor`: the cash write is guarded by column existence; the cash report already falls back to the party name looked up by id (`custNames[r.name]`). No sheet column is needed.

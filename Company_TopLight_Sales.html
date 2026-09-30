@@ -28,6 +28,8 @@
   var __editingUid = '';
   var __canEdit = false;
 
+  /* [live-notice D6] list replies from the device cache, trusted by the stamps */
+  if (window.UIC && UIC.Live && UIC.Live.viewCache) companyCall = UIC.Live.viewCache(companyCall, { company: '8df5c89a117fe9a5', page: 'tl_sales', view: 'list', lists: ['get_sales_headers'] });
   function companyCall(moduleAction, data) {
     return API.call('company_action', {
       target_system: '8df5c89a117fe9a5',
@@ -67,6 +69,8 @@
 
   function renderList(loadAll, quiet) {
     __loadedAll = arguments.length ? !!loadAll : __loadedAll;
+    /* [live-notice] the view on screen */
+    if (UIC.Live.setView) UIC.Live.setView('list', { refresh: function () { renderList(__loadedAll, true); }, loading: true });
     var generation = ++__listGeneration;
     if (!quiet) UIC.readSkeleton('tl-content', { message: [
       'جاري تحميل فواتير المبيعات...',
@@ -200,6 +204,8 @@
          the Add form. */
       if (!record) { UIC.toast('السجل غير موجود — تم تحديث القائمة', 'error'); showList(); return; }
     }
+    /* [live-notice] the view on screen */
+    if (UIC.Live.setView('form', { refresh: function () { openForm(__editingUid); }, loading: true, key: __editingUid, table: 'top_light_sales_invoices' })) __optionsPromise = null;
     UIC.readSkeleton('tl-content', { message: ['جاري استرجاع خيارات العملاء والأصناف...'] });
     ensureOptions()
       .then(function () { renderForm(record); })

@@ -31,6 +31,14 @@ const ET_CHART_COLS = { key: 'المستوى الخامس', name: 'كود الم
 // ET_FIELD_INVENTORY = field_inventory.json (chart placeholders already substituted).
 const ET_FIELD_INVENTORY = fieldInv;
 
+// ET_FORMULA_COLS: erp_test columns that hold formulas (P0 etFormulaCols). The P10
+// write layer refuses to write them (plan 10.1).
+const ET_FORMULA_COLS = {};
+for (const [tab, info] of Object.entries(headerMap)) {
+  const cols = Object.keys(info.etFormulaCols || {});
+  if (cols.length) ET_FORMULA_COLS[tab] = cols;
+}
+
 const banner = '// GENERATED FILE — do not hand-edit.\n' +
   '// Produced by tools/erptest/gen_schema.js from tools/erptest/header_map.json,\n' +
   '// tools/erptest/header_map_overrides.json and tools/erptest/field_inventory.json.\n' +
@@ -39,7 +47,8 @@ const banner = '// GENERATED FILE — do not hand-edit.\n' +
 const out = banner +
   'var ET_HEADER_MAP = ' + JSON.stringify(ET_HEADER_MAP, null, 2) + ';\n\n' +
   'var ET_CHART_COLS = ' + JSON.stringify(ET_CHART_COLS, null, 2) + ';\n\n' +
-  'var ET_FIELD_INVENTORY = ' + JSON.stringify(ET_FIELD_INVENTORY, null, 2) + ';\n';
+  'var ET_FIELD_INVENTORY = ' + JSON.stringify(ET_FIELD_INVENTORY, null, 2) + ';\n\n' +
+  'var ET_FORMULA_COLS = ' + JSON.stringify(ET_FORMULA_COLS, null, 2) + ';\n';
 
 fs.writeFileSync(ROOT + '/Company_ErpTest_Schema.js', out, 'utf8');
 console.log('wrote Company_ErpTest_Schema.js');

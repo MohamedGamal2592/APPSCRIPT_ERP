@@ -66,6 +66,8 @@
   var DED_CALENDAR_YEAR = __dedNow.getFullYear();
   var DED_CALENDAR_MONTH = __dedNow.getMonth();
 
+  /* [live-notice D6] list replies from the device cache, trusted by the stamps */
+  if (window.UIC && UIC.Live && UIC.Live.viewCache) companyCall = UIC.Live.viewCache(companyCall, { company: '3fe1b5cb67b7223e', page: 'tc_emp_deductions', view: 'list', lists: ['get_emp_deductions'] });
   function companyCall(moduleAction, data) {
     return API.call('company_action', {
       target_system: '3fe1b5cb67b7223e',
@@ -536,6 +538,8 @@
     page: 'tc_emp_deductions',
     onChange: function () { UIC.Live.arrive(function () { fetchDeductions(true); }); }
   });
+  /* [live-notice] the view on screen */
+  if (UIC.Live.setView) UIC.Live.setView('list', { refresh: function () { fetchDeductions(true); } });
 
   load();
 </script>

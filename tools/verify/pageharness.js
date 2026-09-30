@@ -65,6 +65,9 @@ function scriptOf(file) {
 function bootPage(opts) {
   const o = opts || {};
   const sandbox = makeSandbox();
+  /* Globals the page's environment provides before any script runs (a shared
+     localStorage for "the same browser", the signed-in email, the company). */
+  if (o.globals) Object.assign(sandbox, o.globals);
 
   /* Containers the page's draw functions write into. innerHTML is captured, so
      a test can read exactly what was rendered. */
@@ -168,6 +171,17 @@ function bootPage(opts) {
       }).join(', ') + ' }; } catch (e) {}\n';
     pageSrc = pageSrc.slice(0, marker) + line + pageSrc.slice(marker);
   }
+
+  /* DOMContentLoaded listeners are recorded (the stub document drops every
+     listener) so a test can run a page's load-time wiring with fireReady().
+     Nothing fires them unless a test asks. */
+  const readyFns = [];
+  const docAdd = sandbox.document.addEventListener;
+  sandbox.document.addEventListener = function (type, fn) {
+    if (type === 'DOMContentLoaded' && typeof fn === 'function') readyFns.push(fn);
+    return docAdd.apply(this, arguments);
+  };
+  sandbox.fireReady = () => { readyFns.splice(0).forEach(fn => { try { fn({ type: 'DOMContentLoaded' }); } catch (e) {} }); };
 
   vm.runInContext(pageSrc, sandbox, { filename: o.page });
   sandbox.exported = name => {

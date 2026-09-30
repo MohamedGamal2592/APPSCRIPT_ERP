@@ -193,7 +193,12 @@
     function tabBtn(t, label) {
       return '<button class="btn ' + (TAB === t ? 'btn-primary' : 'btn-outline') + '" onclick="switchTab(\'' + t + '\')">' + label + '</button>';
     }
-    function switchTab(t) { TAB = t; render(); }
+    function switchTab(t) {
+      TAB = t;
+      /* [live-notice] the view on screen */
+      if (UIC.Live.setView) UIC.Live.setView('tab:' + TAB, { refresh: function () { fetchAll(true); } });
+      render();
+    }
 
     function addBtn(onClick, label) {
       if (!CAN_WRITE) return '';
@@ -453,6 +458,8 @@
           onChange: function () { UIC.Live.arrive(function () { fetchAll(true); }); }
         });
       });
+    /* [live-notice] the view on screen */
+    if (UIC.Live.setView) UIC.Live.setView('tab:' + TAB, { refresh: function () { fetchAll(true); } });
 
   </script>
 </body>

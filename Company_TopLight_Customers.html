@@ -33,6 +33,8 @@
   var CURRENT_ACTION = '<?!= currentAction ?>';
   var DIRECTION_FILTER = '';
 
+  /* [live-notice D6] list replies from the device cache, trusted by the stamps */
+  if (window.UIC && UIC.Live && UIC.Live.viewCache) companyCall = UIC.Live.viewCache(companyCall, { company: '8df5c89a117fe9a5', page: 'tl_customers', view: 'list', lists: ['get_parties'] });
   function companyCall(moduleAction, data) {
     return API.call('company_action', {
       target_system: '8df5c89a117fe9a5',
@@ -231,6 +233,8 @@
     page: 'tl_customers',
     onChange: function () { UIC.Live.arrive(function () { fetchParties(); }); }
   });
+  /* [live-notice] the view on screen */
+  if (UIC.Live.setView) UIC.Live.setView('list', { refresh: function () { fetchParties(); } });
 
 </script>
 </body>

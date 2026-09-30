@@ -30,6 +30,8 @@
     { field: 'approval_3', label: 'صورة الموافقة 3', accept: '.png,.jpg,.jpeg' }
   ];
 
+  /* [live-notice D6] list replies from the device cache, trusted by the stamps */
+  if (window.UIC && UIC.Live && UIC.Live.viewCache) companyCall = UIC.Live.viewCache(companyCall, { company: '3fe1b5cb67b7223e', page: 'tc_import_follow', view: 'list', lists: ['get_import_follow'] });
   function companyCall(moduleAction, data) {
     return API.call('company_action', {
       target_system: '3fe1b5cb67b7223e',
@@ -425,6 +427,8 @@
     page: 'tc_import_follow',
     onChange: function () { UIC.Live.arrive(function () { fetchFollows(true); }); }
   });
+  /* [live-notice] the view on screen */
+  if (UIC.Live.setView) UIC.Live.setView('list', { refresh: function () { fetchFollows(true); } });
 
 
   load();

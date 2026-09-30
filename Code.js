@@ -160,7 +160,8 @@ function ensureCompaniesRegistered_() {
     ['Top Light', typeof registerTopLight_ === 'function' ? registerTopLight_ : null],
     ['Top Chemical', typeof registerTopChemical_ === 'function' ? registerTopChemical_ : null],
     ['Valley Foods', typeof registerValleyFoods_ === 'function' ? registerValleyFoods_ : null],
-    ['Assessment Center', typeof registerAssessmentCenter_ === 'function' ? registerAssessmentCenter_ : null]
+    ['Assessment Center', typeof registerAssessmentCenter_ === 'function' ? registerAssessmentCenter_ : null],
+    ['Testing System', typeof registerErpTest_ === 'function' ? registerErpTest_ : null]
   ];
   const missing = registrations.filter(function (entry) { return !entry[1]; }).map(function (entry) { return entry[0]; });
   if (missing.length) throw new Error('Company registries are not loaded yet: ' + missing.join(', '));
@@ -174,6 +175,7 @@ function ensureCompaniesRegistered_() {
     registerTopChemical_();
     registerValleyFoods_();
     registerAssessmentCenter_();
+    registerErpTest_();
     _companiesInitialized_ = true;
   } catch (registrationError) {
     COMPANY_REGISTRY = previousRegistry;
@@ -835,13 +837,170 @@ function tableVersionKey_(scopeId, sheetName) {
   return 'tv_' + String(scopeId) + '_' + String(sheetName);
 }
 
-/** Record that a table changed. Never throws — a failed stamp must not fail a save. */
+/**
+ * [live-notice] Who is writing, for the stamp. apiRouter_ sets it for the
+ * request it serves ({rid, who, name}) and clears it when the request ends; a
+ * trigger or other background job has none and stamps as 'system'.
+ */
+var _liveReqMeta_ = null;
+var LIVE_STAMP_WRITERS_ = 5;
+
+/**
+ * A stamp as stored: {t, w:[{t, r, u, n, k}]} — t is the newest write, w the
+ * last five writes newest first. An old bare-number stamp reads as {t, w:[]};
+ * anything unreadable reads as {t:0, w:[]}. `s` marks a stamp seeded by a poll.
+ */
+function parseTableStamp_(value) {
+  if (value === null || value === undefined || value === '') return { t: 0, w: [] };
+  var s = String(value);
+  if (/^\d+$/.test(s)) return { t: Number(s), w: [] };
+  try {
+    var o = JSON.parse(s);
+    if (!o || typeof o !== 'object') return { t: 0, w: [] };
+    var w = Array.isArray(o.w) ? o.w.filter(function (x) { return x && typeof x === 'object'; }) : [];
+    var out = { t: Number(o.t) || 0, w: w };
+    if (o.s) out.s = 1;
+    return out;
+  } catch (e) { return { t: 0, w: [] }; }
+}
+
+/**
+ * Record that a table changed. Never throws — a failed stamp must not fail a save.
+ *
+ * [live-notice D1] The stamp is JSON carrying WHO wrote and WHICH request, so a
+ * page can tell its own save from someone else's. It is a read-modify-write of
+ * one cache entry; the write paths that allocate ids hold the script lock, and
+ * where one does not the worst case is a writer missing from the list, never a
+ * missing change (t always moves). An evicted entry starts a fresh list.
+ */
 function noteTableChange_(scopeId, sheetName) {
   if (!scopeId || !sheetName) return;
   try {
-    CacheService.getScriptCache().put(
-      tableVersionKey_(scopeId, sheetName), String(new Date().getTime()), TABLE_VERSION_TTL_);
+    var cache = CacheService.getScriptCache();
+    var key = tableVersionKey_(scopeId, sheetName);
+    var prev = parseTableStamp_(cache.get(key));
+    /* Strictly increasing, so two writes in one millisecond are still two. */
+    var now = Math.max(new Date().getTime(), (Number(prev.t) || 0) + 1);
+    var meta = _liveReqMeta_;
+    var rid = meta ? String(meta.rid || '') : '';
+    var entry = { t: now, r: rid, u: meta && meta.who ? String(meta.who) : 'system', n: meta && meta.name ? String(meta.name) : '', k: [] };
+    var w = [];
+    prev.w.forEach(function (x) {
+      /* One entry per request: a request that writes the table twice keeps the
+         keys it already recorded (Phase 5) and moves to the front. */
+      if (rid && x.r === rid) { entry.k = Array.isArray(x.k) ? x.k : []; return; }
+      w.push(x);
+    });
+    w.unshift(entry);
+    if (w.length > LIVE_STAMP_WRITERS_) w.length = LIVE_STAMP_WRITERS_;
+    cache.put(key, JSON.stringify({ t: now, w: w }), TABLE_VERSION_TTL_);
   } catch (e) { /* a stamp is a convenience, never a requirement */ }
+}
+
+/**
+ * [live-notice D5] Add a record key to the current request's entry in a
+ * table's stamp: up to five keys, then '…'. A page with that record open in a
+ * form can then tell "someone changed THIS record" from "someone changed
+ * another one". Never throws.
+ */
+function noteRecordChange_(scopeId, sheetName, key) {
+  if (!scopeId || !sheetName || key === undefined || key === null || String(key).trim() === '') return;
+  try {
+    var cache = CacheService.getScriptCache();
+    var ck = tableVersionKey_(scopeId, sheetName);
+    var rid = _liveReqMeta_ ? String(_liveReqMeta_.rid || '') : '';
+    var mineOf = function (st) {
+      for (var i = 0; i < st.w.length; i++) if (String(st.w[i].r || '') === rid) return st.w[i];
+      return null;
+    };
+    var st = parseTableStamp_(cache.get(ck));
+    var entry = mineOf(st);
+    if (!entry) {
+      noteTableChange_(scopeId, sheetName);
+      st = parseTableStamp_(cache.get(ck));
+      entry = mineOf(st);
+    }
+    if (!entry) return;
+    var keys = Array.isArray(entry.k) ? entry.k : [];
+    var s = String(key).trim();
+    if (keys.indexOf(s) === -1) {
+      if (keys.length < LIVE_STAMP_WRITERS_) keys.push(s);
+      else if (keys[LIVE_STAMP_WRITERS_] !== '…') keys[LIVE_STAMP_WRITERS_] = '…';
+    }
+    entry.k = keys;
+    cache.put(ck, JSON.stringify({ t: st.t, w: st.w }), TABLE_VERSION_TTL_);
+  } catch (e) { /* a stamp is a convenience, never a requirement */ }
+}
+
+/**
+ * [live-notice D2] The body every company's get_page_versions returns.
+ *
+ * `versions` keeps its old shape (sheet -> raw stamp), so an old client keeps
+ * working; `meta`, `views` and `labels` are additive. The tables are fixed by
+ * the page's own server-side declaration — the client cannot name others — and
+ * the caller's read access to the page has already been checked.
+ *
+ * A table with NO stamp (never written in the last six hours, or evicted) is
+ * seeded here with a fresh time marked s:1. "Missing" means "unknown", and an
+ * unknown stamp can never confirm a cached view; a seeded one can, because any
+ * later write replaces it with a different time. The client treats a move TO a
+ * seeded stamp as "no information", never as someone else's change. Still one
+ * CacheService.getAll per poll, plus one putAll only when something was missing.
+ */
+function pageVersionsReply_(dbId, page, pageTables, pageViews, tableLabels) {
+  var seen = {};
+  var tables = [];
+  function addTable(t) { if (t && !seen[t]) { seen[t] = true; tables.push(t); } }
+  (pageTables || []).forEach(addTable);
+  var views = null;
+  if (pageViews && typeof pageViews === 'object') {
+    views = {};
+    Object.keys(pageViews).forEach(function (v) {
+      views[v] = (pageViews[v] || []).slice();
+      views[v].forEach(addTable);
+    });
+  }
+  var versions = readTableVersions_(dbId, tables);
+  var nowMs = new Date().getTime();
+  var missing = tables.filter(function (t) { return versions[t] === undefined; });
+  if (dbId && missing.length) {
+    try {
+      var seed = {};
+      missing.forEach(function (t) {
+        var v = JSON.stringify({ t: nowMs, w: [], s: 1 });
+        seed[tableVersionKey_(dbId, t)] = v;
+        versions[t] = v;
+      });
+      CacheService.getScriptCache().putAll(seed, TABLE_VERSION_TTL_);
+    } catch (e) {
+      missing.forEach(function (t) { delete versions[t]; });
+    }
+  }
+  var meta = {};
+  Object.keys(versions).forEach(function (t) {
+    var p = parseTableStamp_(versions[t]);
+    var m = { t: p.t, w: p.w.map(function (x) {
+      var o = { t: Number(x.t) || 0, r: String(x.r || ''), u: String(x.u || ''), n: String(x.n || '') };
+      if (Array.isArray(x.k) && x.k.length) o.k = x.k.slice(0, 6);
+      return o;
+    }) };
+    if (p.s) m.s = 1;
+    meta[t] = m;
+  });
+  var labels = {};
+  tables.forEach(function (t) { if (tableLabels && tableLabels[t]) labels[t] = tableLabels[t]; });
+  return {
+    status: 'success',
+    page: page,
+    tables: tables,
+    versions: versions,
+    meta: meta,
+    views: views,
+    labels: labels,
+    /* The server's own clock, so a client can tell a stalled poll from a
+       quiet system, and can say "منذ دقيقة" without trusting the device clock. */
+    now: String(nowMs)
+  };
 }
 
 /** Stamp from a Sheet object, when that is all the caller has. */
@@ -6473,11 +6632,17 @@ function requestMayWrite_(request) {
 function apiRouter_(request) {
   var perfCtx = perfBeginRequest_(request);
   var result;
+  /* [live-notice] The request id every write already carries; who/name are
+     filled in once the session is authenticated (apiRouterRequest_). */
+  var liveData = request && request.payload && request.payload.data;
+  _liveReqMeta_ = { rid: String((liveData && typeof liveData === 'object' && liveData.__request_id) || ''), who: '', name: '' };
   try {
     result = apiRouterRequest_(request, perfCtx);
   } catch (err) {
     perfFinishRequest_(perfCtx, request, null, err);
     throw err;
+  } finally {
+    _liveReqMeta_ = null;
   }
   perfFinishRequest_(perfCtx, request, result, null);
   return result;
@@ -6539,6 +6704,10 @@ function apiRouterRequest_(request, perfCtx) {
     }
     perfMarkAuth_(perfCtx, authUser);
     authFinishedMs = new Date().getTime();
+    if (_liveReqMeta_ && authUser) {
+      _liveReqMeta_.who = String(authUser.email || '').trim().toLowerCase();
+      _liveReqMeta_.name = String(authUser.name || '').trim();
+    }
 
     // System kill switch — blocks EVERY action for EVERYONE once engaged,
     // with exactly one exception: an authenticated SUPER ADMIN calling

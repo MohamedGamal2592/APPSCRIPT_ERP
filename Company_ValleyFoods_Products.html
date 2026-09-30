@@ -65,6 +65,8 @@
     var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
     var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
 
+    /* [live-notice D6] list replies from the device cache, trusted by the stamps */
+    if (window.UIC && UIC.Live && UIC.Live.viewCache) companyCall = UIC.Live.viewCache(companyCall, { company: '9940659bd83035d7', page: 'vf_products', view: 'list', lists: ['get_valley_products'] });
     function companyCall(moduleAction, data) {
       return API.call('company_action', {
         target_system: '9940659bd83035d7',
@@ -117,6 +119,8 @@
         page: 'vf_products',
         onChange: function () { UIC.Live.arrive(function () { load(true); }); }
       });
+      /* [live-notice] the view on screen */
+      if (UIC.Live.setView) UIC.Live.setView('list', { refresh: function () { load(true); } });
     }
 
     /* quiet: refresh in the background, no blocking overlay. Used after an

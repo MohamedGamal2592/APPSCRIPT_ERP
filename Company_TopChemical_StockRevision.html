@@ -24,6 +24,8 @@
   var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
   var WAREHOUSES = ['1', '2', '3', '4', '5', 'شبرا'];
 
+  /* [live-notice D6] list replies from the device cache, trusted by the stamps */
+  if (window.UIC && UIC.Live && UIC.Live.viewCache) companyCall = UIC.Live.viewCache(companyCall, { company: '3fe1b5cb67b7223e', page: 'tc_stock_revision', view: 'list', lists: ['get_stock_revision'] });
   function companyCall(moduleAction, data) {
     return API.call('company_action', {
       target_system: '3fe1b5cb67b7223e',
@@ -449,6 +451,8 @@
     page: 'tc_stock_revision',
     onChange: function () { UIC.Live.arrive(function () { fetchStock(); }); }
   });
+  /* [live-notice] the view on screen */
+  if (UIC.Live.setView) UIC.Live.setView('list', { refresh: function () { fetchStock(); } });
 
 
   load();

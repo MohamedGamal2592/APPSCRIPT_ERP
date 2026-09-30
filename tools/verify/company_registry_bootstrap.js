@@ -96,6 +96,7 @@ const registered = JSON.parse(vm.runInContext(
 
 assert.deepStrictEqual(registered, [
   { key: '32fafd256ccb7a1c', main: 'ac_dashboard' },
+  { key: '37fc50edf1424abd', main: 'et_dashboard' },
   { key: '3fe1b5cb67b7223e', main: 'tc_dashboard' },
   { key: '8df5c89a117fe9a5', main: 'tl_dashboard' },
   { key: '9940659bd83035d7', main: 'vf_dashboard' }
@@ -105,6 +106,7 @@ assert.strictEqual(vm.runInContext('_companiesInitialized_', context), true);
 const dashboardCompanies = JSON.parse(vm.runInContext(
   'getAllRecords_ = function () { return [' +
     "{company_unique_id:'32fafd256ccb7a1c',company_name_en:'Assessment'}," +
+    "{company_unique_id:'37fc50edf1424abd',company_name_en:'Testing System'}," +
     "{company_unique_id:'3fe1b5cb67b7223e',company_name_en:'Top Chemical'}," +
     "{company_unique_id:'8df5c89a117fe9a5',company_name_en:'Top Light'}," +
     "{company_unique_id:'9940659bd83035d7',company_name_en:'Valley Foods'}" +
@@ -115,6 +117,7 @@ assert.deepStrictEqual(
   dashboardCompanies.map(function (company) { return [company.unique_id, company.is_ready, company.main_page]; }),
   [
     ['32fafd256ccb7a1c', true, 'ac_dashboard'],
+    ['37fc50edf1424abd', true, 'et_dashboard'],
     ['3fe1b5cb67b7223e', true, 'tc_dashboard'],
     ['8df5c89a117fe9a5', true, 'tl_dashboard'],
     ['9940659bd83035d7', true, 'vf_dashboard']

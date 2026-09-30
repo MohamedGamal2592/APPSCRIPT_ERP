@@ -65,6 +65,8 @@
   var REFS = null;
   var SELECTED = {};
 
+  /* [live-notice D6] list replies from the device cache, trusted by the stamps */
+  if (window.UIC && UIC.Live && UIC.Live.viewCache) companyCall = UIC.Live.viewCache(companyCall, { company: '3fe1b5cb67b7223e', page: 'tc_budget_invoices', view: 'list', lists: ['get_legal_cash', 'get_legal_invoices'] });
   function companyCall(moduleAction, data) {
     return API.call('company_action', {
       target_system: '3fe1b5cb67b7223e',
@@ -811,6 +813,8 @@
     page: 'tc_budget_invoices',
     onChange: function () { UIC.Live.arrive(function () { fetchInvoices(true); }); }
   });
+  /* [live-notice] the view on screen */
+  if (UIC.Live.setView) UIC.Live.setView('list', { refresh: function () { fetchInvoices(true); } });
 
   load();
 </script>

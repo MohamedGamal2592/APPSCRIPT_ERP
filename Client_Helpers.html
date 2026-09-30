@@ -322,6 +322,7 @@ API._requestGuard = (function () {
     if (!/^[A-Za-z0-9_-]{16,100}$/.test(String(requestId))) throw {status:'error',message:'Invalid request ID'};
     var flightKey = signature + ':' + requestId;
     data.__request_id = requestId; data.__request_owner = who;
+    try { if (window.UIC && UIC.Live && UIC.Live.markOwnRequest) UIC.Live.markOwnRequest(requestId); } catch (eLive) {}
     if (flights[flightKey]) return flights[flightKey];
     if (!existing && Object.keys(pending).length >= 500) throw {status:'error',message:'يوجد عدد كبير من الطلبات غير المؤكدة؛ راجعها مع المسؤول قبل إضافة طلبات أخرى.'};
     pending[signature] = {id:requestId}; persist(pending);
