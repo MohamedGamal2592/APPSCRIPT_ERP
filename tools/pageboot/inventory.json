@@ -1,0 +1,6747 @@
+{
+ "generated": "node tools/pageboot/inventory.js",
+ "counts": {
+  "SKIP_PUBLIC": 3,
+  "SKIP_SYSTEM": 5,
+  "SKIP_NO_READ": 4,
+  "BOOT": 126,
+  "SKIP_DIRECT": 1,
+  "SKIP_MYSQL": 10,
+  "SKIP_PARAM": 1
+ },
+ "pages": [
+  {
+   "company": "System",
+   "uid": "",
+   "action": "login",
+   "template": "0_ERPlogin",
+   "title": "Login",
+   "nav": true,
+   "public": true,
+   "accessPage": "",
+   "registry": "Code.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "SKIP_PUBLIC",
+   "reason": "public page: no signed-in user to authorize an embedded read"
+  },
+  {
+   "company": "System",
+   "uid": "",
+   "action": "setup",
+   "template": "0_ERPsetup",
+   "title": "Setup Password",
+   "nav": true,
+   "public": true,
+   "accessPage": "",
+   "registry": "Code.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "SKIP_PUBLIC",
+   "reason": "public page: no signed-in user to authorize an embedded read"
+  },
+  {
+   "company": "System",
+   "uid": "",
+   "action": "ERPDashboard",
+   "template": "0_ERPDashboard",
+   "title": "Dashboard",
+   "nav": true,
+   "public": false,
+   "accessPage": "",
+   "registry": "Code.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "get_dashboard_data",
+     "payload": {}
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "SKIP_SYSTEM",
+   "reason": "first reads are router routes: get_dashboard_data"
+  },
+  {
+   "company": "System",
+   "uid": "",
+   "action": "ERP_Management",
+   "template": "0_ERP_Management",
+   "title": "System Admin",
+   "nav": true,
+   "public": false,
+   "accessPage": "",
+   "registry": "Code.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "SKIP_NO_READ",
+   "reason": "no read when the page opens (data loads only after a user action)"
+  },
+  {
+   "company": "System",
+   "uid": "",
+   "action": "user_sessions",
+   "template": "User_Sessions",
+   "title": "جلساتي",
+   "nav": true,
+   "public": false,
+   "accessPage": "",
+   "registry": "Code.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "list_my_sessions",
+     "payload": {}
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "SKIP_SYSTEM",
+   "reason": "first reads are router routes: list_my_sessions"
+  },
+  {
+   "company": "System",
+   "uid": "",
+   "action": "user_views",
+   "template": "User_Views",
+   "title": "العروض المحفوظة",
+   "nav": true,
+   "public": false,
+   "accessPage": "",
+   "registry": "Code.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "list_user_views",
+     "payload": {}
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "SKIP_SYSTEM",
+   "reason": "first reads are router routes: list_user_views"
+  },
+  {
+   "company": "System",
+   "uid": "",
+   "action": "record_history",
+   "template": "Record_History_Panel",
+   "title": "السجل",
+   "nav": true,
+   "public": false,
+   "accessPage": "",
+   "registry": "Code.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "SKIP_NO_READ",
+   "reason": "no read when the page opens (data loads only after a user action)"
+  },
+  {
+   "company": "System",
+   "uid": "",
+   "action": "db_live_viewer",
+   "template": "DbLive_Viewer",
+   "title": "MySQL Database",
+   "nav": true,
+   "public": false,
+   "accessPage": "",
+   "registry": "Code.js",
+   "stubbed": [
+    "getQueryParam"
+   ],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "db_list_tables",
+     "payload": {}
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "SKIP_SYSTEM",
+   "reason": "first reads are router routes: db_list_tables"
+  },
+  {
+   "company": "System",
+   "uid": "",
+   "action": "perf_dashboard",
+   "template": "ERP_Perf_Dashboard",
+   "title": "أداء النظام",
+   "nav": true,
+   "public": false,
+   "accessPage": "",
+   "registry": "Code.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "get_perf_dashboard",
+     "payload": {}
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "SKIP_SYSTEM",
+   "reason": "first reads are router routes: get_perf_dashboard"
+  },
+  {
+   "company": "Assessment",
+   "uid": "32fafd256ccb7a1c",
+   "action": "ac_dashboard",
+   "template": "Company_Assessment_Dashboard",
+   "title": "مركز التقييم — لوحة التحكم",
+   "nav": true,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_Assessment_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "32fafd256ccb7a1c",
+     "action": "get_ac_dashboard",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_ac_dashboard",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "Assessment",
+   "uid": "32fafd256ccb7a1c",
+   "action": "ac_assessments",
+   "template": "Company_Assessment_Assessments",
+   "title": "التقييمات",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_Assessment_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "ac_assessments",
+   "watchPage": "ac_assessments",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "32fafd256ccb7a1c",
+     "action": "get_page_versions",
+     "data": {
+      "page": "ac_assessments"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "32fafd256ccb7a1c",
+     "action": "get_ac_assessments",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "ac_assessments"
+     }
+    },
+    {
+     "action": "get_ac_assessments",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s) + stamps"
+  },
+  {
+   "company": "Assessment",
+   "uid": "32fafd256ccb7a1c",
+   "action": "ac_assessment_form",
+   "template": "Company_Assessment_AssessmentForm",
+   "title": "تقييم",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_Assessment_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "ac_assessments",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "32fafd256ccb7a1c",
+     "action": "get_ac_assessment",
+     "data": {
+      "id": "$param:id"
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_ac_assessment",
+     "data": {
+      "id": "$param:id"
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "Assessment",
+   "uid": "32fafd256ccb7a1c",
+   "action": "ac_batches",
+   "template": "Company_Assessment_Batches",
+   "title": "دفعات التقييم",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_Assessment_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "ac_batches",
+   "watchPage": "ac_batches",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "32fafd256ccb7a1c",
+     "action": "get_page_versions",
+     "data": {
+      "page": "ac_batches"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "32fafd256ccb7a1c",
+     "action": "get_ac_batches",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    },
+    {
+     "route": "company_action",
+     "company": "32fafd256ccb7a1c",
+     "action": "get_page_versions",
+     "data": {
+      "page": "ac_batches"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "32fafd256ccb7a1c",
+     "action": "get_ac_assessments",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "ac_batches"
+     }
+    },
+    {
+     "action": "get_ac_batches",
+     "data": {}
+    },
+    {
+     "action": "get_ac_assessments",
+     "data": {}
+    }
+   ],
+   "reason": "2 first-wave read(s) + stamps"
+  },
+  {
+   "company": "Assessment",
+   "uid": "32fafd256ccb7a1c",
+   "action": "ac_results",
+   "template": "Company_Assessment_Results",
+   "title": "النتائج",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_Assessment_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "32fafd256ccb7a1c",
+     "action": "get_ac_results",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_ac_results",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "Assessment",
+   "uid": "32fafd256ccb7a1c",
+   "action": "ac_result_view",
+   "template": "Company_Assessment_ResultView",
+   "title": "نتيجة مرشح",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_Assessment_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "ac_results",
+   "watchPage": "ac_results",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "32fafd256ccb7a1c",
+     "action": "get_page_versions",
+     "data": {
+      "page": "ac_results"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "32fafd256ccb7a1c",
+     "action": "get_ac_result",
+     "data": {
+      "id": "$param:assignment"
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "ac_results"
+     }
+    },
+    {
+     "action": "get_ac_result",
+     "data": {
+      "id": "$param:assignment"
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s) + stamps"
+  },
+  {
+   "company": "Assessment",
+   "uid": "32fafd256ccb7a1c",
+   "action": "ac_take",
+   "template": "Company_Assessment_Take",
+   "title": "التقييم",
+   "nav": false,
+   "public": true,
+   "accessPage": "",
+   "registry": "Company_Assessment_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_public_action",
+     "payload": {
+      "target_system": "32fafd256ccb7a1c",
+      "module_action": "get_ac_candidate_assessment",
+      "data": {
+       "token": "$param:token"
+      }
+     }
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "SKIP_PUBLIC",
+   "reason": "public page: no signed-in user to authorize an embedded read"
+  },
+  {
+   "company": "ErpTest",
+   "uid": "37fc50edf1424abd",
+   "action": "et_dashboard",
+   "template": "Company_ErpTest_Dashboard",
+   "title": "Testing System — Dashboard",
+   "nav": true,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ErpTest_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": true,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "37fc50edf1424abd",
+     "action": "get_et_dashboard_data",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_et_dashboard_data",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "ErpTest",
+   "uid": "37fc50edf1424abd",
+   "action": "et_kpi",
+   "template": "Company_ErpTest_KPI",
+   "title": "Testing System — المؤشرات",
+   "nav": true,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ErpTest_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": true,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "37fc50edf1424abd",
+     "action": "get_et_kpi_data",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_et_kpi_data",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "ErpTest",
+   "uid": "37fc50edf1424abd",
+   "action": "et_analysis_review",
+   "template": "Company_ErpTest_Dashboard",
+   "title": "مراجعة تحليل المبيعات",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ErpTest_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": true,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "37fc50edf1424abd",
+     "action": "get_et_dashboard_data",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_et_dashboard_data",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "ErpTest",
+   "uid": "37fc50edf1424abd",
+   "action": "et_products",
+   "template": "Company_ErpTest_Products",
+   "title": "Testing System — الاصناف",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ErpTest_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "et_products",
+   "watchPage": "et_products",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "37fc50edf1424abd",
+     "action": "get_page_versions",
+     "data": {
+      "page": "et_products"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "37fc50edf1424abd",
+     "action": "get_et_products",
+     "data": {
+      "skipStock": true
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [
+    "get_et_products"
+   ],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "et_products"
+     }
+    },
+    {
+     "action": "get_et_products",
+     "data": {
+      "skipStock": true
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s) + stamps; PARTIAL — the page then asks for get_et_products, which depends on the first reply"
+  },
+  {
+   "company": "ErpTest",
+   "uid": "37fc50edf1424abd",
+   "action": "et_categories",
+   "template": "Company_ErpTest_Categories",
+   "title": "Testing System — التصنيفات",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ErpTest_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "et_categories",
+   "watchPage": "et_categories",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "37fc50edf1424abd",
+     "action": "get_page_versions",
+     "data": {
+      "page": "et_categories"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "37fc50edf1424abd",
+     "action": "get_et_categories",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "et_categories"
+     }
+    },
+    {
+     "action": "get_et_categories",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s) + stamps"
+  },
+  {
+   "company": "ErpTest",
+   "uid": "37fc50edf1424abd",
+   "action": "et_customers",
+   "template": "Company_ErpTest_Customers",
+   "title": "Testing System — العملاء والموردون",
+   "nav": true,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ErpTest_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "et_customers",
+   "watchPage": "et_customers",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "37fc50edf1424abd",
+     "action": "get_page_versions",
+     "data": {
+      "page": "et_customers"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "37fc50edf1424abd",
+     "action": "get_et_parties",
+     "data": {
+      "direction": "",
+      "skipBalances": true
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [
+    "get_et_parties"
+   ],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "et_customers"
+     }
+    },
+    {
+     "action": "get_et_parties",
+     "data": {
+      "direction": "",
+      "skipBalances": true
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s) + stamps; PARTIAL — the page then asks for get_et_parties, which depends on the first reply"
+  },
+  {
+   "company": "ErpTest",
+   "uid": "37fc50edf1424abd",
+   "action": "et_customers_perf",
+   "template": "Company_ErpTest_Customers_Perf",
+   "title": "قياس سرعة العملاء والموردين",
+   "nav": false,
+   "public": false,
+   "accessPage": "et_customers",
+   "registry": "Company_ErpTest_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "gsr:diagPing",
+     "payload": []
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "SKIP_DIRECT",
+   "reason": "calls google.script.run directly (diagPing), not through API.call"
+  },
+  {
+   "company": "ErpTest",
+   "uid": "37fc50edf1424abd",
+   "action": "et_purchasing",
+   "template": "Company_ErpTest_Purchasing",
+   "title": "Testing System — المشتريات",
+   "nav": true,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ErpTest_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "et_purchasing",
+   "watchPage": "et_purchasing",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "37fc50edf1424abd",
+     "action": "get_page_versions",
+     "data": {
+      "page": "et_purchasing"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "37fc50edf1424abd",
+     "action": "get_et_purchasing_headers",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "et_purchasing"
+     }
+    },
+    {
+     "action": "get_et_purchasing_headers",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s) + stamps"
+  },
+  {
+   "company": "ErpTest",
+   "uid": "37fc50edf1424abd",
+   "action": "et_purchase_print",
+   "template": "Company_ErpTest_Purchase_Print",
+   "title": "أمر شراء",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ErpTest_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "37fc50edf1424abd",
+     "action": "get_et_purchase_print",
+     "data": {
+      "purchase_code": "$param:purchase_code"
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_et_purchase_print",
+     "data": {
+      "purchase_code": "$param:purchase_code"
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "ErpTest",
+   "uid": "37fc50edf1424abd",
+   "action": "et_sales",
+   "template": "Company_ErpTest_Sales",
+   "title": "Testing System — المبيعات",
+   "nav": true,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ErpTest_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "et_sales",
+   "watchPage": "et_sales",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "37fc50edf1424abd",
+     "action": "get_page_versions",
+     "data": {
+      "page": "et_sales"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "37fc50edf1424abd",
+     "action": "get_et_sales_headers",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "et_sales"
+     }
+    },
+    {
+     "action": "get_et_sales_headers",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s) + stamps"
+  },
+  {
+   "company": "ErpTest",
+   "uid": "37fc50edf1424abd",
+   "action": "et_sales_offer",
+   "template": "Company_ErpTest_Sales_Offer",
+   "title": "Testing System — عروض الأسعار",
+   "nav": true,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ErpTest_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "et_sales_offer",
+   "watchPage": "et_sales_offer",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "37fc50edf1424abd",
+     "action": "get_page_versions",
+     "data": {
+      "page": "et_sales_offer"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "37fc50edf1424abd",
+     "action": "get_et_sales_offer_headers",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "et_sales_offer"
+     }
+    },
+    {
+     "action": "get_et_sales_offer_headers",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s) + stamps"
+  },
+  {
+   "company": "ErpTest",
+   "uid": "37fc50edf1424abd",
+   "action": "et_sales_print",
+   "template": "Company_ErpTest_Sales_Print",
+   "title": "فاتورة بيع",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ErpTest_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "37fc50edf1424abd",
+     "action": "get_et_sales_print",
+     "data": {
+      "sales_code": "$param:purchase_code"
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_et_sales_print",
+     "data": {
+      "sales_code": "$param:purchase_code"
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "ErpTest",
+   "uid": "37fc50edf1424abd",
+   "action": "et_sales_costing_print",
+   "template": "Company_ErpTest_Sales_Costing_Print",
+   "title": "تحليل تكلفة الفاتورة",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ErpTest_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "37fc50edf1424abd",
+     "action": "get_et_sales_costing",
+     "data": {
+      "sales_code": "$param:purchase_code"
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_et_sales_costing",
+     "data": {
+      "sales_code": "$param:purchase_code"
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "ErpTest",
+   "uid": "37fc50edf1424abd",
+   "action": "et_sales_release",
+   "template": "Company_ErpTest_Sales_Release",
+   "title": "اذن صرف منتج",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ErpTest_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "37fc50edf1424abd",
+     "action": "get_et_sales_print",
+     "data": {
+      "sales_code": "$param:purchase_code"
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_et_sales_print",
+     "data": {
+      "sales_code": "$param:purchase_code"
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "ErpTest",
+   "uid": "37fc50edf1424abd",
+   "action": "et_sales_returns",
+   "template": "Company_ErpTest_Sales_Returns",
+   "title": "مرتجعات المبيعات",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ErpTest_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "37fc50edf1424abd",
+     "action": "get_et_sales_returns",
+     "data": {
+      "invoice_id": "$param:purchase_code"
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_et_sales_returns",
+     "data": {
+      "invoice_id": "$param:purchase_code"
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "ErpTest",
+   "uid": "37fc50edf1424abd",
+   "action": "et_sales_offer_print",
+   "template": "Company_ErpTest_Sales_Offer_Print",
+   "title": "عرض سعر",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ErpTest_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "37fc50edf1424abd",
+     "action": "get_et_sales_offer_print",
+     "data": {
+      "offer_code": "$param:purchase_code"
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_et_sales_offer_print",
+     "data": {
+      "offer_code": "$param:purchase_code"
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "ErpTest",
+   "uid": "37fc50edf1424abd",
+   "action": "et_sales_analysis",
+   "template": "Company_ErpTest_Sales_Analysis",
+   "title": "Testing System — تحليل المبيعات",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ErpTest_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "37fc50edf1424abd",
+     "action": "get_et_sales_analysis",
+     "data": {
+      "date_from": "",
+      "date_to": "",
+      "customer_id": "",
+      "product_id": ""
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_et_sales_analysis",
+     "data": {
+      "date_from": "",
+      "date_to": "",
+      "customer_id": "",
+      "product_id": ""
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "ErpTest",
+   "uid": "37fc50edf1424abd",
+   "action": "et_sales_costing_analysis",
+   "template": "Company_ErpTest_Sales_Costing_Analysis",
+   "title": "تحليل تكلفة المبيعات الاجمالية",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ErpTest_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "37fc50edf1424abd",
+     "action": "get_et_sales_costing_analysis",
+     "data": {
+      "date_from": "",
+      "date_to": ""
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_et_sales_costing_analysis",
+     "data": {
+      "date_from": "",
+      "date_to": ""
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "ErpTest",
+   "uid": "37fc50edf1424abd",
+   "action": "et_income_statement",
+   "template": "Company_ErpTest_Income_Statement",
+   "title": "قائمة الدخل",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ErpTest_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "37fc50edf1424abd",
+     "action": "get_et_income_statement",
+     "data": {
+      "date_from": "",
+      "date_to": ""
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_et_income_statement",
+     "data": {
+      "date_from": "",
+      "date_to": ""
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "ErpTest",
+   "uid": "37fc50edf1424abd",
+   "action": "et_financial_position",
+   "template": "Company_ErpTest_Financial_Position",
+   "title": "قائمة المركز المالي",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ErpTest_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "37fc50edf1424abd",
+     "action": "get_et_financial_position",
+     "data": {
+      "date_from": "",
+      "date_to": "",
+      "recalc_running": false
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_et_financial_position",
+     "data": {
+      "date_from": "",
+      "date_to": "",
+      "recalc_running": false
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "ErpTest",
+   "uid": "37fc50edf1424abd",
+   "action": "et_cash",
+   "template": "Company_ErpTest_Cash",
+   "title": "Testing System — حركة النقدية",
+   "nav": true,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ErpTest_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "et_cash",
+   "watchPage": "et_cash",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "37fc50edf1424abd",
+     "action": "get_page_versions",
+     "data": {
+      "page": "et_cash"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "37fc50edf1424abd",
+     "action": "get_et_cash_headers",
+     "data": {
+      "loadAll": true
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_et_cash_headers",
+     "data": {
+      "loadAll": true
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "ErpTest",
+   "uid": "37fc50edf1424abd",
+   "action": "et_cash_report",
+   "template": "Company_ErpTest_Cash_Report",
+   "title": "Testing System — تقرير النقدية",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ErpTest_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "37fc50edf1424abd",
+     "action": "get_et_cash_report",
+     "data": {
+      "date_from": "",
+      "date_to": "",
+      "box": "",
+      "type": ""
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_et_cash_report",
+     "data": {
+      "date_from": "",
+      "date_to": "",
+      "box": "",
+      "type": ""
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "ErpTest",
+   "uid": "37fc50edf1424abd",
+   "action": "et_customer_statement",
+   "template": "Company_ErpTest_Customer_Statement",
+   "title": "كشف حساب عميل",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ErpTest_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "37fc50edf1424abd",
+     "action": "get_et_customer_statement",
+     "data": {
+      "customer_id": "$param:purchase_code",
+      "date_from": "",
+      "date_to": ""
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_et_customer_statement",
+     "data": {
+      "customer_id": "$param:purchase_code",
+      "date_from": "",
+      "date_to": ""
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "ErpTest",
+   "uid": "37fc50edf1424abd",
+   "action": "et_purchase_needs",
+   "template": "Company_ErpTest_Purchase_Needs",
+   "title": "الاصناف المطلوب شرائها",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ErpTest_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "37fc50edf1424abd",
+     "action": "get_et_purchase_needs",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_et_purchase_needs",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "ErpTest",
+   "uid": "37fc50edf1424abd",
+   "action": "et_product_movement",
+   "template": "Company_ErpTest_Product_Movement",
+   "title": "حركة المنتج",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ErpTest_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "37fc50edf1424abd",
+     "action": "get_et_product_movement",
+     "data": {
+      "product_id": "$param:purchase_code",
+      "date_from": "",
+      "date_to": ""
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_et_product_movement",
+     "data": {
+      "product_id": "$param:purchase_code",
+      "date_from": "",
+      "date_to": ""
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "ErpTest",
+   "uid": "37fc50edf1424abd",
+   "action": "et_manufacture",
+   "template": "Company_ErpTest_Manufacture",
+   "title": "Testing System — التصنيع",
+   "nav": true,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ErpTest_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "et_manufacture",
+   "watchPage": "et_manufacture",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "37fc50edf1424abd",
+     "action": "get_page_versions",
+     "data": {
+      "page": "et_manufacture"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "37fc50edf1424abd",
+     "action": "get_et_manufacture_headers",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "et_manufacture"
+     }
+    },
+    {
+     "action": "get_et_manufacture_headers",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s) + stamps"
+  },
+  {
+   "company": "ErpTest",
+   "uid": "37fc50edf1424abd",
+   "action": "et_manufacture_print",
+   "template": "Company_ErpTest_Manufacture_Print",
+   "title": "أمر تصنيع",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ErpTest_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "37fc50edf1424abd",
+     "action": "get_et_manufacture_print",
+     "data": {
+      "mo_code": "$param:mo_code"
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_et_manufacture_print",
+     "data": {
+      "mo_code": "$param:mo_code"
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "TopChemical",
+   "uid": "3fe1b5cb67b7223e",
+   "action": "tc_dashboard",
+   "template": "Company_TopChemical_Dashboard",
+   "title": "Top Chemical — Dashboard",
+   "nav": true,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopChemical_Registry.js",
+   "stubbed": [],
+   "errors": [
+    "timer: Chart is not defined"
+   ],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_dashboard_data",
+     "data": {
+      "year": "$date:year"
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_dashboard_data",
+     "data": {
+      "year": "$date:year"
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "TopChemical",
+   "uid": "3fe1b5cb67b7223e",
+   "action": "tc_executive_followup",
+   "template": "Company_TopChemical_ExecutiveFollowUp",
+   "title": "المتابعة اليومية التنفيذية",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopChemical_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_executive_followup_summary",
+     "data": {
+      "refresh": false
+     },
+     "read": true,
+     "kind": "MYSQL",
+     "mysqlPath": "getExecutiveFollowupSummary_ → dbExecutiveSummary_"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "SKIP_MYSQL",
+   "reason": "get_executive_followup_summary (getExecutiveFollowupSummary_ → dbExecutiveSummary_)"
+  },
+  {
+   "company": "TopChemical",
+   "uid": "3fe1b5cb67b7223e",
+   "action": "tc_kpi",
+   "template": "Company_TopChemical_KPI",
+   "title": "Top Chemical — المؤشرات",
+   "nav": true,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopChemical_Registry.js",
+   "stubbed": [],
+   "errors": [
+    "timer: Chart is not defined"
+   ],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_kpi_data",
+     "data": {
+      "year": "$date:year"
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_kpi_data",
+     "data": {
+      "year": "$date:year"
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "TopChemical",
+   "uid": "3fe1b5cb67b7223e",
+   "action": "tc_main_review",
+   "template": "Company_TopChemical_MainReview",
+   "title": "مراجعة مديونيات النظام الرئيسي",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopChemical_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_main_review",
+     "data": {
+      "source": "clients_AR",
+      "payment_from": "",
+      "payment_to": "",
+      "is_revised": "",
+      "offset": 0,
+      "limit": 50
+     },
+     "read": true,
+     "kind": "MYSQL",
+     "mysqlPath": "getMainReview_ → dbClientsArList_"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "SKIP_MYSQL",
+   "reason": "get_main_review (getMainReview_ → dbClientsArList_)"
+  },
+  {
+   "company": "TopChemical",
+   "uid": "3fe1b5cb67b7223e",
+   "action": "tc_client_balance_sheets",
+   "template": "Company_TopChemical_ClientBalanceSheets",
+   "title": "جدول مديونيات العملاء (client_balance_sheets)",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopChemical_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_client_balance_sheets",
+     "data": {
+      "loadAll": false
+     },
+     "read": true,
+     "kind": "MYSQL",
+     "mysqlPath": "getClientBalanceSheets_ → dbClientBalanceSheetsList_"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "SKIP_MYSQL",
+   "reason": "get_client_balance_sheets (getClientBalanceSheets_ → dbClientBalanceSheetsList_)"
+  },
+  {
+   "company": "TopChemical",
+   "uid": "3fe1b5cb67b7223e",
+   "action": "tc_box_analysis",
+   "template": "Company_TopChemical_BoxAnalysis",
+   "title": "تحليل حركة الخزنة العادية",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopChemical_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_box_analysis",
+     "data": {
+      "date_from": "",
+      "date_to": "",
+      "chart_of_accounts": "",
+      "responsible_person": "",
+      "box_code": "",
+      "is_revised": "",
+      "items_only": false,
+      "offset": 0,
+      "limit": 50
+     },
+     "read": true,
+     "kind": "MYSQL",
+     "mysqlPath": "getBoxAnalysis_ → dbBoxList_"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "SKIP_MYSQL",
+   "reason": "get_box_analysis (getBoxAnalysis_ → dbBoxList_)"
+  },
+  {
+   "company": "TopChemical",
+   "uid": "3fe1b5cb67b7223e",
+   "action": "tc_clients_vendors",
+   "template": "Company_TopChemical_Clients",
+   "title": "عملاء وموردين",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopChemical_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "tc_clients_vendors",
+   "watchPage": "tc_clients_vendors",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_page_versions",
+     "data": {
+      "page": "tc_clients_vendors"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_clients_vendors",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "tc_clients_vendors"
+     }
+    },
+    {
+     "action": "get_clients_vendors",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s) + stamps"
+  },
+  {
+   "company": "TopChemical",
+   "uid": "3fe1b5cb67b7223e",
+   "action": "tc_debts",
+   "template": "Company_TopChemical_Debts",
+   "title": "مديونيات",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopChemical_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "tc_debts",
+   "watchPage": "tc_debts",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_page_versions",
+     "data": {
+      "page": "tc_debts"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_ar_ap",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "tc_debts"
+     }
+    },
+    {
+     "action": "get_ar_ap",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s) + stamps"
+  },
+  {
+   "company": "TopChemical",
+   "uid": "3fe1b5cb67b7223e",
+   "action": "tc_products",
+   "template": "Company_TopChemical_Products",
+   "title": "الأصناف",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopChemical_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "tc_products",
+   "watchPage": "tc_products",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_page_versions",
+     "data": {
+      "page": "tc_products"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_products",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "tc_products"
+     }
+    },
+    {
+     "action": "get_products",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s) + stamps"
+  },
+  {
+   "company": "TopChemical",
+   "uid": "3fe1b5cb67b7223e",
+   "action": "tc_barcode",
+   "template": "Company_TopChemical_Barcode",
+   "title": "باركود الإنتاج",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopChemical_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "tc_barcode",
+   "watchPage": "tc_barcode",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_page_versions",
+     "data": {
+      "page": "tc_barcode"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_barcode",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "tc_barcode"
+     }
+    },
+    {
+     "action": "get_barcode",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s) + stamps"
+  },
+  {
+   "company": "TopChemical",
+   "uid": "3fe1b5cb67b7223e",
+   "action": "tc_registration_papers",
+   "template": "Company_TopChemical_RegistrationPapers",
+   "title": "تصاريح وتراخيص",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopChemical_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "tc_registration_papers",
+   "watchPage": "tc_registration_papers",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_page_versions",
+     "data": {
+      "page": "tc_registration_papers"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_registration_papers",
+     "data": {
+      "loadAll": true
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "tc_registration_papers"
+     }
+    },
+    {
+     "action": "get_registration_papers",
+     "data": {
+      "loadAll": true
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s) + stamps"
+  },
+  {
+   "company": "TopChemical",
+   "uid": "3fe1b5cb67b7223e",
+   "action": "tc_trust",
+   "template": "Company_TopChemical_Trust",
+   "title": "عهد خاصة",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopChemical_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "tc_trust",
+   "watchPage": "tc_trust",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_page_versions",
+     "data": {
+      "page": "tc_trust"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_trust_accounts",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "tc_trust"
+     }
+    },
+    {
+     "action": "get_trust_accounts",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s) + stamps"
+  },
+  {
+   "company": "TopChemical",
+   "uid": "3fe1b5cb67b7223e",
+   "action": "tc_stock_revision",
+   "template": "Company_TopChemical_StockRevision",
+   "title": "جرد المخزون",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopChemical_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "tc_stock_revision",
+   "watchPage": "tc_stock_revision",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_page_versions",
+     "data": {
+      "page": "tc_stock_revision"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_stock_revision",
+     "data": {
+      "loadAll": true
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "tc_stock_revision"
+     }
+    },
+    {
+     "action": "get_stock_revision",
+     "data": {
+      "loadAll": true
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s) + stamps"
+  },
+  {
+   "company": "TopChemical",
+   "uid": "3fe1b5cb67b7223e",
+   "action": "tc_stock_scan",
+   "template": "Company_TopChemical_StockScan",
+   "title": "جرد دوري مخازن باركود",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopChemical_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "tc_stock_scan",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_stock_scan_warehouses",
+     "data": {},
+     "read": true,
+     "kind": "MYSQL",
+     "mysqlPath": "get_stock_scan_warehouses → getStockScanWarehouses_ → dbStockScanWarehouses_"
+    },
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_stock_scan_catalog",
+     "data": {},
+     "read": true,
+     "kind": "MYSQL",
+     "mysqlPath": "get_stock_scan_catalog → getStockScanCatalog_"
+    },
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_stock_scan_history",
+     "data": {
+      "loadAll": true
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_stock_scan_options",
+     "data": {
+      "mode": "name",
+      "search": "",
+      "limit": 30,
+      "offset": 0
+     }
+    }
+   ],
+   "wave2": [],
+   "decision": "SKIP_MYSQL",
+   "reason": "get_stock_scan_warehouses (get_stock_scan_warehouses → getStockScanWarehouses_ → dbStockScanWarehouses_); get_stock_scan_catalog (get_stock_scan_catalog → getStockScanCatalog_)"
+  },
+  {
+   "company": "TopChemical",
+   "uid": "3fe1b5cb67b7223e",
+   "action": "tc_customs_office",
+   "template": "Company_TopChemical_CustomsOffice",
+   "title": "مكتب الجمارك",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopChemical_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "tc_customs_office",
+   "watchPage": "tc_customs_office",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_page_versions",
+     "data": {
+      "page": "tc_customs_office"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_customs_office",
+     "data": {
+      "scriptUrl": "$scriptUrl",
+      "sessionToken": "$sessionToken"
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "tc_customs_office"
+     }
+    },
+    {
+     "action": "get_customs_office",
+     "data": {
+      "scriptUrl": "$scriptUrl",
+      "sessionToken": "$sessionToken"
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s) + stamps"
+  },
+  {
+   "company": "TopChemical",
+   "uid": "3fe1b5cb67b7223e",
+   "action": "tc_purchasing",
+   "template": "Company_TopChemical_Purchasing",
+   "title": "توريدات ومشتريات",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopChemical_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "tc_purchasing",
+   "watchPage": "tc_purchasing",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_page_versions",
+     "data": {
+      "page": "tc_purchasing"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_purchase_items",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "tc_purchasing"
+     }
+    },
+    {
+     "action": "get_purchase_items",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s) + stamps"
+  },
+  {
+   "company": "TopChemical",
+   "uid": "3fe1b5cb67b7223e",
+   "action": "tc_import_follow",
+   "template": "Company_TopChemical_ImportFollow",
+   "title": "متابعة موافقات الاستيراد",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopChemical_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "tc_import_follow",
+   "watchPage": "tc_import_follow",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_page_versions",
+     "data": {
+      "page": "tc_import_follow"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_import_follow",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "tc_import_follow"
+     }
+    },
+    {
+     "action": "get_import_follow",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s) + stamps"
+  },
+  {
+   "company": "TopChemical",
+   "uid": "3fe1b5cb67b7223e",
+   "action": "tc_carton_sizes",
+   "template": "Company_TopChemical_CartonSizes",
+   "title": "مقاسات الكراتين والعبوات",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopChemical_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "tc_carton_sizes",
+   "watchPage": "tc_carton_sizes",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_page_versions",
+     "data": {
+      "page": "tc_carton_sizes"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_carton_sizes",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "tc_carton_sizes"
+     }
+    },
+    {
+     "action": "get_carton_sizes",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s) + stamps"
+  },
+  {
+   "company": "TopChemical",
+   "uid": "3fe1b5cb67b7223e",
+   "action": "tc_employee_reg",
+   "template": "Company_TopChemical_Employees",
+   "title": "تسجيل الموظفين",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopChemical_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "tc_employee_reg",
+   "watchPage": "tc_employee_reg",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_page_versions",
+     "data": {
+      "page": "tc_employee_reg"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_employees",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_employees",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "TopChemical",
+   "uid": "3fe1b5cb67b7223e",
+   "action": "tc_employee_status",
+   "template": "Company_TopChemical_EmployeeStatus",
+   "title": "حالة الموظف",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopChemical_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "tc_employee_status",
+   "watchPage": "tc_employee_status",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_page_versions",
+     "data": {
+      "page": "tc_employee_status"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_employee_status",
+     "data": {
+      "loadAll": true
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_employee_status",
+     "data": {
+      "loadAll": true
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "TopChemical",
+   "uid": "3fe1b5cb67b7223e",
+   "action": "tc_employee_salary",
+   "template": "Company_TopChemical_EmployeeSalary",
+   "title": "راتب الموظف",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopChemical_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "tc_employee_salary",
+   "watchPage": "tc_employee_salary",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_page_versions",
+     "data": {
+      "page": "tc_employee_salary"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_employee_salary",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_employee_salary",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "TopChemical",
+   "uid": "3fe1b5cb67b7223e",
+   "action": "tc_emp_deductions",
+   "template": "Company_TopChemical_EmpDeductions",
+   "title": "الغياب والخصومات",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopChemical_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "tc_emp_deductions",
+   "watchPage": "tc_emp_deductions",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_page_versions",
+     "data": {
+      "page": "tc_emp_deductions"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_emp_deductions",
+     "data": {
+      "loadAll": true
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_emp_deductions",
+     "data": {
+      "loadAll": true
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "TopChemical",
+   "uid": "3fe1b5cb67b7223e",
+   "action": "tc_emp_permits",
+   "template": "Company_TopChemical_EmpPermits",
+   "title": "الأذونات والتأخيرات",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopChemical_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "tc_emp_permits",
+   "watchPage": "tc_emp_permits",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_page_versions",
+     "data": {
+      "page": "tc_emp_permits"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_emp_permits",
+     "data": {
+      "loadAll": true
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_emp_permits",
+     "data": {
+      "loadAll": true
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "TopChemical",
+   "uid": "3fe1b5cb67b7223e",
+   "action": "tc_emp_overtime",
+   "template": "Company_TopChemical_EmpOvertime",
+   "title": "العمل الإضافي",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopChemical_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "tc_emp_overtime",
+   "watchPage": "tc_emp_overtime",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_page_versions",
+     "data": {
+      "page": "tc_emp_overtime"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_emp_overtime",
+     "data": {
+      "loadAll": true
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_emp_overtime",
+     "data": {
+      "loadAll": true
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "TopChemical",
+   "uid": "3fe1b5cb67b7223e",
+   "action": "tc_emp_salaries",
+   "template": "Company_TopChemical_EmpSalaries",
+   "title": "صرف المرتبات الشهرية",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopChemical_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "tc_emp_salaries",
+   "watchPage": "tc_emp_salaries",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_page_versions",
+     "data": {
+      "page": "tc_emp_salaries"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_emp_salaries",
+     "data": {
+      "loadAll": true
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_emp_salaries",
+     "data": {
+      "loadAll": true
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "TopChemical",
+   "uid": "3fe1b5cb67b7223e",
+   "action": "tc_emp_salaries_close",
+   "template": "Company_TopChemical_EmpSalariesClose",
+   "title": "غلق المرتبات الشهرية",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopChemical_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_payroll_months",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_payroll_months",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "TopChemical",
+   "uid": "3fe1b5cb67b7223e",
+   "action": "tc_budget_parties",
+   "template": "Company_TopChemical_BudgetParties",
+   "title": "عملاء وموردون قانونيون",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopChemical_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "tc_budget_parties",
+   "watchPage": "tc_budget_parties",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_page_versions",
+     "data": {
+      "page": "tc_budget_parties"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_legal_parties",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "tc_budget_parties"
+     }
+    },
+    {
+     "action": "get_legal_parties",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s) + stamps"
+  },
+  {
+   "company": "TopChemical",
+   "uid": "3fe1b5cb67b7223e",
+   "action": "tc_budget_stock_balance",
+   "template": "Company_TopChemical_BudgetStockBalance",
+   "title": "رصيد أصناف الميزانية",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopChemical_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_legal_stock_balance",
+     "data": {},
+     "read": true,
+     "kind": "MYSQL",
+     "mysqlPath": "getLegalStockBalance_ → systemQtyMap_"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [
+    "get_system_product_options"
+   ],
+   "decision": "SKIP_MYSQL",
+   "reason": "get_legal_stock_balance (getLegalStockBalance_ → systemQtyMap_)"
+  },
+  {
+   "company": "TopChemical",
+   "uid": "3fe1b5cb67b7223e",
+   "action": "tc_budget_inputs",
+   "template": "Company_TopChemical_BudgetInputs",
+   "title": "المدخلات - اصول ومخزون",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopChemical_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "tc_budget_inputs",
+   "watchPage": "tc_budget_inputs",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_page_versions",
+     "data": {
+      "page": "tc_budget_inputs"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_legal_inputs",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    },
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_page_versions",
+     "data": {
+      "page": "tc_budget_inputs"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_budget_refs",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    },
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_page_versions",
+     "data": {
+      "page": "tc_budget_inputs"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_legal_parties",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "tc_budget_inputs"
+     }
+    },
+    {
+     "action": "get_legal_inputs",
+     "data": {}
+    },
+    {
+     "action": "get_budget_refs",
+     "data": {}
+    },
+    {
+     "action": "get_legal_parties",
+     "data": {}
+    }
+   ],
+   "reason": "3 first-wave read(s) + stamps"
+  },
+  {
+   "company": "TopChemical",
+   "uid": "3fe1b5cb67b7223e",
+   "action": "tc_budget_manufacture",
+   "template": "Company_TopChemical_BudgetManufacture",
+   "title": "تصنيع الميزانية",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopChemical_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "tc_budget_manufacture",
+   "watchPage": "tc_budget_manufacture",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_page_versions",
+     "data": {
+      "page": "tc_budget_manufacture"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_legal_manufacture",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    },
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_page_versions",
+     "data": {
+      "page": "tc_budget_manufacture"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_budget_refs",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "tc_budget_manufacture"
+     }
+    },
+    {
+     "action": "get_legal_manufacture",
+     "data": {}
+    },
+    {
+     "action": "get_budget_refs",
+     "data": {}
+    }
+   ],
+   "reason": "2 first-wave read(s) + stamps"
+  },
+  {
+   "company": "TopChemical",
+   "uid": "3fe1b5cb67b7223e",
+   "action": "tc_budget_invoices",
+   "template": "Company_TopChemical_BudgetInvoices",
+   "title": "الفواتير الضريبية",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopChemical_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "tc_budget_invoices",
+   "watchPage": "tc_budget_invoices",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_budget_refs",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_legal_invoices",
+     "data": {
+      "month": "",
+      "year": "",
+      "from_date": "",
+      "to_date": "",
+      "search": "",
+      "offset": 0,
+      "limit": 200
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_legal_cash",
+     "data": {
+      "offset": 0,
+      "limit": 10000
+     }
+    }
+   ],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "tc_budget_invoices"
+     }
+    },
+    {
+     "action": "get_budget_refs",
+     "data": {}
+    },
+    {
+     "action": "get_legal_invoices",
+     "data": {
+      "month": "",
+      "year": "",
+      "from_date": "",
+      "to_date": "",
+      "search": "",
+      "offset": 0,
+      "limit": 200
+     }
+    },
+    {
+     "action": "get_legal_cash",
+     "data": {
+      "offset": 0,
+      "limit": 10000
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s) + stamps"
+  },
+  {
+   "company": "TopChemical",
+   "uid": "3fe1b5cb67b7223e",
+   "action": "tc_budget_cash",
+   "template": "Company_TopChemical_BudgetCash",
+   "title": "تحركات صناديق الميزانية",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopChemical_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "tc_budget_cash",
+   "watchPage": "tc_budget_cash",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_budget_refs",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_legal_cash",
+     "data": {
+      "transaction_type": "",
+      "transaction_method": "",
+      "related_box": "",
+      "offset": 0,
+      "limit": 200
+     }
+    }
+   ],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_budget_refs",
+     "data": {}
+    },
+    {
+     "action": "get_legal_cash",
+     "data": {
+      "transaction_type": "",
+      "transaction_method": "",
+      "related_box": "",
+      "offset": 0,
+      "limit": 200
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "TopChemical",
+   "uid": "3fe1b5cb67b7223e",
+   "action": "tc_budget_hr",
+   "template": "Company_TopChemical_BudgetHR",
+   "title": "شؤون العاملين القانونية",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopChemical_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "tc_budget_hr",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_legal_hr",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_legal_hr",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "TopChemical",
+   "uid": "3fe1b5cb67b7223e",
+   "action": "tc_budget_income",
+   "template": "Company_TopChemical_BudgetIncome",
+   "title": "قائمة الدخل السنوية",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopChemical_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_budget_refs",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    },
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_income_statement",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_budget_refs",
+     "data": {}
+    },
+    {
+     "action": "get_income_statement",
+     "data": {}
+    }
+   ],
+   "reason": "2 first-wave read(s)"
+  },
+  {
+   "company": "TopChemical",
+   "uid": "3fe1b5cb67b7223e",
+   "action": "tc_manufacture_orders",
+   "template": "Company_TopChemical_ManufactureOrders",
+   "title": "أوامر التصنيع",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopChemical_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_manufacture_headers",
+     "data": {
+      "limit": 20,
+      "offset": 0
+     },
+     "read": true,
+     "kind": "MYSQL",
+     "mysqlPath": "getManufactureHeaders_ → dbManufactureList_"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "SKIP_MYSQL",
+   "reason": "get_manufacture_headers (getManufactureHeaders_ → dbManufactureList_)"
+  },
+  {
+   "company": "TopChemical",
+   "uid": "3fe1b5cb67b7223e",
+   "action": "tc_production_capability",
+   "template": "Company_TopChemical_ProductionCapability",
+   "title": "تحليلات القدرات الانتاجية",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopChemical_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "SKIP_MYSQL",
+   "reason": "the product picker (UIC.TcCapabilityPicker) loads get_production_capability_catalog on open; ACTION_TABLES maps it to mysql:manuf_product_support_capability (manual — see overrides.json)",
+   "manual": true
+  },
+  {
+   "company": "TopChemical",
+   "uid": "3fe1b5cb67b7223e",
+   "action": "tc_sales_capacity",
+   "template": "Company_TopChemical_SalesCapacity",
+   "title": "تحليل القدرة الانتاجية للمبيعات",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopChemical_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "SKIP_MYSQL",
+   "reason": "the product picker (UIC.TcCapabilityPicker) loads get_sales_capacity_catalog on open; ACTION_TABLES maps it to mysql:manuf_product_support_capability (manual — see overrides.json)",
+   "manual": true
+  },
+  {
+   "company": "TopChemical",
+   "uid": "3fe1b5cb67b7223e",
+   "action": "tc_products_live",
+   "template": "Company_TopChemical_ProductsLive",
+   "title": "اصناف النظام الرئيسي — products",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopChemical_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "3fe1b5cb67b7223e",
+     "action": "get_products_live",
+     "data": {
+      "loadAll": true,
+      "refresh": false
+     },
+     "read": true,
+     "kind": "MYSQL",
+     "mysqlPath": "getProductsLive_ → dbProductsLiveList_"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "SKIP_MYSQL",
+   "reason": "get_products_live (getProductsLive_ → dbProductsLiveList_)"
+  },
+  {
+   "company": "TopChemical",
+   "uid": "3fe1b5cb67b7223e",
+   "action": "tc_financial_ratios",
+   "template": "Company_TopChemical_FinancialRatios",
+   "title": "تحليلات النسب المالية",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopChemical_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "SKIP_NO_READ",
+   "reason": "no read when the page opens (data loads only after a user action)"
+  },
+  {
+   "company": "TopLight",
+   "uid": "8df5c89a117fe9a5",
+   "action": "tl_dashboard",
+   "template": "Company_TopLight_Dashboard",
+   "title": "Top Light — Dashboard",
+   "nav": true,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopLight_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": true,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "8df5c89a117fe9a5",
+     "action": "get_dashboard_data",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_dashboard_data",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "TopLight",
+   "uid": "8df5c89a117fe9a5",
+   "action": "tl_kpi",
+   "template": "Company_TopLight_KPI",
+   "title": "Top Light — المؤشرات",
+   "nav": true,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopLight_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": true,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "8df5c89a117fe9a5",
+     "action": "get_kpi_data",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_kpi_data",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "TopLight",
+   "uid": "8df5c89a117fe9a5",
+   "action": "tl_analysis_review",
+   "template": "Company_TopLight_Dashboard",
+   "title": "مراجعة تحليل المبيعات",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopLight_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": true,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "8df5c89a117fe9a5",
+     "action": "get_dashboard_data",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_dashboard_data",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "TopLight",
+   "uid": "8df5c89a117fe9a5",
+   "action": "tl_products",
+   "template": "Company_TopLight_Products",
+   "title": "Top Light — المنتجات",
+   "nav": true,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopLight_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "tl_products",
+   "watchPage": "tl_products",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "8df5c89a117fe9a5",
+     "action": "get_page_versions",
+     "data": {
+      "page": "tl_products"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "8df5c89a117fe9a5",
+     "action": "get_products",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "tl_products"
+     }
+    },
+    {
+     "action": "get_products",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s) + stamps"
+  },
+  {
+   "company": "TopLight",
+   "uid": "8df5c89a117fe9a5",
+   "action": "tl_customers",
+   "template": "Company_TopLight_Customers",
+   "title": "Top Light — العملاء والموردون",
+   "nav": true,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopLight_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "tl_customers",
+   "watchPage": "tl_customers",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "8df5c89a117fe9a5",
+     "action": "get_page_versions",
+     "data": {
+      "page": "tl_customers"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "8df5c89a117fe9a5",
+     "action": "get_parties",
+     "data": {
+      "direction": ""
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "tl_customers"
+     }
+    },
+    {
+     "action": "get_parties",
+     "data": {
+      "direction": ""
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s) + stamps"
+  },
+  {
+   "company": "TopLight",
+   "uid": "8df5c89a117fe9a5",
+   "action": "tl_purchasing",
+   "template": "Company_TopLight_Purchasing",
+   "title": "Top Light — المشتريات",
+   "nav": true,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopLight_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "tl_purchasing",
+   "watchPage": "tl_purchasing",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "8df5c89a117fe9a5",
+     "action": "get_page_versions",
+     "data": {
+      "page": "tl_purchasing"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "8df5c89a117fe9a5",
+     "action": "get_purchasing_headers",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "tl_purchasing"
+     }
+    },
+    {
+     "action": "get_purchasing_headers",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s) + stamps"
+  },
+  {
+   "company": "TopLight",
+   "uid": "8df5c89a117fe9a5",
+   "action": "tl_purchase_print",
+   "template": "Company_TopLight_Purchase_Print",
+   "title": "أمر شراء",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopLight_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "8df5c89a117fe9a5",
+     "action": "get_purchase_print",
+     "data": {
+      "purchase_code": "$param:purchase_code"
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_purchase_print",
+     "data": {
+      "purchase_code": "$param:purchase_code"
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "TopLight",
+   "uid": "8df5c89a117fe9a5",
+   "action": "tl_sales",
+   "template": "Company_TopLight_Sales",
+   "title": "Top Light — المبيعات",
+   "nav": true,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopLight_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "tl_sales",
+   "watchPage": "tl_sales",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "8df5c89a117fe9a5",
+     "action": "get_page_versions",
+     "data": {
+      "page": "tl_sales"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "8df5c89a117fe9a5",
+     "action": "get_sales_headers",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "tl_sales"
+     }
+    },
+    {
+     "action": "get_sales_headers",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s) + stamps"
+  },
+  {
+   "company": "TopLight",
+   "uid": "8df5c89a117fe9a5",
+   "action": "tl_sales_offer",
+   "template": "Company_TopLight_Sales_Offer",
+   "title": "Top Light — عروض الأسعار",
+   "nav": true,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopLight_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "tl_sales_offer",
+   "watchPage": "tl_sales_offer",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "8df5c89a117fe9a5",
+     "action": "get_page_versions",
+     "data": {
+      "page": "tl_sales_offer"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "8df5c89a117fe9a5",
+     "action": "get_sales_offer_headers",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "tl_sales_offer"
+     }
+    },
+    {
+     "action": "get_sales_offer_headers",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s) + stamps"
+  },
+  {
+   "company": "TopLight",
+   "uid": "8df5c89a117fe9a5",
+   "action": "tl_sales_print",
+   "template": "Company_TopLight_Sales_Print",
+   "title": "فاتورة بيع",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopLight_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "8df5c89a117fe9a5",
+     "action": "get_sales_print",
+     "data": {
+      "sales_code": "$param:purchase_code"
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_sales_print",
+     "data": {
+      "sales_code": "$param:purchase_code"
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "TopLight",
+   "uid": "8df5c89a117fe9a5",
+   "action": "tl_sales_costing_print",
+   "template": "Company_TopLight_Sales_Costing_Print",
+   "title": "تحليل تكلفة الفاتورة",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopLight_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "8df5c89a117fe9a5",
+     "action": "get_sales_costing",
+     "data": {
+      "sales_code": "$param:purchase_code"
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_sales_costing",
+     "data": {
+      "sales_code": "$param:purchase_code"
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "TopLight",
+   "uid": "8df5c89a117fe9a5",
+   "action": "tl_sales_release",
+   "template": "Company_TopLight_Sales_Release",
+   "title": "اذن صرف منتج",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopLight_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "8df5c89a117fe9a5",
+     "action": "get_sales_print",
+     "data": {
+      "sales_code": "$param:purchase_code"
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_sales_print",
+     "data": {
+      "sales_code": "$param:purchase_code"
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "TopLight",
+   "uid": "8df5c89a117fe9a5",
+   "action": "tl_sales_returns",
+   "template": "Company_TopLight_Sales_Returns",
+   "title": "مرتجعات المبيعات",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopLight_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "8df5c89a117fe9a5",
+     "action": "get_sales_returns",
+     "data": {
+      "invoice_id": "$param:purchase_code"
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_sales_returns",
+     "data": {
+      "invoice_id": "$param:purchase_code"
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "TopLight",
+   "uid": "8df5c89a117fe9a5",
+   "action": "tl_sales_offer_print",
+   "template": "Company_TopLight_Sales_Offer_Print",
+   "title": "عرض سعر",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopLight_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "8df5c89a117fe9a5",
+     "action": "get_sales_offer_print",
+     "data": {
+      "offer_code": "$param:purchase_code"
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_sales_offer_print",
+     "data": {
+      "offer_code": "$param:purchase_code"
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "TopLight",
+   "uid": "8df5c89a117fe9a5",
+   "action": "tl_sales_analysis",
+   "template": "Company_TopLight_Sales_Analysis",
+   "title": "Top Light — تحليل المبيعات",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopLight_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "8df5c89a117fe9a5",
+     "action": "get_sales_analysis",
+     "data": {
+      "date_from": "",
+      "date_to": "",
+      "customer_id": "",
+      "product_id": ""
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_sales_analysis",
+     "data": {
+      "date_from": "",
+      "date_to": "",
+      "customer_id": "",
+      "product_id": ""
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "TopLight",
+   "uid": "8df5c89a117fe9a5",
+   "action": "tl_sales_costing_analysis",
+   "template": "Company_TopLight_Sales_Costing_Analysis",
+   "title": "تحليل تكلفة المبيعات الاجمالية",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopLight_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "8df5c89a117fe9a5",
+     "action": "get_sales_costing_analysis",
+     "data": {
+      "date_from": "",
+      "date_to": ""
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_sales_costing_analysis",
+     "data": {
+      "date_from": "",
+      "date_to": ""
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "TopLight",
+   "uid": "8df5c89a117fe9a5",
+   "action": "tl_income_statement",
+   "template": "Company_TopLight_Income_Statement",
+   "title": "قائمة الدخل",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopLight_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "8df5c89a117fe9a5",
+     "action": "get_income_statement",
+     "data": {
+      "date_from": "",
+      "date_to": ""
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_income_statement",
+     "data": {
+      "date_from": "",
+      "date_to": ""
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "TopLight",
+   "uid": "8df5c89a117fe9a5",
+   "action": "tl_financial_position",
+   "template": "Company_TopLight_Financial_Position",
+   "title": "قائمة المركز المالي",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopLight_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "8df5c89a117fe9a5",
+     "action": "get_financial_position",
+     "data": {
+      "date_from": "",
+      "date_to": "",
+      "recalc_running": false
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_financial_position",
+     "data": {
+      "date_from": "",
+      "date_to": "",
+      "recalc_running": false
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "TopLight",
+   "uid": "8df5c89a117fe9a5",
+   "action": "tl_cash",
+   "template": "Company_TopLight_Cash",
+   "title": "Top Light — حركة النقدية",
+   "nav": true,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopLight_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "tl_cash",
+   "watchPage": "tl_cash",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "8df5c89a117fe9a5",
+     "action": "get_page_versions",
+     "data": {
+      "page": "tl_cash"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "8df5c89a117fe9a5",
+     "action": "get_cash_headers",
+     "data": {
+      "loadAll": true
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_cash_headers",
+     "data": {
+      "loadAll": true
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "TopLight",
+   "uid": "8df5c89a117fe9a5",
+   "action": "tl_cash_report",
+   "template": "Company_TopLight_Cash_Report",
+   "title": "Top Light — تقرير النقدية",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopLight_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "8df5c89a117fe9a5",
+     "action": "get_cash_report",
+     "data": {
+      "date_from": "",
+      "date_to": "",
+      "box": "",
+      "type": ""
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_cash_report",
+     "data": {
+      "date_from": "",
+      "date_to": "",
+      "box": "",
+      "type": ""
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "TopLight",
+   "uid": "8df5c89a117fe9a5",
+   "action": "tl_customer_statement",
+   "template": "Company_TopLight_Customer_Statement",
+   "title": "كشف حساب عميل",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopLight_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "8df5c89a117fe9a5",
+     "action": "get_customer_statement",
+     "data": {
+      "customer_id": "$param:purchase_code",
+      "date_from": "",
+      "date_to": ""
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_customer_statement",
+     "data": {
+      "customer_id": "$param:purchase_code",
+      "date_from": "",
+      "date_to": ""
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "TopLight",
+   "uid": "8df5c89a117fe9a5",
+   "action": "tl_purchase_needs",
+   "template": "Company_TopLight_Purchase_Needs",
+   "title": "الاصناف المطلوب شرائها",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopLight_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "8df5c89a117fe9a5",
+     "action": "get_purchase_needs",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_purchase_needs",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "TopLight",
+   "uid": "8df5c89a117fe9a5",
+   "action": "tl_product_movement",
+   "template": "Company_TopLight_Product_Movement",
+   "title": "حركة المنتج",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_TopLight_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "8df5c89a117fe9a5",
+     "action": "get_product_movement",
+     "data": {
+      "product_id": "$param:purchase_code",
+      "date_from": "",
+      "date_to": ""
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_product_movement",
+     "data": {
+      "product_id": "$param:purchase_code",
+      "date_from": "",
+      "date_to": ""
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "ValleyFoods",
+   "uid": "9940659bd83035d7",
+   "action": "vf_dashboard",
+   "template": "Company_ValleyFoods_Dashboard",
+   "title": "Valley Foods — Dashboard",
+   "nav": true,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ValleyFoods_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_valley_mfg_orders",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    },
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_valley_sales_list",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    },
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_valley_products",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    },
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_valley_parties",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_valley_mfg_orders",
+     "data": {}
+    },
+    {
+     "action": "get_valley_sales_list",
+     "data": {}
+    },
+    {
+     "action": "get_valley_products",
+     "data": {}
+    },
+    {
+     "action": "get_valley_parties",
+     "data": {}
+    }
+   ],
+   "reason": "4 first-wave read(s)"
+  },
+  {
+   "company": "ValleyFoods",
+   "uid": "9940659bd83035d7",
+   "action": "vf_kpi",
+   "template": "Company_ValleyFoods_KPI",
+   "title": "Valley Foods — المؤشرات",
+   "nav": true,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ValleyFoods_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_kpi_data",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_kpi_data",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "ValleyFoods",
+   "uid": "9940659bd83035d7",
+   "action": "vf_hr_employees",
+   "template": "Company_ValleyFoods_HR_Emp",
+   "title": "قائمة الموظفين",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ValleyFoods_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "vf_hr_shifts",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_valley_hr_page",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_valley_hr_page",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "ValleyFoods",
+   "uid": "9940659bd83035d7",
+   "action": "vf_hr_status",
+   "template": "Company_ValleyFoods_HR_Emp",
+   "title": "حالة الموظفين",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ValleyFoods_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "vf_hr_shifts",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_valley_hr_page",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_valley_hr_page",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "ValleyFoods",
+   "uid": "9940659bd83035d7",
+   "action": "vf_hr_shifts",
+   "template": "Company_ValleyFoods_ShiftAssignment",
+   "title": "تحديد الورديات",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ValleyFoods_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "vf_hr_shifts",
+   "watchPage": "vf_hr_shifts",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_hr_shifts"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_shift_assignment_data",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_shift_assignment_data",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "ValleyFoods",
+   "uid": "9940659bd83035d7",
+   "action": "vf_hr_salary",
+   "template": "Company_ValleyFoods_Salary",
+   "title": "راتب الموظف",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ValleyFoods_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "vf_hr_salary",
+   "watchPage": "vf_hr_salary",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_hr_salary"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_salary_data",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_salary_data",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "ValleyFoods",
+   "uid": "9940659bd83035d7",
+   "action": "vf_hr_deductions",
+   "template": "Company_ValleyFoods_Deductions",
+   "title": "الغياب والخصومات",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ValleyFoods_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "vf_hr_deductions",
+   "watchPage": "vf_hr_deductions",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_hr_deductions"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_deductions_data",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_deductions_data",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "ValleyFoods",
+   "uid": "9940659bd83035d7",
+   "action": "vf_hr_contracts",
+   "template": "Company_ValleyFoods_Contracts",
+   "title": "العقود",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ValleyFoods_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "vf_hr_contracts",
+   "watchPage": "vf_hr_contracts",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_hr_contracts"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_contracts_data",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_contracts_data",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "ValleyFoods",
+   "uid": "9940659bd83035d7",
+   "action": "vf_hr_vacation_alloc",
+   "template": "Company_ValleyFoods_VacationAlloc",
+   "title": "تخصيص الإجازات",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ValleyFoods_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "vf_hr_vacation_alloc",
+   "watchPage": "vf_hr_vacation_alloc",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_hr_vacation_alloc"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_vacation_alloc_data",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_vacation_alloc_data",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "ValleyFoods",
+   "uid": "9940659bd83035d7",
+   "action": "vf_hr_vacations",
+   "template": "Company_ValleyFoods_Vacations",
+   "title": "الإجازات",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ValleyFoods_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "vf_hr_vacations",
+   "watchPage": "vf_hr_vacations",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_hr_vacations"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_vacations_data",
+     "data": {
+      "limit": 20
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_vacations_data",
+     "data": {
+      "limit": 20
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "ValleyFoods",
+   "uid": "9940659bd83035d7",
+   "action": "vf_hr_overtime",
+   "template": "Company_ValleyFoods_Overtime",
+   "title": "العمل الإضافي",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ValleyFoods_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "vf_hr_overtime",
+   "watchPage": "vf_hr_overtime",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_hr_overtime"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_overtime_data",
+     "data": {
+      "limit": 20
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_overtime_data",
+     "data": {
+      "limit": 20
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "ValleyFoods",
+   "uid": "9940659bd83035d7",
+   "action": "vf_hr_monthly_salaries",
+   "template": "Company_ValleyFoods_MonthlySalaries",
+   "title": "الرواتب الشهرية",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ValleyFoods_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_monthly_salaries_data",
+     "data": {
+      "month": "",
+      "year": ""
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_monthly_salaries_data",
+     "data": {
+      "month": "",
+      "year": ""
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "ValleyFoods",
+   "uid": "9940659bd83035d7",
+   "action": "vf_hr_attendance",
+   "template": "Company_ValleyFoods_Attendance",
+   "title": "الحضور والانصراف",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ValleyFoods_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "vf_hr_attendance",
+   "watchPage": "vf_hr_attendance",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_hr_attendance"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_attendance_sessions",
+     "data": {
+      "from": "$date:monthStart",
+      "to": "$date:monthEnd"
+     },
+     "read": true,
+     "kind": "SHEETS"
+    },
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_attendance_review",
+     "data": {
+      "status": "open",
+      "loadAll": true
+     },
+     "read": true,
+     "kind": "SHEETS"
+    },
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_hr_attendance"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_attendance_exceptions",
+     "data": {
+      "from": "$date:monthStart",
+      "to": "$date:today",
+      "loadAll": true
+     },
+     "read": true,
+     "kind": "SHEETS"
+    },
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_attendance_batches",
+     "data": {
+      "limit": 20
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_attendance_sessions",
+     "data": {
+      "from": "$date:monthStart",
+      "to": "$date:monthEnd"
+     }
+    },
+    {
+     "action": "get_attendance_review",
+     "data": {
+      "status": "open",
+      "loadAll": true
+     }
+    },
+    {
+     "action": "get_attendance_exceptions",
+     "data": {
+      "from": "$date:monthStart",
+      "to": "$date:today",
+      "loadAll": true
+     }
+    },
+    {
+     "action": "get_attendance_batches",
+     "data": {
+      "limit": 20
+     }
+    }
+   ],
+   "reason": "4 first-wave read(s)"
+  },
+  {
+   "company": "ValleyFoods",
+   "uid": "9940659bd83035d7",
+   "action": "vf_hr_settings_overtime",
+   "template": "Company_ValleyFoods_HR_Settings",
+   "title": "إعدادات العمل الإضافي",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ValleyFoods_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_overtime_roles_settings",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_overtime_roles_settings",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "ValleyFoods",
+   "uid": "9940659bd83035d7",
+   "action": "vf_hr_settings_deduction",
+   "template": "Company_ValleyFoods_HR_Settings",
+   "title": "إعدادات الخصومات",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ValleyFoods_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_overtime_roles_settings",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_overtime_roles_settings",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "ValleyFoods",
+   "uid": "9940659bd83035d7",
+   "action": "vf_hr_settings_vacations",
+   "template": "Company_ValleyFoods_HR_Settings",
+   "title": "إعدادات الإجازات",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ValleyFoods_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_overtime_roles_settings",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_overtime_roles_settings",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "ValleyFoods",
+   "uid": "9940659bd83035d7",
+   "action": "vf_hr_settings_shifts",
+   "template": "Company_ValleyFoods_HR_Settings",
+   "title": "إعدادات الورديات",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ValleyFoods_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_overtime_roles_settings",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_overtime_roles_settings",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "ValleyFoods",
+   "uid": "9940659bd83035d7",
+   "action": "vf_products",
+   "template": "Company_ValleyFoods_Products",
+   "title": "الاصناف وتحركاتها",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ValleyFoods_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "vf_products",
+   "watchPage": "vf_products",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_products"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_valley_products",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_products"
+     }
+    },
+    {
+     "action": "get_valley_products",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s) + stamps"
+  },
+  {
+   "company": "ValleyFoods",
+   "uid": "9940659bd83035d7",
+   "action": "vf_parties",
+   "template": "Company_ValleyFoods_Parties",
+   "title": "العملاء والموردون",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ValleyFoods_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "vf_parties",
+   "watchPage": "vf_parties",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_parties"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_valley_parties",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [
+    "get_valley_party_balances"
+   ],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_parties"
+     }
+    },
+    {
+     "action": "get_valley_parties",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s) + stamps; PARTIAL — the page then asks for get_valley_party_balances, which depends on the first reply"
+  },
+  {
+   "company": "ValleyFoods",
+   "uid": "9940659bd83035d7",
+   "action": "vf_cash",
+   "template": "Company_ValleyFoods_Cash",
+   "title": "حركة النقدية والبنوك",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ValleyFoods_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "vf_cash",
+   "watchPage": "vf_cash",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_cash"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_valley_cash",
+     "data": {
+      "from": "",
+      "to": ""
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_valley_cash",
+     "data": {
+      "from": "",
+      "to": ""
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "ValleyFoods",
+   "uid": "9940659bd83035d7",
+   "action": "vf_income_statement",
+   "template": "Company_ValleyFoods_IncomeStatement",
+   "title": "Valley Foods — قائمة الدخل",
+   "nav": true,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ValleyFoods_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_valley_income_statement",
+     "data": {
+      "start": "$date:monthStart",
+      "end": "$date:today"
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_valley_income_statement",
+     "data": {
+      "start": "$date:monthStart",
+      "end": "$date:today"
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "ValleyFoods",
+   "uid": "9940659bd83035d7",
+   "action": "vf_cash_expenses",
+   "template": "Company_ValleyFoods_CashExpenses",
+   "title": "تقرير المصروفات",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ValleyFoods_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "vf_cash",
+   "watchPage": "vf_cash",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_cash"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_valley_cash_expense_report",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_valley_cash_expense_report",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "ValleyFoods",
+   "uid": "9940659bd83035d7",
+   "action": "vf_cash_incomes",
+   "template": "Company_ValleyFoods_CashIncomes",
+   "title": "تقرير الايرادات الاخرى",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ValleyFoods_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "vf_cash",
+   "watchPage": "vf_cash",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_cash"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_valley_cash_income_report",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_valley_cash_income_report",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "ValleyFoods",
+   "uid": "9940659bd83035d7",
+   "action": "vf_cash_box_balances",
+   "template": "Company_ValleyFoods_CashBoxBalances",
+   "title": "تقرير أرصدة الصناديق",
+   "nav": false,
+   "public": false,
+   "accessPage": "vf_cash",
+   "registry": "Company_ValleyFoods_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "vf_cash",
+   "watchPage": "vf_cash",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_cash"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_valley_cash_box_balance_report",
+     "data": {
+      "from": "",
+      "to": "",
+      "related_box": ""
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_valley_cash_box_balance_report",
+     "data": {
+      "from": "",
+      "to": "",
+      "related_box": ""
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s)"
+  },
+  {
+   "company": "ValleyFoods",
+   "uid": "9940659bd83035d7",
+   "action": "vf_sales",
+   "template": "Company_ValleyFoods_Sales",
+   "title": "المبيعات",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ValleyFoods_Registry.js",
+   "stubbed": [
+    "I18N"
+   ],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "vf_sales",
+   "watchPage": "vf_sales",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_sales"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_valley_sales_page",
+     "data": {
+      "offset": 0,
+      "limit": 1,
+      "from": "",
+      "to": ""
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [
+    "get_valley_sales_page"
+   ],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_sales"
+     }
+    },
+    {
+     "action": "get_valley_sales_page",
+     "data": {
+      "offset": 0,
+      "limit": 1,
+      "from": "",
+      "to": ""
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s) + stamps; PARTIAL — the page then asks for get_valley_sales_page, which depends on the first reply"
+  },
+  {
+   "company": "ValleyFoods",
+   "uid": "9940659bd83035d7",
+   "action": "vf_sales_returns",
+   "template": "Company_ValleyFoods_SalesReturns",
+   "title": "مرتجعات المبيعات",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ValleyFoods_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "vf_sales_returns",
+   "watchPage": "vf_sales_returns",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_sales_returns"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_valley_sales_bootstrap",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_sales_returns"
+     }
+    },
+    {
+     "action": "get_valley_sales_bootstrap",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s) + stamps"
+  },
+  {
+   "company": "ValleyFoods",
+   "uid": "9940659bd83035d7",
+   "action": "vf_sales_print",
+   "template": "Company_ValleyFoods_SalesPrint",
+   "title": "طباعة فاتورة مبيعات",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ValleyFoods_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "",
+   "watchPage": "",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_valley_invoice_full",
+     "data": {
+      "invoice_unique_id": "$param:invoice_unique_id"
+     },
+     "read": true,
+     "kind": "SHEETS"
+    },
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_valley_sales_bootstrap",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_valley_invoice_full",
+     "data": {
+      "invoice_unique_id": "$param:invoice_unique_id"
+     }
+    },
+    {
+     "action": "get_valley_sales_bootstrap",
+     "data": {}
+    }
+   ],
+   "reason": "2 first-wave read(s)"
+  },
+  {
+   "company": "ValleyFoods",
+   "uid": "9940659bd83035d7",
+   "action": "vf_sales_report",
+   "template": "Company_ValleyFoods_SalesReport",
+   "title": "تقرير المبيعات",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ValleyFoods_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "vf_sales",
+   "watchPage": "vf_sales",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_valley_sales_bootstrap",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [
+    "get_valley_sales_report"
+   ],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_sales"
+     }
+    },
+    {
+     "action": "get_valley_sales_bootstrap",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s) + stamps; PARTIAL — the page then asks for get_valley_sales_report, which depends on the first reply"
+  },
+  {
+   "company": "ValleyFoods",
+   "uid": "9940659bd83035d7",
+   "action": "vf_purchasing",
+   "template": "Company_ValleyFoods_Purchasing",
+   "title": "تكلفة المشتريات",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ValleyFoods_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "vf_purchasing",
+   "watchPage": "vf_purchasing",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_purchasing"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_valley_purchasing_costing",
+     "data": {
+      "from": "",
+      "to": ""
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [
+    "get_valley_purchasing_options"
+   ],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_purchasing"
+     }
+    },
+    {
+     "action": "get_valley_purchasing_costing",
+     "data": {
+      "from": "",
+      "to": ""
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s) + stamps; PARTIAL — the page then asks for get_valley_purchasing_options, which depends on the first reply"
+  },
+  {
+   "company": "ValleyFoods",
+   "uid": "9940659bd83035d7",
+   "action": "vf_purchasing_report",
+   "template": "Company_ValleyFoods_PurchasingReport",
+   "title": "تقرير المشتريات",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ValleyFoods_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "vf_purchasing",
+   "watchPage": "vf_purchasing",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_valley_purchasing_options",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_valley_purchasing_report",
+     "data": {
+      "from": "$param:from",
+      "to": "$param:to",
+      "vendor": "",
+      "product": ""
+     }
+    }
+   ],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_purchasing"
+     }
+    },
+    {
+     "action": "get_valley_purchasing_options",
+     "data": {}
+    },
+    {
+     "action": "get_valley_purchasing_report",
+     "data": {
+      "from": "$param:from",
+      "to": "$param:to",
+      "vendor": "",
+      "product": ""
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s) + stamps"
+  },
+  {
+   "company": "ValleyFoods",
+   "uid": "9940659bd83035d7",
+   "action": "vf_warehouse_movement",
+   "template": "Company_ValleyFoods_WarehouseMovement",
+   "title": "حركة المخزن",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ValleyFoods_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "vf_warehouse_movement",
+   "watchPage": "vf_warehouse_movement",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_warehouse_movement"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_valley_warehouse_movements",
+     "data": {
+      "offset": 0,
+      "limit": 100
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_valley_warehouse_move_options",
+     "data": {}
+    }
+   ],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_warehouse_movement"
+     }
+    },
+    {
+     "action": "get_valley_warehouse_movements",
+     "data": {
+      "offset": 0,
+      "limit": 100
+     }
+    },
+    {
+     "action": "get_valley_warehouse_move_options",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s) + stamps"
+  },
+  {
+   "company": "ValleyFoods",
+   "uid": "9940659bd83035d7",
+   "action": "vf_mfg_recipes",
+   "template": "Company_ValleyFoods_MfgRecipes",
+   "title": "وصفات التصنيع (BOM)",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ValleyFoods_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "vf_mfg_recipes",
+   "watchPage": "vf_mfg_recipes",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_mfg_recipes"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_valley_mfg_recipes",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_mfg_recipes"
+     }
+    },
+    {
+     "action": "get_valley_mfg_recipes",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s) + stamps"
+  },
+  {
+   "company": "ValleyFoods",
+   "uid": "9940659bd83035d7",
+   "action": "vf_mfg_orders",
+   "template": "Company_ValleyFoods_MfgOrders",
+   "title": "أوامر التصنيع",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ValleyFoods_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "vf_mfg_orders",
+   "watchPage": "vf_mfg_orders",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_mfg_orders"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_valley_mfg_orders_headers_json",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_mfg_orders"
+     }
+    },
+    {
+     "action": "get_valley_mfg_orders_headers_json",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s) + stamps"
+  },
+  {
+   "company": "ValleyFoods",
+   "uid": "9940659bd83035d7",
+   "action": "vf_mfg_order",
+   "template": "Company_ValleyFoods_MfgOrderView",
+   "title": "أمر تصنيع",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ValleyFoods_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "vf_mfg_orders",
+   "watchPage": "vf_mfg_orders",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_mfg_orders"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_valley_mfg_order_detail",
+     "data": {
+      "mo_uid": "$param:mo"
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_mfg_orders"
+     }
+    },
+    {
+     "action": "get_valley_mfg_order_detail",
+     "data": {
+      "mo_uid": "$param:mo"
+     }
+    }
+   ],
+   "reason": "1 first-wave read(s) + stamps"
+  },
+  {
+   "company": "ValleyFoods",
+   "uid": "9940659bd83035d7",
+   "action": "vf_mfg_client_report",
+   "template": "Company_ValleyFoods_MfgClientReport",
+   "title": "تقرير تصنيع العملاء",
+   "nav": false,
+   "public": false,
+   "accessPage": "vf_mfg_orders",
+   "registry": "Company_ValleyFoods_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "vf_mfg_orders",
+   "watchPage": "vf_mfg_orders",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_mfg_orders"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_valley_mfg_client_report",
+     "data": {
+      "from": "$param:from",
+      "to": "$param:to",
+      "client_ids": [
+       "$param:client"
+      ],
+      "product_ids": [
+       "$param:product"
+      ],
+      "op_types": [],
+      "statuses": []
+     },
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "SKIP_PARAM",
+   "reason": "the page reshapes a URL parameter before sending it (NESTED_PARAM:get_valley_mfg_client_report)"
+  },
+  {
+   "company": "ValleyFoods",
+   "uid": "9940659bd83035d7",
+   "action": "vf_workcenters",
+   "template": "Company_ValleyFoods_WorkCenters",
+   "title": "خطوط الإنتاج",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ValleyFoods_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "vf_workcenters",
+   "watchPage": "vf_workcenters",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_workcenters"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_valley_work_centers",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_workcenters"
+     }
+    },
+    {
+     "action": "get_valley_work_centers",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s) + stamps"
+  },
+  {
+   "company": "ValleyFoods",
+   "uid": "9940659bd83035d7",
+   "action": "vf_asset_technical",
+   "template": "Company_ValleyFoods_AssetTechnical",
+   "title": "الأصول والماكينات",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ValleyFoods_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "vf_asset_technical",
+   "watchPage": "vf_asset_technical",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_asset_technical"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_valley_asset_technicals",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_asset_technical"
+     }
+    },
+    {
+     "action": "get_valley_asset_technicals",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s) + stamps"
+  },
+  {
+   "company": "ValleyFoods",
+   "uid": "9940659bd83035d7",
+   "action": "vf_work_center_assets",
+   "template": "Company_ValleyFoods_WorkCenterAssets",
+   "title": "أصول خطوط الإنتاج",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ValleyFoods_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "vf_work_center_assets",
+   "watchPage": "vf_work_center_assets",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_work_center_assets"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_valley_work_center_assets",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    },
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_work_center_assets"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_valley_asset_technicals",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_work_center_assets"
+     }
+    },
+    {
+     "action": "get_valley_work_center_assets",
+     "data": {}
+    },
+    {
+     "action": "get_valley_asset_technicals",
+     "data": {}
+    }
+   ],
+   "reason": "2 first-wave read(s) + stamps"
+  },
+  {
+   "company": "ValleyFoods",
+   "uid": "9940659bd83035d7",
+   "action": "vf_quality_dashboard",
+   "template": "Company_ValleyFoods_QualityDashboard",
+   "title": "الجودة — لوحة المؤشرات",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ValleyFoods_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "vf_quality_dashboard",
+   "watchPage": "vf_quality_dashboard",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_quality_dashboard"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_quality_dashboard",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_quality_dashboard"
+     }
+    },
+    {
+     "action": "get_quality_dashboard",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s) + stamps"
+  },
+  {
+   "company": "ValleyFoods",
+   "uid": "9940659bd83035d7",
+   "action": "vf_quality_general",
+   "template": "Company_ValleyFoods_QualityGeneral",
+   "title": "الجودة — الجودة العامة",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ValleyFoods_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "vf_quality_general",
+   "watchPage": "vf_quality_general",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_quality_general"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_quality_general",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_quality_general"
+     }
+    },
+    {
+     "action": "get_quality_general",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s) + stamps"
+  },
+  {
+   "company": "ValleyFoods",
+   "uid": "9940659bd83035d7",
+   "action": "vf_quality_sops",
+   "template": "Company_ValleyFoods_QualitySops",
+   "title": "الجودة — السياسات والاجراءات SOPs",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ValleyFoods_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "vf_quality_sops",
+   "watchPage": "vf_quality_sops",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_quality_sops"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_quality_sops",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_quality_sops"
+     }
+    },
+    {
+     "action": "get_quality_sops",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s) + stamps"
+  },
+  {
+   "company": "ValleyFoods",
+   "uid": "9940659bd83035d7",
+   "action": "vf_quality_my_acks",
+   "template": "Company_ValleyFoods_QualityMyAcks",
+   "title": "الجودة — إقراراتي",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ValleyFoods_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "vf_quality_my_acks",
+   "watchPage": "vf_quality_my_acks",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_quality_my_acks"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_quality_my_acks",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_quality_my_acks"
+     }
+    },
+    {
+     "action": "get_quality_my_acks",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s) + stamps"
+  },
+  {
+   "company": "ValleyFoods",
+   "uid": "9940659bd83035d7",
+   "action": "vf_quality_ncr",
+   "template": "Company_ValleyFoods_QualityNcr",
+   "title": "الجودة — عدم المطابقة و CAPA",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ValleyFoods_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "vf_quality_ncr",
+   "watchPage": "vf_quality_ncr",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_quality_ncr"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_quality_ncr",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_quality_ncr"
+     }
+    },
+    {
+     "action": "get_quality_ncr",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s) + stamps"
+  },
+  {
+   "company": "ValleyFoods",
+   "uid": "9940659bd83035d7",
+   "action": "vf_quality_audits",
+   "template": "Company_ValleyFoods_QualityAudits",
+   "title": "الجودة — التدقيق الداخلي",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ValleyFoods_Registry.js",
+   "stubbed": [],
+   "errors": [],
+   "router": false,
+   "viewCachePage": "vf_quality_audits",
+   "watchPage": "vf_quality_audits",
+   "calls": [
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_quality_audits"
+     }
+    },
+    {
+     "route": "company_action",
+     "company": "9940659bd83035d7",
+     "action": "get_quality_audits",
+     "data": {},
+     "read": true,
+     "kind": "SHEETS"
+    }
+   ],
+   "wave2Independent": [],
+   "wave2": [],
+   "decision": "BOOT",
+   "boot": [
+    {
+     "action": "get_page_versions",
+     "data": {
+      "page": "vf_quality_audits"
+     }
+    },
+    {
+     "action": "get_quality_audits",
+     "data": {}
+    }
+   ],
+   "reason": "1 first-wave read(s) + stamps"
+  },
+  {
+   "company": "ValleyFoods",
+   "uid": "9940659bd83035d7",
+   "action": "valley_cost_view",
+   "template": "",
+   "title": "إظهار التكاليف (صلاحية)",
+   "nav": false,
+   "public": false,
+   "accessPage": "",
+   "registry": "Company_ValleyFoods_Registry.js",
+   "decision": "SKIP_NO_READ",
+   "reason": "registered without a template (a permission token, not a page)"
+  }
+ ]
+}

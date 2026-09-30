@@ -1,0 +1,13 @@
+{
+  "_comment": "Decisions the harness cannot see, each checked by hand. inventory.js applies these AFTER its own classification and marks the row «manual». Keep the evidence field current.",
+  "tc_production_capability": {
+    "decision": "SKIP_MYSQL",
+    "reason": "the product picker (UIC.TcCapabilityPicker) loads get_production_capability_catalog on open; ACTION_TABLES maps it to mysql:manuf_product_support_capability",
+    "evidence": "Company_TopChemical_ProductionCapability.html createPicker(); Company_TopChemical_Actions.js ACTION_TABLES 'get_production_capability_catalog'"
+  },
+  "tc_sales_capacity": {
+    "decision": "SKIP_MYSQL",
+    "reason": "the product picker (UIC.TcCapabilityPicker) loads get_sales_capacity_catalog on open; ACTION_TABLES maps it to mysql:manuf_product_support_capability",
+    "evidence": "Company_TopChemical_SalesCapacity.html createPicker(); Company_TopChemical_Actions.js ACTION_TABLES 'get_sales_capacity_catalog'"
+  }
+}

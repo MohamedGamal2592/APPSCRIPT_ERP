@@ -33,6 +33,8 @@ function registerErpTest_() {
       { action: 'et_products', template: 'Company_ErpTest_Products', title: 'Testing System — الاصناف', nav: false },
       { action: 'et_categories', template: 'Company_ErpTest_Categories', title: 'Testing System — التصنيفات', nav: false },
       { action: 'et_customers', template: 'Company_ErpTest_Customers', title: 'Testing System — العملاء والموردون', label: 'العملاء والموردون' },
+      /* Speed measurement for et_customers (Page_Boot). Hidden, and gated on et_customers' own permission. */
+      { action: 'et_customers_perf', template: 'Company_ErpTest_Customers_Perf', title: 'قياس سرعة العملاء والموردين', nav: false, accessPage: 'et_customers' },
       { action: 'et_purchasing', template: 'Company_ErpTest_Purchasing', title: 'Testing System — المشتريات', label: 'المشتريات' },
       { action: 'et_purchase_print', template: 'Company_ErpTest_Purchase_Print', title: 'أمر شراء', nav: false },
       { action: 'et_sales', template: 'Company_ErpTest_Sales', title: 'Testing System — المبيعات', label: 'المبيعات' },

@@ -1,0 +1,23 @@
+{
+  "_comment": "What apply.js does per wave. patch = exact find/replace, exactly one occurrence, line endings follow the target file. copy = replace a whole file, only if the target is still byte-for-byte (line endings ignored) what the plan was written against (before). run = a node command from the repository root.",
+  "waves": {
+    "1": {
+      "title": "framework + pilot (et_customers, et_products)",
+      "steps": [
+        { "type": "patch", "file": "Code.js", "find": "patches/p1_code_boot.find.txt", "replace": "patches/p1_code_boot.replace.txt" },
+        { "type": "patch", "file": "Code.js", "find": "patches/p1_code_head.find.txt", "replace": "patches/p1_code_head.replace.txt" },
+        { "type": "patch", "file": "Client_Helpers.html", "find": "patches/p1_client_call.find.txt", "replace": "patches/p1_client_call.replace.txt" },
+        { "type": "copy", "to": "Page_Boot.html", "from": "files/Page_Boot.html", "before": "905eb56cb1d6406ae8063b842aff17ba0b1692aa38713e35055436469f471e30" },
+        { "type": "copy", "to": "Company_ErpTest_Customers.html", "from": "files/Company_ErpTest_Customers.html", "before": "89a1c76fcb473c0da3a2d2efba92d02e52f9213e130097314bbb4dd2a91b1bb8" },
+        { "type": "copy", "to": "Company_ErpTest_Products.html", "from": "files/Company_ErpTest_Products.html", "before": "7afecc55d527aa414f9f0d2ae62a46563079698645405fa4cffed1ae6ec8eadb" },
+        { "type": "run", "cmd": ["tools/pageboot/gen_reads.js", "--wave", "1"] },
+        { "type": "run", "cmd": ["tools/build_preview.js"] }
+      ]
+    },
+    "2": { "title": "ErpTest", "steps": [ { "type": "run", "cmd": ["tools/pageboot/gen_reads.js", "--wave", "2"] } ] },
+    "3": { "title": "TopLight", "steps": [ { "type": "run", "cmd": ["tools/pageboot/gen_reads.js", "--wave", "3"] } ] },
+    "4": { "title": "ValleyFoods", "steps": [ { "type": "run", "cmd": ["tools/pageboot/gen_reads.js", "--wave", "4"] } ] },
+    "5": { "title": "TopChemical (Sheets pages)", "steps": [ { "type": "run", "cmd": ["tools/pageboot/gen_reads.js", "--wave", "5"] } ] },
+    "6": { "title": "Assessment", "steps": [ { "type": "run", "cmd": ["tools/pageboot/gen_reads.js", "--wave", "6"] } ] }
+  }
+}

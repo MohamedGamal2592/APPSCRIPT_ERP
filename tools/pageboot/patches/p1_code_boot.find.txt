@@ -1,0 +1,57 @@
+/**
+ * [page-boot] A page's first reads, run while the page itself is being
+ * rendered, so the data arrives INSIDE the HTML instead of costing further
+ * google.script.run round trips. Measured on et_customers: each round trip is
+ * ~6 s, almost all of it platform time before the first line of this project
+ * runs — no handler change can remove it, only not making the call can. The
+ * table appeared after 9.6 s embedded against 21.0 s fetched.
+ *
+ * Called from a template scriptlet:
+ *   var BOOT = <?!= pageBootJson_(user, company, readsJson) ?>;
+ * readsJson is a JSON array of { action, data }, run IN ORDER. Put the page's
+ * get_page_versions FIRST: stamps read before the data can only be older than
+ * it, so the live watch errs toward an extra refresh, never a missed change.
+ *
+ *   - READ ONLY. A read that is not a read action is refused before dispatch,
+ *     so a template can never cause a write by being rendered.
+ *   - Same authorization as an apiRouter read: each runs executeCompanyAction_
+ *     with the user doGet has already authenticated.
+ *   - FAILS OPEN, per read. A failed read embeds reply: null and the page
+ *     fetches it as it did before; rendering the page never fails because of this.
+ *
+ * Returns { server_ms, reads: [{ action, data, ok, reply, error?, ms }] } as a
+ * JS expression, with '<' escaped so the JSON cannot close the <script> it is
+ * written into. The client side is Page_Boot.html (PageBoot.wrap).
+ */
+function pageBootJson_(user, companyUid, readsJson) {
+  var t0 = Date.now();
+  var out = { server_ms: 0, reads: [] };
+  var reads = [];
+  try {
+    reads = typeof readsJson === 'string' ? JSON.parse(readsJson || '[]') : (readsJson || []);
+    if (!Array.isArray(reads)) reads = [];
+  } catch (parseErr) {
+    out.error = 'bad reads: ' + String((parseErr && parseErr.message) || parseErr);
+    reads = [];
+  }
+  reads.forEach(function (r) {
+    var t1 = Date.now();
+    var action = String((r && r.action) || '');
+    var data = (r && r.data && typeof r.data === 'object') ? r.data : {};
+    var entry = { action: action, data: data, ok: false, reply: null, ms: 0 };
+    try {
+      if (!user) throw new Error('no authenticated user');
+      if (!isReadAction_(action)) throw new Error('page boot is read-only: ' + action);
+      entry.reply = jsonSafe_(executeCompanyAction_({ target_system: String(companyUid || ''), module_action: action, data: data }, '', user));
+      entry.ok = !!(entry.reply && entry.reply.status !== 'error');
+      if (!entry.ok) entry.reply = null;
+    } catch (e) {
+      entry.reply = null;
+      entry.error = String((e && e.message) || e);
+    }
+    entry.ms = Date.now() - t1;
+    out.reads.push(entry);
+  });
+  out.server_ms = Date.now() - t0;
+  return JSON.stringify(out).replace(/</g, '\\u003c');
+}

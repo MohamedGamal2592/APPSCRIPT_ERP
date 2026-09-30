@@ -1,0 +1,5 @@
+  /* [page-boot] This page's embedded first reads + the client runtime, first
+     in <head> so the runtime's clock starts before anything else. '' for a
+     page not in PAGE_BOOT_READS, a public page, or with PAGE_BOOT_OFF = 1. */
+  var bootHead = pageBootInject_(action, authUser, e.parameter || {}, scriptUrl);
+  var headInjection = bootHead + '<meta name="app-web-url" content="' + scriptUrl + '">'

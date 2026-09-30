@@ -1122,16 +1122,29 @@ const ErpTest = (function () {
   // =========================================
   // Products — list / add / edit
   // =========================================
-  function getProducts_(data, user, dbId) {
-    const rows = tlDbList_(dbId, PRODUCTS_SHEET);
-    const catNames = {};
-    categoryRefs_(dbId).forEach(c => { catNames[String(c.id)] = c.name_ar; });
+  /* The same split as getParties_: stock is computed live from five movement
+     sheets (etStockMap_), and the list must not wait on it before it can paint.
+       { skipStock: true }  the table alone — products, categories, chart refs;
+                            every product comes back with current_qty and
+                            total_cost_sign: null.
+       { stockOnly: true }  { stock: { id: { qty, cost } } } only.
+     With neither flag the reply is unchanged: list and stock in one call. */
+  function productStockMap_(dbId) {
     const stockMap = {};
     tlDbList_(dbId, CURRENT_PRODUCTS_SHEET).forEach(s => {
       stockMap[String(s.unique_id)] = { qty: num0_(s.current_qty), cost: num0_(s.total_cost_sign) };
     });
+    return stockMap;
+  }
+
+  function getProducts_(data, user, dbId) {
+    if (data && data.stockOnly) return { status: 'success', stock: productStockMap_(dbId) };
+    const rows = tlDbList_(dbId, PRODUCTS_SHEET);
+    const catNames = {};
+    categoryRefs_(dbId).forEach(c => { catNames[String(c.id)] = c.name_ar; });
+    const stockMap = (data && data.skipStock) ? null : productStockMap_(dbId);
     const products = rows.map(p => {
-      const stock = stockMap[String(p.id)] || { qty: 0, cost: 0 };
+      const stock = stockMap ? (stockMap[String(p.id)] || { qty: 0, cost: 0 }) : { qty: null, cost: null };
       return {
         id: p.id,
         name_ar: p.name_ar,
@@ -1305,10 +1318,18 @@ const ErpTest = (function () {
   // =========================================
   // Customers / Vendors — list / add / edit
   // =========================================
+  /* Two opt-in modes split this read the way tc_stock_revision splits its own:
+     the list must not wait on the balances before it can paint.
+       { skipBalances: true }  the table alone — ONE sheet (customer_vendor);
+                               every party comes back with balance: null.
+       { balancesOnly: true }  { balances: { id: amount } } only — the seven
+                               movement sheets customerBalanceMap_ reads.
+     With neither flag the reply is unchanged: list and balances in one call. */
   function getParties_(data, user, dbId) {
+    if (data && data.balancesOnly) return { status: 'success', balances: customerBalanceMap_(dbId) };
     const rows = tlDbList_(dbId, CUSTOMERS_SHEET);
     const direction = data && data.direction ? String(data.direction).trim().toLowerCase() : '';
-    const balMap = customerBalanceMap_(dbId);
+    const balMap = (data && data.skipBalances) ? null : customerBalanceMap_(dbId);
     const parties = rows
       .filter(p => !direction || normalizeDirection_(p.customer_direction) === direction)
       .map(p => ({
@@ -1328,7 +1349,7 @@ const ErpTest = (function () {
         telephone: p.telephone,
         address: p.address,
         created_at: p.created_at,
-        balance: balMap[String(p.id)] || 0
+        balance: balMap ? (balMap[String(p.id)] || 0) : null
       }));
     return {
       status: 'success',

@@ -1,0 +1,15 @@
+{
+  "_comment": "Which BOOT pages (tools/pageboot/inventory.json) are switched on in each wave. gen_reads.js --wave N includes waves 1..N. waitFor names a PageBoot.mark the page calls when its later part lands, so a measured series waits for it.",
+  "waves": {
+    "1": { "title": "pilot: et_customers + et_products", "pages": ["et_customers", "et_products"] },
+    "2": { "title": "ErpTest — every other BOOT page", "companies": ["ErpTest"] },
+    "3": { "title": "TopLight", "companies": ["TopLight"] },
+    "4": { "title": "ValleyFoods", "companies": ["ValleyFoods"] },
+    "5": { "title": "TopChemical (Sheets pages only; MySQL pages are SKIP_MYSQL)", "companies": ["TopChemical"] },
+    "6": { "title": "Assessment", "companies": ["Assessment"] }
+  },
+  "waitFor": {
+    "et_customers": "balances",
+    "et_products": "stock"
+  }
+}

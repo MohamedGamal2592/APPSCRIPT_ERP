@@ -19,6 +19,13 @@
  * No business logic. Loaded first (numeric prefix + filePushOrder).
  */
 
+/* [diag-timing] The first statement of the first pushed file. Apps Script
+ * evaluates the global scope of EVERY pushed .js file on EVERY execution, so
+ * (entry to apiRouter_ / diagPing) − this stamp is what loading the whole
+ * project costs before any request code runs. Read only by the timing
+ * diagnostics near apiRouter; nothing else depends on it. */
+var __GLOBAL_LOAD_T0__ = Date.now();
+
 const CONFIG = {
   SESSION_EXPIRY_HOURS: 12,
   AUTH_SPREADSHEET_ID: '1CmPxWAt8DYbXovgeofHpqe5MVaz1dQCzpqJvWP00HOM',
@@ -6396,6 +6403,64 @@ function doGet(e) {
   return _frame(HtmlService.createHtmlOutput(rendered)).setTitle(page.title).addMetaTag('viewport', 'width=device-width, initial-scale=1, viewport-fit=cover');
 }
 
+/**
+ * [page-boot] A page's first reads, run while the page itself is being
+ * rendered, so the data arrives INSIDE the HTML instead of costing further
+ * google.script.run round trips. Measured on et_customers: each round trip is
+ * ~6 s, almost all of it platform time before the first line of this project
+ * runs — no handler change can remove it, only not making the call can. The
+ * table appeared after 9.6 s embedded against 21.0 s fetched.
+ *
+ * Called from a template scriptlet:
+ *   var BOOT = <?!= pageBootJson_(user, company, readsJson) ?>;
+ * readsJson is a JSON array of { action, data }, run IN ORDER. Put the page's
+ * get_page_versions FIRST: stamps read before the data can only be older than
+ * it, so the live watch errs toward an extra refresh, never a missed change.
+ *
+ *   - READ ONLY. A read that is not a read action is refused before dispatch,
+ *     so a template can never cause a write by being rendered.
+ *   - Same authorization as an apiRouter read: each runs executeCompanyAction_
+ *     with the user doGet has already authenticated.
+ *   - FAILS OPEN, per read. A failed read embeds reply: null and the page
+ *     fetches it as it did before; rendering the page never fails because of this.
+ *
+ * Returns { server_ms, reads: [{ action, data, ok, reply, error?, ms }] } as a
+ * JS expression, with '<' escaped so the JSON cannot close the <script> it is
+ * written into. The client side is Page_Boot.html (PageBoot.wrap).
+ */
+function pageBootJson_(user, companyUid, readsJson) {
+  var t0 = Date.now();
+  var out = { server_ms: 0, reads: [] };
+  var reads = [];
+  try {
+    reads = typeof readsJson === 'string' ? JSON.parse(readsJson || '[]') : (readsJson || []);
+    if (!Array.isArray(reads)) reads = [];
+  } catch (parseErr) {
+    out.error = 'bad reads: ' + String((parseErr && parseErr.message) || parseErr);
+    reads = [];
+  }
+  reads.forEach(function (r) {
+    var t1 = Date.now();
+    var action = String((r && r.action) || '');
+    var data = (r && r.data && typeof r.data === 'object') ? r.data : {};
+    var entry = { action: action, data: data, ok: false, reply: null, ms: 0 };
+    try {
+      if (!user) throw new Error('no authenticated user');
+      if (!isReadAction_(action)) throw new Error('page boot is read-only: ' + action);
+      entry.reply = jsonSafe_(executeCompanyAction_({ target_system: String(companyUid || ''), module_action: action, data: data }, '', user));
+      entry.ok = !!(entry.reply && entry.reply.status !== 'error');
+      if (!entry.ok) entry.reply = null;
+    } catch (e) {
+      entry.reply = null;
+      entry.error = String((e && e.message) || e);
+    }
+    entry.ms = Date.now() - t1;
+    out.reads.push(entry);
+  });
+  out.server_ms = Date.now() - t0;
+  return JSON.stringify(out).replace(/</g, '\\u003c');
+}
+
 /** Friendly access-denied page — unified §5.4. Never reveals attempted page/action (§5.4). Theme tokens only. */
 function renderAccessDeniedPage_(pageTitle, backUrl, companyUid) {
   const theme = getCompanyBlockTheme_(companyUid);
@@ -6671,6 +6736,34 @@ function apiRouter(request) {
   return apiRouter_(request);
 }
 
+/* [diag-timing] The platform floor: no router, no session, no storage, no
+ * company code. It returns a duration and nothing else — no data and nothing
+ * about the caller — so it needs no session. The et_customers measurement page
+ * sets it beside the 'ping' route and get_page_versions: the gaps between the
+ * three name where a request's fixed cost goes. */
+function diagPing() {
+  return { status: 'success', global_init_ms: Date.now() - __GLOBAL_LOAD_T0__ };
+}
+
+/* [diag-timing] Marks set inside executeCompanyAction_, around the company
+ * module's own dispatch. null outside a request that asked for timing. */
+var _diagMarks_ = null;
+
+/* [diag-timing] The two slices apiRouterRequest_ cannot see: project load
+ * before apiRouter_ was entered, and the telemetry either side of the request.
+ * Only a reply that already carries a diag breakdown is touched. */
+function diagTimingFinish_(result, entryMs, perfBeginMs, finishStartMs) {
+  try {
+    var t = result && typeof result === 'object' && result.router_timing_ms;
+    if (!t || !t.diag) return;
+    var now = Date.now();
+    t.global_init = Math.max(0, entryMs - __GLOBAL_LOAD_T0__);
+    t.perf_begin = perfBeginMs;
+    t.perf_finish = Math.max(0, now - finishStartMs);
+    t.server_total = Math.max(0, now - __GLOBAL_LOAD_T0__);
+  } catch (e) {}
+}
+
 function isReadAction_(action) {
   return action === 'ping' || action.indexOf('get_') === 0 || action.indexOf('admin_list_') === 0;
 }
@@ -6702,7 +6795,9 @@ function requestMayWrite_(request) {
  * value passes through untouched. Telemetry is fully wrapped and fails open:
  * it can neither change nor delay the response. */
 function apiRouter_(request) {
+  var entryMs = Date.now();   // [diag-timing]
   var perfCtx = perfBeginRequest_(request);
+  var perfBeginMs = Date.now() - entryMs;
   var result;
   /* [live-notice] The request id every write already carries; who/name are
      filled in once the session is authenticated (apiRouterRequest_). */
@@ -6716,7 +6811,9 @@ function apiRouter_(request) {
   } finally {
     _liveReqMeta_ = null;
   }
+  var finishStartMs = Date.now();
   perfFinishRequest_(perfCtx, request, result, null);
+  diagTimingFinish_(result, entryMs, perfBeginMs, finishStartMs);
   return result;
 }
 
@@ -6726,6 +6823,10 @@ function apiRouterRequest_(request, perfCtx) {
   var authFinishedMs = 0;
   var handlerStartedMs = 0;
   var handlerFinishedMs = 0;
+  var touchStartedMs = 0;   // [diag-timing]
+  var killStartedMs = 0;
+  var diagTiming = !!(request && request.diag_timing === true);
+  _diagMarks_ = diagTiming ? {} : null;
   // Request-scoped memoization for getAllRecords_() — start every invocation
   // with a fresh cache.
   //
@@ -6766,6 +6867,7 @@ function apiRouterRequest_(request, perfCtx) {
         return { status: 'error', code: 'SESSION_EXPIRED' };
       }
       authUser = auth.user;
+      touchStartedMs = new Date().getTime();
       try { SessionManager_.touch(request.sessionToken); } catch (e) {}
     } else if (request.sessionToken) {
       /* Optional identity lets unauthenticated telemetry attribute a legitimate
@@ -6781,6 +6883,7 @@ function apiRouterRequest_(request, perfCtx) {
       _liveReqMeta_.name = String(authUser.name || '').trim();
     }
 
+    killStartedMs = new Date().getTime();
     // System kill switch — blocks EVERY action for EVERYONE once engaged,
     // with exactly one exception: an authenticated SUPER ADMIN calling
     // toggle_kill_switch (the recovery lever). Auth therefore runs BEFORE
@@ -6806,12 +6909,16 @@ function apiRouterRequest_(request, perfCtx) {
     // Log successful operation
     try { logSystemAction_(request, authUser, result, status, errorMessage, startTime); } catch (loggingError) {}
 
-    // Super-admin-only diagnostic for the explicit MySQL connection probe.
-    // It is returned to the caller only; no database or application state changes.
-    if (request.action === 'company_action' &&
+    // Super-admin-only diagnostic for the explicit MySQL connection probe, and
+    // [diag-timing] for any request that asks with diag_timing: true. It is
+    // returned to the caller only; no database or application state changes.
+    var mysqlProbe = request.action === 'company_action' &&
         request.payload && request.payload.module_action === 'get_mysql_connection_probe' &&
-        authUser && authUser.isSuperAdmin && result && result.status === 'ok') {
+        result && result.status === 'ok';
+    if ((mysqlProbe || diagTiming) && authUser && authUser.isSuperAdmin &&
+        result && typeof result === 'object') {
       var routerFinishedMs = new Date().getTime();
+      var marks = _diagMarks_ || {};
       result.router_timing_ms = {
         server_total_before_return: routerFinishedMs - routerStartedMs,
         setup_before_auth: Math.max(0, authStartedMs - routerStartedMs),
@@ -6820,7 +6927,21 @@ function apiRouterRequest_(request, perfCtx) {
         handler: Math.max(0, handlerFinishedMs - handlerStartedMs),
         logging_after_handler: Math.max(0, routerFinishedMs - handlerFinishedMs)
       };
+      if (diagTiming) {
+        var t = result.router_timing_ms;
+        t.diag = true;
+        t.auth_validate = touchStartedMs ? Math.max(0, touchStartedMs - authStartedMs) : t.auth_and_session;
+        t.session_touch = touchStartedMs ? Math.max(0, authFinishedMs - touchStartedMs) : 0;
+        t.kill_switch = killStartedMs ? Math.max(0, handlerStartedMs - killStartedMs) : 0;
+        if (marks.dispatchStart && marks.dispatchEnd) {
+          t.company_preamble = Math.max(0, marks.dispatchStart - handlerStartedMs);
+          t.dispatch = Math.max(0, marks.dispatchEnd - marks.dispatchStart);
+          t.after_dispatch = Math.max(0, handlerFinishedMs - marks.dispatchEnd);
+        }
+        t.sheet_reads = (typeof getSheetsReadCount_ === 'function') ? getSheetsReadCount_() : '';
+      }
     }
+    _diagMarks_ = null;
 
     return result;
   } catch (err) {
@@ -7268,7 +7389,11 @@ function executeCompanyAction_(payload, sessionToken, authUser) {
       var __dt = docTypeForAction_(safePayload.module_action);
       if (__dt) validateBeforeWrite(__dt, safePayload, dbId);
     }
-    return company.dispatch(safePayload, authUser, dbId, guardCtx);
+    var marks = (typeof _diagMarks_ !== 'undefined') ? _diagMarks_ : null;   // [diag-timing]
+    if (marks) marks.dispatchStart = Date.now();
+    var dispatched = company.dispatch(safePayload, authUser, dbId, guardCtx);
+    if (marks) marks.dispatchEnd = Date.now();
+    return dispatched;
   }, { recovery: recovery });
 }
 

@@ -3,7 +3,6 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <?!= include('Page_Boot'); ?>
   <title>Testing System — العملاء والموردون</title>
   <?!= include('CSS_Tokens'); ?>
   <?!= include('UI_Components'); ?>
@@ -35,21 +34,9 @@
   var CURRENT_ACTION = '<?!= currentAction ?>';
   var DIRECTION_FILTER = '';
 
-  /* [page-boot] How this load gets its first data. Decided on the server from
-     the real query string (S23) and written as one of three fixed words:
-       embed   (default) the table and the stamps come inside this HTML; the
-               balances follow in one background call.
-       fetch   ?embed=0 — the same split reads, fetched after the page loads.
-       legacy  ?embed=0&split=0 — one get_et_parties with the balances in it,
-               which is how this page loaded before. Kept only so the perf page
-               (et_customers_perf) can measure against it. */
-  var BOOT_MODE = '<?!= JSON.parse(pageParams || "{}").embed === "0" ? (JSON.parse(pageParams || "{}").split === "0" ? "legacy" : "fetch") : "embed" ?>';
-  /* get_page_versions FIRST: stamps read before the data are never newer than
-     it, so the live watch errs toward an extra refresh, never a missed change.
-     The second read's data must match what fetchParties sends on first load. */
-  var BOOT = <?!= JSON.parse(pageParams || "{}").embed === "0" ? "null" : pageBootJson_(user, '37fc50edf1424abd', '[{"action":"get_page_versions","data":{"page":"et_customers"}},{"action":"get_et_parties","data":{"direction":"","skipBalances":true}}]') ?>;
-  /* INSIDE the device cache, so its stamp check is answered from BOOT too. */
-  if (window.PageBoot) companyCall = PageBoot.wrap(companyCall, BOOT);
+  /* [page-boot] This page's first reads — the stamps, then get_et_parties
+     { direction: '', skipBalances: true } — arrive inside its HTML (declared in
+     Page_Boot_Reads.js, answered by API.call). Nothing below depends on it. */
 
   /* [live-notice D6] list replies from the device cache, trusted by the stamps */
   if (window.UIC && UIC.Live && UIC.Live.viewCache) companyCall = UIC.Live.viewCache(companyCall, { company: '37fc50edf1424abd', page: 'et_customers', view: 'list', lists: ['get_et_parties'] });
@@ -83,31 +70,20 @@
   var balancesPromise = null;
 
   function fetchParties(opts) {
-    var legacy = BOOT_MODE === 'legacy';
     UIC.readSkeleton('parties-content', { message: [
       'جاري تحميل قائمة العملاء والموردين...',
       'لحظة، جاري عرض الجدول...'
     ] });
-    companyCall('get_et_parties', legacy ? { direction: DIRECTION_FILTER } : { direction: DIRECTION_FILTER, skipBalances: true })
+    companyCall('get_et_parties', { direction: DIRECTION_FILTER, skipBalances: true })
       .then(function (r) {
         window.__directionOptions = r.direction_options || [];
         window.__typeOptions = r.type_options || [];
         window.__countryOptions = r.country_options || [];
         window.__regionOptions = r.region_options || [];
-        if (legacy) BALANCES = null;
         renderParties(r.parties || []);
-        /* The balances land later on the split modes, so a measured series
-           waits for them; on legacy they arrived with the table. */
-        if (window.PageBoot) {
-          PageBoot.contentShown('et_customers', { mode: BOOT_MODE, boot: BOOT, waitFor: legacy ? '' : 'balances' });
-          if (legacy) PageBoot.mark('balances');
-        }
-        if (!legacy && !(opts && opts.keepBalances && BALANCES)) fetchBalances();
+        if (!(opts && opts.keepBalances && BALANCES)) fetchBalances();
       })
-      .catch(function (e) {
-        showError(e);
-        if (window.PageBoot) PageBoot.contentShown('et_customers', { mode: BOOT_MODE, boot: BOOT, failed: true });
-      })
+      .catch(function (e) { showError(e); })
       .finally(function () { UI.hideSpinner(); try{schedulePrefetch();}catch(e){} });
   }
 
@@ -219,7 +195,7 @@
   }
 
   function exportCustomers() {
-    if (BOOT_MODE !== 'legacy' && !BALANCES && balancesPromise) {
+    if (!BALANCES && balancesPromise) {
       UI.showSpinner(['جاري تحميل الأرصدة قبل التصدير...']);
       balancesPromise.then(function () { UI.hideSpinner(); exportCustomers(); });
       return;
@@ -324,17 +300,6 @@
 
   if (window.ET_PACKS) companyCall = ET_PACKS.wrapCall(companyCall, { page: 'et_customers', list: 'get_et_parties', refresh: function () { fetchParties(); } });
   load();
-
-  /* [page-boot] The speed panel — super admin only, drawn over the page. */
-  if (window.PageBoot) PageBoot.panel({
-    show: IS_SUPER_ADMIN, page: 'et_customers', title: 'العملاء والموردون', token: SESSION_TOKEN,
-    secondary: { mark: 'balances', label: 'الأرصدة' },
-    modes: [
-      { mode: 'legacy', label: 'القديمة', q: '&embed=0&split=0', hint: 'بعد تحميل الصفحة: طلب التحديثات، وبعده طلب واحد فيه الجدول والأرصدة (٨ شيتات).' },
-      { mode: 'fetch', label: 'طلب بعد التحميل', q: '&embed=0', hint: 'بعد تحميل الصفحة: الجدول لوحده (شيت واحد)، والأرصدة بعده في الخلفية.' },
-      { mode: 'embed', label: 'جوه الصفحة', q: '', hint: 'الجدول جوه الصفحة نفسها، والأرصدة بعده في الخلفية. دي الطريقة الافتراضية.' }
-    ]
-  });
 
   /* [RT-6] Another device's change to this page arrives on its own. The poll
      reads timestamps from cache, never a spreadsheet, and stands down while the

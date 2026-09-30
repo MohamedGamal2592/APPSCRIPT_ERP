@@ -1,0 +1,757 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <?!= include('Page_Boot'); ?>
+  <title>Testing System — قياس الاستجابة: erp_test_customer_vendor</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <!-- The shared bundle is still included for ONE reason: API.call and its
+       session/transport handling live in Client_Helpers, and Client_Helpers
+       reaches into UIC in places. Nothing on this page RENDERS through the
+       system UI — no appShell, no dataTable, no UIC.Live. The markup, the
+       styles and the table below are all local, so what you are looking at is
+       the data and the clock, not the framework.
+
+       The cost of including the bundle is itself measured: the «تحميل الصفحة»
+       row shows how much of the wait happens before any request is sent. -->
+  <style>
+    :root {
+      --ink: #101418; --ink-soft: #5b6572; --line: #dfe3e8;
+      --bg: #f6f7f9; --card: #ffffff;
+      --ok: #0a7d34; --warn: #b45309; --bad: #b42318; --accent: #1d4ed8;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 16px; background: var(--bg); color: var(--ink);
+      font-family: Cairo, system-ui, "Segoe UI", sans-serif; font-size: 14px;
+    }
+    h1 { font-size: 17px; margin: 0 0 4px; }
+    .sub { color: var(--ink-soft); font-size: 12px; margin-bottom: 14px; }
+    .card {
+      background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+      padding: 12px 14px; margin-bottom: 14px;
+    }
+    .card > h2 { font-size: 14px; margin: 0 0 10px; }
+    .bar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+    button {
+      font: inherit; font-weight: 700; cursor: pointer; padding: 8px 14px;
+      border-radius: 6px; border: 1px solid var(--line); background: #fff; color: var(--ink);
+    }
+    button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    button[disabled] { opacity: .5; cursor: default; }
+    table { border-collapse: collapse; width: 100%; font-size: 13px; }
+    th, td { border: 1px solid var(--line); padding: 6px 8px; text-align: right; vertical-align: top; }
+    th { background: #eef1f4; font-weight: 700; white-space: nowrap; position: sticky; top: 0; }
+    /* Numbers are read by comparing them down a column, so they are tabular
+       and LTR even inside an RTL page. */
+    td.n, th.n { font-variant-numeric: tabular-nums; font-family: ui-monospace, Consolas, monospace; direction: ltr; text-align: left; }
+    .scroll { max-height: 62vh; overflow: auto; border: 1px solid var(--line); border-radius: 6px; }
+    .muted { color: var(--ink-soft); }
+    .ok { color: var(--ok); } .warn { color: var(--warn); } .bad { color: var(--bad); }
+    .verdict { margin: 0; padding: 10px 12px; background: #f0f4ff; border: 1px solid #c7d4f7; border-radius: 6px; line-height: 1.8; }
+    .verdict b { font-variant-numeric: tabular-nums; }
+    .note { font-size: 12px; color: var(--ink-soft); margin-top: 8px; line-height: 1.7; }
+    .pill { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 700; border: 1px solid var(--line); }
+  </style>
+</head>
+<body dir="rtl">
+
+<h1>قياس الاستجابة — <span dir="ltr">erp_test_customer_vendor</span></h1>
+<div class="sub">صفحة تشخيص. لا تستخدم واجهة النظام في العرض: الجدول والتنسيق محليان بالكامل.</div>
+
+<div class="card">
+  <h2>١ — تحليل الاستجابة</h2>
+  <div class="bar">
+    <button class="primary" id="btn-run" onclick="runProbes(1)">قياس مرة واحدة</button>
+    <button id="btn-run5" onclick="runProbes(5)">قياس ٥ مرات</button>
+    <button id="btn-clear" onclick="clearStats()">مسح القياسات</button>
+  </div>
+  <div id="verdict" class="verdict muted">اضغط «قياس» لبدء القياس. أول قياس يتضمن بدء تشغيل Apps Script البارد، فالقيمة الثانية هي القيمة الواقعية.</div>
+  <div id="probe-table" style="margin-top:12px;"></div>
+  <div class="note" id="load-note"></div>
+</div>
+
+<div class="card">
+  <h2>٢ — فتح صفحة العملاء الحقيقية: ٣ طرق</h2>
+  <div class="bar">
+    <button class="primary" id="btn-nav-series" onclick="navSeries(3)">قياس ٣ مرات لكل طريقة</button>
+    <button id="btn-nav-legacy" onclick="navProbe('legacy')">مرة — القديمة</button>
+    <button id="btn-nav-fetch" onclick="navProbe('fetch')">مرة — طلب بعد التحميل</button>
+    <button id="btn-nav-embed" onclick="navProbe('embed')">مرة — جوه الصفحة</button>
+    <button id="btn-nav-clear" onclick="navClear()">مسح</button>
+  </div>
+  <div id="nav-now" class="note" style="margin:0 0 8px;"></div>
+  <div id="nav-verdict" class="verdict muted">القياس بيفتح صفحة <span dir="ltr">et_customers</span> الحقيقية من الأول، ويحسب من الضغطة لحد ما الجدول يظهر، وبعدين يرجعك هنا.</div>
+  <div id="nav-table" style="margin-top:12px;"></div>
+  <div class="note">
+    «القديمة»: الصفحة زي ما كانت — بعد التحميل طلب واحد فيه الجدول والأرصدة (٨ شيتات).
+    «طلب بعد التحميل»: الجدول لوحده بعد التحميل، والأرصدة بعده في الخلفية.
+    «جوه الصفحة»: الجدول جوه الصفحة نفسها، والأرصدة بعده في الخلفية.
+    قبل كل فتحة بيتمسح الكاش اللي على الجهاز، علشان الطرق التلاتة تبدأ من نفس النقطة — الزيارة التانية لنفس الصفحة في الاستخدام العادي أسرع من كده في الطرق التلاتة.
+    «الجدول ظهر» = الصفوف على الشاشة؛ في الطريقتين الجداد عمود الرصيد بيبان «…» لحظات بعدها.
+  </div>
+</div>
+
+<div class="card">
+  <h2>٣ — أين يذهب وقت الطلب؟ (تفصيل الحد الأدنى)</h2>
+  <div id="breakdown-verdict" class="verdict muted">يظهر بعد أول قياس. التفصيل من داخل الخادم يظهر لحساب السوبر أدمن فقط.</div>
+  <div id="breakdown-table" style="margin-top:12px;"></div>
+  <div class="note">
+    كل عمود طلب، وكل صف مرحلة. «الشبكة + تشغيل Apps Script» = الوقت عند المتصفح ناقص كل ما قاسه الخادم من أول سطر في المشروع —
+    يعني الإرسال، الطابور عند Google، تشغيل البيئة، وترجمة الكود قبل أول سطر. «غير محسوب» = وقت داخل الخادم بين المراحل لم نضع عليه علامة.
+    كل رقم هو الوسيط.
+  </div>
+</div>
+
+<div class="card">
+  <h2>٤ — بيانات الجدول <span class="muted" style="font-weight:400;font-size:12px;">(<span id="row-count">—</span> سجل، العرض <span id="render-ms">—</span>)</span></h2>
+  <div id="data-table" class="muted">لم تُحمَّل البيانات بعد.</div>
+</div>
+
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var COMPANY = '37fc50edf1424abd';
+  var TABLE = 'erp_test_customer_vendor';
+
+  /* ── Every container is looked up through these ────────────────────────────
+   *
+   * This page renders into STATIC markup rather than into a container some
+   * helper built, so a single renamed id would otherwise throw on the first
+   * assignment and take the whole script down with it — which is exactly how a
+   * diagnostic page ends up blank at the moment you need it. Nothing here
+   * assumes an element exists. */
+  function el(id) { return document.getElementById(id); }
+  function setHtml(id, html) { var e = el(id); if (e) e.innerHTML = html; return !!e; }
+  function setText(id, t) { var e = el(id); if (e) e.textContent = t; return !!e; }
+  function setBusyBtns(disabled) {
+    ['btn-run', 'btn-run5', 'btn-clear'].forEach(function (b) {
+      var e = el(b); if (e) e.disabled = disabled;
+    });
+  }
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function ms(n) { return (n == null || isNaN(n)) ? '—' : (Math.round(n) + ' ms'); }
+  function kb(n) { return (n == null) ? '—' : (n < 1024 ? n + ' B' : (n / 1024).toFixed(1) + ' KB'); }
+
+  /* ── The transport, measured two ways ──────────────────────────────────────
+   *
+   * rawCall goes straight to google.script.run.apiRouter with the same envelope
+   * API._dispatch builds — { action, payload, sessionToken }. It therefore
+   * measures the SERVER: Apps Script start-up, the auth preamble, the handler,
+   * and serialisation of the reply.
+   *
+   * apiCall goes through API.call, which adds the request guard, the optional
+   * coordinator and the MySQL-read shortcut. Running both against the same
+   * action is what separates «the server is slow» from «our client layers are
+   * slow», and those two findings have nothing to do with each other.
+   *
+   * Neither is wrapped in UIC.Live.viewCache or ET_PACKS here. That is
+   * deliberate: a cache hit would measure localStorage, and the question on
+   * this page is what a real round trip costs.
+   */
+  function rawCall(moduleAction, data) {
+    return new Promise(function (resolve, reject) {
+      var settled = false;
+      /* An error reply is a FAILED probe, not a fast success: SESSION_EXPIRED
+         comes back as a 43-byte reply in ~6 s and would otherwise be recorded
+         as a quick read of zero rows. */
+      function ok(r) {
+        if (settled) return;
+        if (r && r.status === 'error') { bad(new Error(String(r.code || '') + (r.message ? (r.code ? ' — ' : '') + r.message : '') || 'error')); return; }
+        settled = true; resolve(r);
+      }
+      function bad(e) { if (!settled) { settled = true; reject(e || new Error('transport')); } }
+      try {
+        google.script.run.withSuccessHandler(ok).withFailureHandler(bad).apiRouter({
+          action: 'company_action',
+          payload: { target_system: COMPANY, module_action: moduleAction, data: data || {} },
+          sessionToken: SESSION_TOKEN,
+          diag_timing: true   /* the server's stage breakdown; super admin only */
+        });
+      } catch (e) { bad(e); }
+    });
+  }
+  /* A router route that is not company_action: auth, session, kill switch and
+     logging, but no company code at all. */
+  function routeCall(action) {
+    return new Promise(function (resolve, reject) {
+      try {
+        google.script.run.withSuccessHandler(function (r) {
+          if (r && r.status === 'error') reject(new Error(String(r.code || r.message || 'error')));
+          else resolve(r);
+        }).withFailureHandler(reject).apiRouter({
+          action: action, payload: {}, sessionToken: SESSION_TOKEN, diag_timing: true
+        });
+      } catch (e) { reject(e); }
+    });
+  }
+  /* The platform floor: a global function that does nothing. No router, no
+     session, no storage. */
+  function bareCall() {
+    return new Promise(function (resolve, reject) {
+      try { google.script.run.withSuccessHandler(resolve).withFailureHandler(reject).diagPing(); }
+      catch (e) { reject(e); }
+    });
+  }
+  function apiCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: COMPANY, module_action: moduleAction, data: data || {}
+    }, SESSION_TOKEN);
+  }
+
+  /* ── The probes ────────────────────────────────────────────────────────────
+   *
+   * Three measurements, chosen so that the DIFFERENCES between them name a
+   * cause. A single total tells you the page is slow; these tell you which
+   * part to open.
+   *
+   *   floor        get_page_versions — authorises, then reads CacheService
+   *                stamps. It touches NO sheet. Whatever this costs is the
+   *                unavoidable price of asking this deployment anything at all:
+   *                Apps Script start-up plus the auth preamble.
+   *
+   *   table_raw    get_et_parties over erp_test_customer_vendor, straight to
+   *                apiRouter. It is floor + the real work: tlDbList_ reads the
+   *                sheet, customerBalanceMap_ joins the movement totals, and
+   *                three distinctValues_ passes build the pickers.
+   *
+   *   table_api    the same action through API.call, so the client layers show
+   *                up as the gap between it and table_raw.
+   *
+   * Derived below: data work = table_raw − floor, client overhead =
+   * table_api − table_raw.
+   *
+   * The split read — the tc_stock_revision pattern. get_stock_revision reads
+   * ONE sheet and returns it whole; anything expensive (get_system_qty) is a
+   * separate call the list never waits on. get_et_parties instead reads eight
+   * sheets, seven of them only to fill the الرصيد column. So:
+   *
+   *   table_lean   get_et_parties { skipBalances } — customer_vendor alone.
+   *                This is what the user waits for before the table paints.
+   *   balances     get_et_parties { balancesOnly } — the seven movement sheets,
+   *                the id → balance map and nothing else.
+   *   split_par    both fired together, as the real page would: «paint» is
+   *                when the table could appear, the total is when the balance
+   *                column is filled. The merged rows are checked against the
+   *                last table_raw reply, so a faster read that returns
+   *                different money shows up as a mismatch, not as a win.
+   */
+  var PROBES = [
+    { id: 'bare', label: 'Apps Script فاضي', detail: 'diagPing — دالة لا تفعل شيئًا: بدون جلسة ولا تخزين ولا كود شركة',
+      run: bareCall },
+    { id: 'ping', label: 'ping عبر الراوتر', detail: 'التحقق من الجلسة + مفتاح الإيقاف + السجل، بدون كود الشركة',
+      run: function () { return routeCall('ping'); } },
+    { id: 'floor', label: 'الحد الأدنى للطلب', detail: 'get_page_versions — تصريح + طوابع من الذاكرة، بدون قراءة الشيت',
+      run: function () { return rawCall('get_page_versions', { page: 'et_customers' }); } },
+    { id: 'table_raw', label: 'قراءة الجدول (مباشر)', detail: 'get_et_parties عبر apiRouter — قراءة الشيت + أرصدة + قوائم',
+      run: function () { return rawCall('get_et_parties', { direction: '' }); }, rows: function (r) { return (r && r.parties) || []; } },
+    { id: 'table_api', label: 'قراءة الجدول (عبر API.call)', detail: 'نفس الطلب مع طبقات العميل: حماية الطلب والمنسّق',
+      run: function () { return apiCall('get_et_parties', { direction: '' }); }, rows: function (r) { return (r && r.parties) || []; } },
+    { id: 'table_lean', label: 'الجدول فقط (طريقة جرد المخزون)', detail: 'get_et_parties { skipBalances } — شيت واحد، بدون أرصدة',
+      run: function () { return rawCall('get_et_parties', { direction: '', skipBalances: true }); }, rows: function (r) { return (r && r.parties) || []; } },
+    { id: 'balances', label: 'الأرصدة فقط', detail: 'get_et_parties { balancesOnly } — حركات المبيعات والمشتريات والكاش',
+      run: function () { return rawCall('get_et_parties', { balancesOnly: true }); }, rows: function (r) { return Object.keys((r && r.balances) || {}); } },
+    { id: 'split_par', label: 'الجدول + الأرصدة معًا (بالتوازي)', detail: 'الطلبان في نفس اللحظة، كما ستفعل الصفحة الحقيقية',
+      run: runSplitParallel, rows: function (r) { return (r && r.parties) || []; } }
+  ];
+
+  var stats = {};   // id -> { samples: [ms], paint: [ms], bytes, rows, error }
+  function freshStats() { return { samples: [], paint: [], timings: [], bytes: null, rows: null, error: '' }; }
+  PROBES.forEach(function (p) { stats[p.id] = freshStats(); });
+
+  /* id -> balance from the last full get_et_parties, the reference the split
+     read's balances are checked against. */
+  var lastFullBalances = null;
+  var splitCheck = null;   // { compared, mismatched, sample }
+
+  function runSplitParallel() {
+    var t0 = performance.now(), paintAt = null;
+    var list = rawCall('get_et_parties', { direction: '', skipBalances: true })
+      .then(function (r) { paintAt = performance.now() - t0; return r; });
+    var bal = rawCall('get_et_parties', { balancesOnly: true });
+    return Promise.all([list, bal]).then(function (x) {
+      stats.split_par.paint.push(paintAt);
+      var map = (x[1] && x[1].balances) || {};
+      var parties = ((x[0] && x[0].parties) || []).map(function (p) {
+        var o = {}; Object.keys(p).forEach(function (k) { o[k] = p[k]; });
+        o.balance = map[String(p.id)] || 0;
+        return o;
+      });
+      if (lastFullBalances) {
+        var compared = 0, bad = [];
+        parties.forEach(function (p) {
+          var want = lastFullBalances[String(p.id)];
+          if (want === undefined) return;
+          compared++;
+          if (Math.abs(Number(want) - Number(p.balance)) > 0.005) bad.push(p.id);
+        });
+        splitCheck = { compared: compared, mismatched: bad.length, sample: bad.slice(0, 5) };
+      }
+      return { parties: parties };
+    });
+  }
+
+  function median(a) {
+    if (!a.length) return null;
+    var s = a.slice().sort(function (x, y) { return x - y; });
+    var m = Math.floor(s.length / 2);
+    return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+  }
+  function lo(a) { return a.length ? Math.min.apply(null, a) : null; }
+  function hi(a) { return a.length ? Math.max.apply(null, a) : null; }
+
+  function renderProbeTable() {
+    var h = '<table><thead><tr>' +
+      '<th>القياس</th><th class="n">الأخير</th><th class="n">الأدنى</th><th class="n">الوسيط</th>' +
+      '<th class="n">الأعلى</th><th class="n">عدد</th><th class="n">حجم الرد</th><th>ملاحظة</th>' +
+      '</tr></thead><tbody>';
+    PROBES.forEach(function (p) {
+      var s = stats[p.id], a = s.samples;
+      h += '<tr>' +
+        '<td><b>' + esc(p.label) + '</b><div class="muted" style="font-size:11px;">' + esc(p.detail) + '</div></td>' +
+        '<td class="n">' + ms(a.length ? a[a.length - 1] : null) + '</td>' +
+        '<td class="n">' + ms(lo(a)) + '</td>' +
+        '<td class="n">' + ms(median(a)) + '</td>' +
+        '<td class="n">' + ms(hi(a)) + '</td>' +
+        '<td class="n">' + a.length + '</td>' +
+        '<td class="n">' + kb(s.bytes) + '</td>' +
+        '<td>' + (s.error ? '<span class="bad">' + esc(s.error) + '</span>'
+                          : (s.rows == null ? '' : '<span class="muted">' + s.rows + ' سجل</span>') +
+                            (s.paint.length ? '<div class="muted" style="font-size:11px;">الجدول ظهر بعد ' + ms(median(s.paint)) + '</div>' : '')) + '</td>' +
+        '</tr>';
+    });
+    h += '</tbody></table>';
+    setHtml('probe-table', h);
+  }
+
+  /* The point of the whole page: turn three numbers into one sentence about
+     where to look. Uses the MEDIAN, not the last sample, so a single cold
+     start cannot decide the verdict. */
+  function renderVerdict() {
+    var f = median(stats.floor.samples);
+    var tr = median(stats.table_raw.samples);
+    var ta = median(stats.table_api.samples);
+    var box = el('verdict');
+    if (!box) return;
+    if (f == null || tr == null) {
+      box.className = 'verdict muted';
+      box.innerHTML = 'قياس غير مكتمل.';
+      return;
+    }
+    var work = Math.max(0, tr - f);
+    var client = (ta == null) ? null : Math.max(0, ta - tr);
+    var bytes = stats.table_raw.bytes;
+    var rows = stats.table_raw.rows;
+    var share = tr > 0 ? Math.round((work / tr) * 100) : 0;
+
+    var focus;
+    if (share >= 60) {
+      focus = '<span class="bad">التركيز على الخادم:</span> معظم الوقت (<b>' + share + '%</b>) يذهب في العمل نفسه — ' +
+              'قراءة الشيت و<span dir="ltr">customerBalanceMap_</span> و<span dir="ltr">distinctValues_</span>. ' +
+              'الأرصدة تُحسب من حركات الكاش والمبيعات، وهي أغلى ما في هذا الطلب.';
+    } else if (share <= 25) {
+      focus = '<span class="warn">التركيز على الحد الأدنى:</span> العمل الفعلي لا يمثل سوى <b>' + share + '%</b>. ' +
+              'الباقي هو بدء تشغيل Apps Script والتصريح، ولا تُصلحه ذاكرة مؤقتة على البيانات — ' +
+              'يُصلحه تقليل عدد الطلبات أو تسخينها.';
+    } else {
+      focus = 'الوقت موزّع: العمل الفعلي <b>' + share + '%</b> والباقي حد أدنى للطلب. ' +
+              'أي تحسين يجب أن يُقاس بعده مباشرة.';
+    }
+
+    var clientLine = (client == null) ? ''
+      : '<br>طبقات العميل تضيف <b>' + ms(client) + '</b>' +
+        (client > 150 ? ' <span class="bad">— قيمة تستحق النظر</span>'
+                      : ' <span class="ok">— ضمن الضجيج</span>') + '.';
+
+    var sizeLine = (bytes == null || !rows) ? ''
+      : '<br>حجم الرد <b>' + kb(bytes) + '</b> لـ <b>' + rows + '</b> سجل (' +
+        kb(Math.round(bytes / rows)) + ' للسجل)' +
+        (bytes > 300000 ? ' <span class="bad">— الحجم نفسه صار تكلفة</span>' : '') + '.';
+
+    box.className = 'verdict';
+    box.innerHTML =
+      'الحد الأدنى للطلب <b>' + ms(f) + '</b> · قراءة الجدول <b>' + ms(tr) + '</b> · ' +
+      'العمل الفعلي <b>' + ms(work) + '</b>.<br>' + focus + clientLine + sizeLine + splitVerdict(f, tr);
+  }
+
+  /* Old read against the split one. Medians again, and the saving is also
+     stated against the floor: no read can go below get_page_versions, so «how
+     much of the removable time was removed» is the honest figure. */
+  function splitVerdict(f, tr) {
+    var tl = median(stats.table_lean.samples);
+    var bl = median(stats.balances.samples);
+    var sp = median(stats.split_par.samples);
+    var paint = median(stats.split_par.paint);
+    if (tl == null) return '';
+    var saved = Math.max(0, tr - tl);
+    var pct = tr > 0 ? Math.round((saved / tr) * 100) : 0;
+    var removable = Math.max(0, tr - f);
+    var ofWork = removable > 0 ? Math.round((saved / removable) * 100) : 0;
+    var out = '<hr style="border:0;border-top:1px solid #c7d4f7;margin:8px 0;">' +
+      '<b>الطريقة الجديدة (طريقة جرد المخزون):</b> الجدول لوحده <b>' + ms(tl) + '</b> بدل <b>' + ms(tr) + '</b> — ' +
+      (saved > 0 ? '<span class="ok">أسرع بـ <b>' + ms(saved) + '</b> (' + pct + '%)</span>، أي ' + ofWork + '% من الوقت القابل للتوفير فوق الحد الأدنى.'
+                 : '<span class="warn">لا فرق يُذكر.</span>');
+    if (bl != null) out += '<br>الأرصدة لوحدها <b>' + ms(bl) + '</b> — دي تكلفة الشيتات السبعة اللي كانت الصفحة مستنياها.';
+    if (sp != null) {
+      out += '<br>بالتوازي: الجدول يظهر بعد <b>' + ms(paint) + '</b>، وعمود الرصيد يكتمل بعد <b>' + ms(sp) + '</b>' +
+        (sp > tr ? ' <span class="warn">(الاكتمال أبطأ من الطلب القديم — الطلبان يتزاحمان على الخادم)</span>' : '') + '.';
+    }
+    if (splitCheck) {
+      out += '<br>مطابقة الأرصدة مع الطلب القديم: ' + (splitCheck.mismatched
+        ? '<span class="bad">' + splitCheck.mismatched + ' من ' + splitCheck.compared + ' مختلفة (مثال: ' + esc(splitCheck.sample.join(', ')) + ')</span>'
+        : '<span class="ok">' + splitCheck.compared + ' من ' + splitCheck.compared + ' متطابقة</span>');
+    }
+    return out;
+  }
+
+  /* ── Where the fixed cost goes ─────────────────────────────────────────────
+   *
+   * Each stage is the median over the samples that carried a server timing.
+   * «network» is derived per sample (client − server_total) before the median,
+   * so it is the gap for the same request, not the difference of two medians.
+   * «unaccounted» is server time between the marks — shown rather than hidden,
+   * so the columns always add up to what the browser waited.
+   */
+  var STAGES = [
+    { key: 'net', label: 'الشبكة + تشغيل Apps Script', hint: 'قبل أول سطر في المشروع وبعد آخر سطر' },
+    { key: 'global_init', label: 'تحميل كود المشروع', hint: 'تقييم كل ملفات .js (~3.2 MB) مع كل طلب' },
+    { key: 'perf_begin', label: 'بدء القياس', hint: 'perfBeginRequest_' },
+    { key: 'setup_before_auth', label: 'الإعداد', hint: 'ensureCompaniesRegistered_ + الذاكرة المؤقتة' },
+    { key: 'auth_validate', label: 'التحقق من الجلسة', hint: 'SessionManager_.validate + دليل المستخدمين' },
+    { key: 'session_touch', label: 'تحديث الجلسة', hint: 'SessionManager_.touch' },
+    { key: 'kill_switch', label: 'مفتاح الإيقاف', hint: 'isSystemEnabled_' },
+    { key: 'company_preamble', label: 'تمهيد الشركة', hint: 'صلاحيات + resolveDbId_ + requestGuard' },
+    { key: 'dispatch', label: 'تنفيذ الـ action نفسه', hint: 'company.dispatch — أو handler الراوتر' },
+    { key: 'after_dispatch', label: 'بعد التنفيذ', hint: 'requestGuard + jsonSafe_' },
+    { key: 'logging_after_handler', label: 'سجل العمليات', hint: 'logSystemAction_' },
+    { key: 'perf_finish', label: 'تسجيل القياس', hint: 'perfFinishRequest_' },
+    { key: 'rest', label: 'غير محسوب', hint: 'داخل الخادم بين العلامات' }
+  ];
+  var BREAKDOWN_PROBES = ['bare', 'ping', 'floor', 'table_raw', 'table_lean'];
+
+  function stageValue(x, key) {
+    var t = x.t || {};
+    var total = Number(t.server_total);
+    if (key === 'net') return isNaN(total) ? null : Math.max(0, x.client - total);
+    if (key === 'dispatch') return t.dispatch != null ? t.dispatch : (t.handler != null ? t.handler : null);
+    if (key === 'rest') {
+      if (isNaN(total)) return null;
+      var known = 0;
+      STAGES.forEach(function (st) {
+        if (st.key === 'net' || st.key === 'rest') return;
+        var v = stageValue(x, st.key);
+        if (v != null) known += v;
+      });
+      return Math.max(0, total - known);
+    }
+    var v = t[key];
+    return (v == null || v === '') ? null : Number(v);
+  }
+  function stageMedian(id, key) {
+    var vals = [];
+    stats[id].timings.forEach(function (x) { var v = stageValue(x, key); if (v != null) vals.push(v); });
+    return median(vals);
+  }
+
+  function renderBreakdown() {
+    var cols = BREAKDOWN_PROBES.filter(function (id) { return stats[id] && stats[id].timings.length; });
+    var probeById = {};
+    PROBES.forEach(function (p) { probeById[p.id] = p; });
+    if (!cols.length) {
+      setHtml('breakdown-table', '');
+      var anySample = BREAKDOWN_PROBES.some(function (id) { return stats[id] && stats[id].samples.length > 1; });
+      var vb = el('breakdown-verdict');
+      if (vb && anySample) {
+        vb.className = 'verdict muted';
+        vb.innerHTML = 'لم يرجع الخادم أي تفصيل. إما أن الكود الجديد لم يُرفع بعد (<span dir="ltr">clasp push</span>)، أو أن الحساب ليس سوبر أدمن.';
+      }
+      return;
+    }
+    var h = '<div class="scroll" style="max-height:none;"><table><thead><tr><th>المرحلة</th>';
+    cols.forEach(function (id) { h += '<th class="n">' + esc(probeById[id].label) + '</th>'; });
+    h += '</tr></thead><tbody>';
+    var colMax = {};
+    cols.forEach(function (id) {
+      colMax[id] = 0;
+      STAGES.forEach(function (st) { var v = stageMedian(id, st.key); if (v != null && v > colMax[id]) colMax[id] = v; });
+    });
+    STAGES.forEach(function (st) {
+      h += '<tr><td><b>' + esc(st.label) + '</b><div class="muted" style="font-size:11px;" dir="auto">' + esc(st.hint) + '</div></td>';
+      cols.forEach(function (id) {
+        var v = stageMedian(id, st.key);
+        var top = v != null && v > 0 && v === colMax[id];
+        h += '<td class="n' + (top ? ' bad' : '') + '">' + (v == null ? '<span class="muted">—</span>' : (top ? '<b>' + ms(v) + '</b>' : ms(v))) + '</td>';
+      });
+      h += '</tr>';
+    });
+    h += '<tr><td><b>الإجمالي عند المتصفح</b></td>';
+    cols.forEach(function (id) {
+      h += '<td class="n"><b>' + ms(median(stats[id].timings.map(function (x) { return x.client; }))) + '</b></td>';
+    });
+    h += '</tr><tr><td class="muted">قراءات الشيت</td>';
+    cols.forEach(function (id) {
+      var r = stats[id].timings.map(function (x) { return x.t.sheet_reads; }).filter(function (v) { return v !== undefined && v !== ''; });
+      h += '<td class="n muted">' + (r.length ? r[r.length - 1] : '—') + '</td>';
+    });
+    h += '</tr></tbody></table></div>';
+    setHtml('breakdown-table', h);
+    renderBreakdownVerdict(cols);
+  }
+
+  /* One sentence per level: what the bare platform costs, what the router adds
+     on top of it, what company routing adds on top of that — and the single
+     biggest stage in the floor request, which is the thing to open first. */
+  function renderBreakdownVerdict(cols) {
+    var box = el('breakdown-verdict');
+    if (!box) return;
+    function total(id) { return stats[id] && stats[id].timings.length ? median(stats[id].timings.map(function (x) { return x.client; })) : null; }
+    var bare = total('bare'), ping = total('ping'), floor = total('floor');
+    var lines = [];
+    if (bare != null) lines.push('Apps Script فاضي: <b>' + ms(bare) + '</b> — ده أقل وقت ممكن لأي طلب على المشروع ده، من غير أي كود للنظام.' +
+      (stageMedian('bare', 'global_init') != null ? ' منه <b>' + ms(stageMedian('bare', 'global_init')) + '</b> تحميل كود المشروع.' : ''));
+    if (bare != null && ping != null) lines.push('الراوتر (جلسة + مفتاح إيقاف + سجل) يضيف <b>' + ms(Math.max(0, ping - bare)) + '</b>.');
+    if (ping != null && floor != null) lines.push('توجيه الشركة و<span dir="ltr">get_page_versions</span> يضيفوا <b>' + ms(Math.max(0, floor - ping)) + '</b>.');
+    var focusId = cols.indexOf('floor') !== -1 ? 'floor' : cols[cols.length - 1];
+    var best = null;
+    STAGES.forEach(function (st) {
+      var v = stageMedian(focusId, st.key);
+      if (v != null && (!best || v > best.v)) best = { st: st, v: v };
+    });
+    var ft = total(focusId);
+    if (best && ft) {
+      lines.push('<span class="bad">أكبر مرحلة</span> في «' + esc(PROBES.filter(function (p) { return p.id === focusId; })[0].label) + '»: <b>' +
+        esc(best.st.label) + '</b> = <b>' + ms(best.v) + '</b> (' + Math.round(best.v / ft * 100) + '% من الطلب).');
+    }
+    box.className = 'verdict';
+    box.innerHTML = lines.join('<br>');
+  }
+
+  /* One probe at a time, never in parallel: two concurrent calls queue on the
+     same Apps Script deployment and each would report the other's wait. */
+  function runProbes(times) {
+    setBusyBtns(true);
+    var order = [];
+    for (var n = 0; n < times; n++) PROBES.forEach(function (p) { order.push(p); });
+
+    var i = 0;
+    function step() {
+      if (i >= order.length) {
+        setBusyBtns(false);
+        renderVerdict();
+        return;
+      }
+      var p = order[i++];
+      var t0 = performance.now();
+      p.run().then(function (r) {
+        var dt = performance.now() - t0;
+        var s = stats[p.id];
+        s.samples.push(dt);
+        s.error = '';
+        if (r && r.router_timing_ms) s.timings.push({ client: dt, t: r.router_timing_ms });
+        else if (r && r.global_init_ms != null) s.timings.push({ client: dt, t: { global_init: r.global_init_ms, server_total: r.global_init_ms } });
+        try { s.bytes = JSON.stringify(r).length; } catch (e) { s.bytes = null; }
+        if (p.rows) {
+          var list = p.rows(r) || [];
+          s.rows = list.length;
+          /* The table is drawn from the last successful read of the real action,
+             so what is on screen is always what was just measured. */
+          if (p.id === 'table_raw' || p.id === 'table_api' || p.id === 'split_par') renderData(list);
+          if (p.id === 'table_raw') {
+            lastFullBalances = {};
+            list.forEach(function (x) { lastFullBalances[String(x.id)] = x.balance; });
+          }
+        }
+        try { console.log('[et_customers probe]', p.id, Math.round(dt) + 'ms', 'bytes=' + s.bytes, 'rows=' + s.rows); } catch (e) {}
+      }).catch(function (e) {
+        stats[p.id].error = (e && e.message) || 'فشل الطلب';
+        try { console.warn('[et_customers probe] FAILED', p.id, e); } catch (e2) {}
+      }).then(function () {
+        renderProbeTable();
+        renderVerdict();
+        renderBreakdown();
+        setTimeout(step, 60);   /* a beat between calls, so they never overlap */
+      });
+    }
+    step();
+  }
+
+  function clearStats() {
+    PROBES.forEach(function (p) { stats[p.id] = freshStats(); });
+    splitCheck = null;
+    renderProbeTable();
+    renderBreakdown();
+    var box = el('verdict');
+    if (box) { box.className = 'verdict muted'; box.innerHTML = 'تم مسح القياسات.'; }
+  }
+
+  /* ── The table, rendered locally ───────────────────────────────────────────
+   *
+   * Columns are taken from the KEYS OF THE DATA, not from a curated list, so
+   * this shows the record as the server actually returns it — a field that is
+   * missing or misnamed is visible here instead of being silently dropped by a
+   * header map.
+   *
+   * The render is timed separately. It is the third place time can go, after
+   * the server and the client layers, and on a wide table with many rows it is
+   * not always the smallest.
+   */
+  var RENDER_CAP = 300;
+  function renderData(list) {
+    var t0 = performance.now();
+    var host = el('data-table');
+    setText('row-count', list.length);
+    if (!list.length) {
+      if (host) {
+        host.className = 'muted';
+        host.innerHTML = 'لا توجد سجلات في <span dir="ltr">' + esc(TABLE) + '</span>.';
+      }
+      setText('render-ms', ms(performance.now() - t0));
+      return;
+    }
+    /* No container: still record the render cost, still never throw. */
+    if (!host) { setText('render-ms', ms(performance.now() - t0)); return; }
+    /* Union of keys across the sample, not just the first row: a row that
+       carries an extra column must not hide it. */
+    var keys = [], seen = {};
+    list.slice(0, 50).forEach(function (r) {
+      Object.keys(r || {}).forEach(function (k) { if (!seen[k]) { seen[k] = 1; keys.push(k); } });
+    });
+    var shown = list.slice(0, RENDER_CAP);
+    var h = '<div class="scroll"><table><thead><tr><th class="n">#</th>';
+    keys.forEach(function (k) { h += '<th dir="ltr">' + esc(k) + '</th>'; });
+    h += '</tr></thead><tbody>';
+    shown.forEach(function (r, ix) {
+      h += '<tr><td class="n">' + (ix + 1) + '</td>';
+      keys.forEach(function (k) {
+        var v = r ? r[k] : '';
+        var num = (typeof v === 'number');
+        if (v && typeof v === 'object') { try { v = JSON.stringify(v); } catch (e) { v = String(v); } }
+        h += '<td' + (num ? ' class="n"' : '') + '>' + esc(v) + '</td>';
+      });
+      h += '</tr>';
+    });
+    h += '</tbody></table></div>';
+    if (list.length > RENDER_CAP) {
+      h += '<div class="note">معروض ' + RENDER_CAP + ' من ' + list.length +
+           ' سجل. الحد موجود حتى لا يصبح زمن الرسم هو ما نقيسه بدل زمن الاستجابة.</div>';
+    }
+    host.className = '';
+    host.innerHTML = h;
+    setText('render-ms', ms(performance.now() - t0));
+  }
+
+  /* ── Opening the real page, measured end to end ────────────────────────────
+   *
+   * Drives et_customers itself through PageBoot (Page_Boot.html): the click is
+   * stamped here, the real page closes the measurement when its rows are on
+   * screen (PageBoot.contentShown), then continues the series or comes back.
+   * The mode is passed in the query string and decided on the server there.
+   */
+  var MODES = [
+    { mode: 'legacy', label: 'القديمة', q: '&embed=0&split=0' },
+    { mode: 'fetch', label: 'طلب بعد التحميل', q: '&embed=0' },
+    { mode: 'embed', label: 'جوه الصفحة', q: '' }
+  ];
+  function modeInfo(m) { return MODES.filter(function (x) { return x.mode === m; })[0]; }
+  function tokenQ() { return '&sessionToken=' + encodeURIComponent(SESSION_TOKEN); }
+  function realItem(m) {
+    var info = modeInfo(m);
+    return { page: 'et_customers', mode: m, label: info.label, cold: true,
+      url: UIC.baseUrl() + '?action=et_customers' + tokenQ() + info.q };
+  }
+  function perfUrl() { return UIC.baseUrl() + '?action=et_customers_perf' + tokenQ(); }
+  function navNoStorage() { setHtml('nav-now', '<span class="bad">التخزين المحلي مش متاح في المتصفح ده، فمش هينفع نقيس فتح الصفحة.</span>'); }
+
+  function navProbe(m) { if (!window.PageBoot || !PageBoot.navStart([realItem(m)], perfUrl())) navNoStorage(); }
+  /* Rounds of legacy → fetch → embed, so no way gets the quieter minute. */
+  function navSeries(n) {
+    var items = [];
+    for (var i = 0; i < n; i++) MODES.forEach(function (x) { items.push(realItem(x.mode)); });
+    if (!window.PageBoot || !PageBoot.navStart(items, perfUrl())) navNoStorage();
+  }
+  function navClear() { if (window.PageBoot) PageBoot.navClear(); renderNav(); setHtml('nav-now', ''); }
+
+  function renderNav() {
+    var st = window.PageBoot ? PageBoot.navState() : null;
+    var samples = ((st && st.samples) || []).filter(function (x) { return x.page === 'et_customers'; });
+    var h = '<table><thead><tr><th>الطريقة</th><th class="n">عدد</th><th class="n">الصفحة وصلت</th>' +
+      '<th class="n">الجدول ظهر (الوسيط)</th><th class="n">الأدنى</th><th class="n">الأعلى</th><th class="n">قراءة السيرفر جوه الصفحة</th></tr></thead><tbody>';
+    var med = {};
+    MODES.forEach(function (x) {
+      var list = samples.filter(function (y) { return y.mode === x.mode; });
+      var c = list.map(function (y) { return y.content_ms; });
+      var pg = list.map(function (y) { return y.page_ms; });
+      var boot = list.map(function (y) { return y.boot_server_ms; }).filter(function (v) { return v != null; });
+      med[x.mode] = median(c);
+      h += '<tr><td><b>' + esc(x.label) + '</b></td><td class="n">' + list.length + '</td>' +
+        '<td class="n">' + ms(median(pg)) + '</td><td class="n"><b>' + ms(med[x.mode]) + '</b></td>' +
+        '<td class="n">' + ms(lo(c)) + '</td><td class="n">' + ms(hi(c)) + '</td>' +
+        '<td class="n">' + (x.mode === 'embed' ? ms(median(boot)) : '—') + '</td></tr>';
+    });
+    h += '</tbody></table>';
+    var last = samples.slice(-9).reverse();
+    if (last.length) {
+      h += '<div class="note">آخر القياسات: ' + last.map(function (y) {
+        return esc((modeInfo(y.mode) || {}).label || y.mode) + ' ' + ms(y.content_ms) +
+          (y.mode === 'embed' && !y.boot_ok ? ' <span class="bad">(جوه الصفحة فشل: ' + esc(y.boot_error || '') + ')</span>' : '');
+      }).join(' · ') + '</div>';
+    }
+    setHtml('nav-table', h);
+    var box = el('nav-verdict');
+    if (!box) return;
+    if (med.legacy == null || med.embed == null) {
+      box.className = 'verdict muted';
+      box.innerHTML = 'محتاج قياس واحد على الأقل من «القديمة» و«جوه الصفحة». «قياس ٣ مرات لكل طريقة» بيبدّل بين التلاتة لوحده.';
+      return;
+    }
+    var saved = med.legacy - med.embed;
+    box.className = 'verdict';
+    box.innerHTML = 'من الضغطة لحد ما الجدول يظهر في صفحة العملاء: <b>' + ms(med.embed) + '</b> جوه الصفحة بدل <b>' + ms(med.legacy) + '</b> بالطريقة القديمة — ' +
+      (saved > 0 ? '<span class="ok">أسرع بـ <b>' + ms(saved) + '</b> (' + Math.round(saved / med.legacy * 100) + '%)</span>.'
+                 : '<span class="warn">مفيش مكسب.</span>') +
+      (med.fetch != null ? '<br>الجدول لوحده بعد التحميل (من غير جوه الصفحة): <b>' + ms(med.fetch) + '</b> — ده مكسب التقسيم لوحده.' : '');
+  }
+
+  /* ── What happened before any request was sent ─────────────────────────────
+   *
+   * Navigation timing, so the shared bundle's own cost is on the record. If
+   * «تحميل الصفحة» is large, no amount of tuning on the data call will be felt
+   * by the user, and that is worth knowing before anyone optimises a handler.
+   */
+  function renderLoadTiming() {
+    var out = '';
+    try {
+      var nav = (performance.getEntriesByType && performance.getEntriesByType('navigation')[0]) || null;
+      if (nav) {
+        out = 'تحميل الصفحة: الخادم <b>' + ms(nav.responseEnd - nav.requestStart) + '</b>' +
+              ' · بناء الصفحة والحزمة المشتركة <b>' + ms(nav.domContentLoadedEventEnd - nav.responseEnd) + '</b>' +
+              ' · الإجمالي <b>' + ms(nav.domContentLoadedEventEnd) + '</b>';
+      } else if (performance.timing) {
+        var t = performance.timing;
+        out = 'تحميل الصفحة: الخادم <b>' + ms(t.responseEnd - t.requestStart) + '</b>' +
+              ' · الإجمالي <b>' + ms(t.domContentLoadedEventEnd - t.navigationStart) + '</b>';
+      }
+    } catch (e) {}
+    setHtml('load-note', out ||
+      '<span class="muted">زمن تحميل الصفحة غير متاح في هذا المتصفح.</span>');
+  }
+
+  renderProbeTable();
+  renderBreakdown();
+  renderLoadTiming();
+  /* The table first, the way this URL asked for it. Then one automatic pass of
+     the call probes — but not while a page-open series is running, where it
+     would compete for the server with the very load being measured. */
+  renderNav();
+  runProbes(1);
+</script>
+</body>
+</html>

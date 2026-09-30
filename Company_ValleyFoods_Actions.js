@@ -3555,8 +3555,8 @@ const ValleyFoodsHRModules = (function () {
       var rec = {
         emp_id: empId,
         name_ar: '=VLOOKUP(A' + r + ',valley_employee_info!A:B,2,0)',
-        basic_salary: '=INDEX(valley_employee_salary_updated!D:D,MATCH(A' + r + ',valley_employee_salary_updated!A:A,0))',
-        allow: '=INDEX(valley_employee_salary_updated!E:E,MATCH(A' + r + ',valley_employee_salary_updated!A:A,0))',
+        basic_salary: '=DGET(valley_employee_salary!$A:$M,valley_employee_salary!$F$1,{valley_employee_salary!$C$1,valley_employee_salary!$D$1;MAXIFS(valley_employee_salary!C:C,valley_employee_salary!C:C,"<="&AB' + r + ',valley_employee_salary!D:D,A' + r + '),A' + r + '})',
+        allow: '=IF(ISBLANK(DGET(valley_employee_salary!$A:$Z,valley_employee_salary!$G$1,{valley_employee_salary!$C$1,valley_employee_salary!$D$1;MAXIFS(valley_employee_salary!C:C,valley_employee_salary!C:C,"<="&AB' + r + ',valley_employee_salary!D:D,A' + r + '),A' + r + '})),0,DGET(valley_employee_salary!$A:$Z,valley_employee_salary!$G$1,{valley_employee_salary!$C$1,valley_employee_salary!$D$1;MAXIFS(valley_employee_salary!C:C,valley_employee_salary!C:C,"<="&AB' + r + ',valley_employee_salary!D:D,A' + r + '),A' + r + '}))',
         title: '=INDEX(valley_employee_info!E:E,MATCH(A' + r + ',valley_employee_info!A:A,0))',
         section: '=INDEX(valley_employee_info!F:F,MATCH(A' + r + ',valley_employee_info!A:A,0))',
         working_days: Number(e.working_days) || 30,
