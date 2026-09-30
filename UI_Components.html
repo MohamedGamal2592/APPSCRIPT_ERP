@@ -6984,7 +6984,7 @@ UIC.Router = (function () {
          * level and belong to the session rather than to a page. Removing the
          * retry chip in particular would take a persistent "not saved yet"
          * warning off the screen while the change was still unsaved. */
-        var KEEP = /^(page-loading|uic-live-busy|uic-live-retry|uic-live-fresh|uic-home-fab|uic-toast-host)$/;
+        var KEEP = /^(page-loading|uic-live-busy|uic-live-retry|uic-live-elsewhere|uic-live-fresh|uic-home-fab|uic-toast-host)$/;
         Array.prototype.slice.call(document.body.children).forEach(function (el) {
           var tag = String(el.tagName || '').toUpperCase();
           if (tag === 'SCRIPT' || tag === 'STYLE') return;
@@ -7015,6 +7015,12 @@ UIC.Router = (function () {
         try { if (window.PERF && PERF.beginJourney) PERF.beginJourney('page', action); } catch (ePerfRoute) {}
 
         try { UIC.wireNavPrefetch(); } catch (e) {}
+        /* [§P5] The retry chip is in KEEP above and survives this swap by
+           design — removing it would take a live "not saved yet" warning off
+           the screen. But ownership just changed under it, so it has to decide
+           again whether it is this page's alarm or a pointer to another page.
+           Called last, with CURRENT_ACTION set and the new body mounted. */
+        try { if (UIC.Live && UIC.Live.refreshChip) UIC.Live.refreshChip(); } catch (e) {}
         busy = false;
       })
       .catch(function () {
