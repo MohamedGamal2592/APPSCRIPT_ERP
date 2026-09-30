@@ -14994,106 +14994,125 @@ function buildManufacturePrintHtml_(r) {
   return budgetPrintShell_('عملية تصنيع - ' + esc(r.transaction_code), body);
 }
 
+/* «مراجعة تكليف المدخلات» — one A4 page in the shape of the AppSheet costing
+ * review: logo + title, date / purpose / certificate header, then ONE bordered
+ * table whose right half is the 19 numbered cost lines of the certificate
+ * (legal_purchasing_costing) and whose left half lists the certificate's
+ * products (legal_product_purchasing). Lines 5–14 carry «+»: they are the
+ * amounts summed into اجمالي التكاليف; line 14 notes when purchase tax joins. */
+var COSTING_REVIEW_LINES_ = [
+  { label: 'قيمة الفاتورة', key: 'القيمه بالدولار' },
+  { label: 'سعر الصرف', key: 'سعر الصرف' },
+  { label: 'القيمة المحسنة', key: 'القيمه المحسنه' },
+  { label: 'القيمة المقر عنها', key: 'القيمه المقر عنها' },
+  { label: 'القيمة بالسعر المعلن', key: 'القيمه بالسعر المعلن', plus: true },
+  { label: 'رسوم جمركية', key: 'رسوم جمركيه', plus: true },
+  { label: 'مصاريف ادارية', key: 'م اداريه', plus: true },
+  { label: 'مصاريف تفريغ', key: 'مصاريف تفريغ', plus: true },
+  { label: 'عمولة بنكية', key: 'عمولة بنكية', plus: true },
+  { label: 'ايصالات تخليص وميناء', key: 'ايصالات تخليص وميناء', plus: true },
+  { label: 'رسوم اضافية للجمرك', key: 'رسوم اضافية', plus: true },
+  { label: 'مصاريف تخليص', key: 'م تخليص', plus: true },
+  { label: 'مصاريف اخرى', key: 'م اخري', plus: true },
+  { label: 'ضريبة شراء', key: 'ض شراء', plus: true, note: 'تجمع في حالة اصول منشأة او تصنيع' },
+  { label: 'نوع الضريبة', key: 'نوع الضريبة' },
+  { label: 'ضريبة أ.ت.ص', key: 'ضريبة أ.ت.ص' },
+  { label: 'اجمالي التكاليف', key: 'اجمالي التكاليف' },
+  { label: 'قيمة المبيعات', key: 'المبيعات' },
+  { label: 'ضريبة المبيعات المحصلة', key: 'ضريبة المبيعات' }
+];
+
+/* "Jun 2, 2024", as the AppSheet review prints it. A sheet date arrives as a
+ * Date; a typed one as text — anything unparseable is printed as given. */
+function costingReviewDate_(v) {
+  if (v === null || v === undefined || v === '') return '-';
+  var d = (v instanceof Date) ? v : new Date(String(v).trim().replace(/\//g, '-'));
+  if (!(d instanceof Date) || isNaN(d.getTime())) return String(v);
+  var tz = 'Africa/Cairo';
+  try { tz = Session.getScriptTimeZone() || tz; } catch (e) {}
+  return Utilities.formatDate(d, tz, 'MMM d, yyyy');
+}
+
 function buildCostingPrintHtml_(h, lines) {
   const esc = payrollEsc_;
-  let totalQty = 0;
-  let totalCost = 0;
-  let totalSales = 0;
-
-  const rows = lines.map(function (l) {
-    const q = Number(l['الكمية']) || 0;
-    const c = Number(l['قيمة التكلفة']) || 0;
-    const s = Number(l['سعر البيع']) || Number(l['قيمة البيع']) || 0;
-    const unitCost = q > 0 ? (c / q) : (Number(l['تكلفة الوحدة']) || 0);
-    totalQty += q;
-    totalCost += c;
-    totalSales += s;
-
-    return '<tr>' +
-      '<td>' + esc(l['كود المعاملة'] || '-') + '</td>' +
-      '<td><strong>' + esc(l['المادة'] || '-') + '</strong></td>' +
-      '<td>' + esc(l['تفاصيل بند'] || h['اسم_المورد'] || '-') + '</td>' +
-      '<td>' + esc(l['نوع البند'] || (h['نوع الشحن'] === 'محلي' ? 'محلي' : 'مستورد')) + '</td>' +
-      '<td style="text-align:center;">' + (q ? q.toLocaleString('en-US') : '0') + '</td>' +
-      '<td style="text-align:left;" style="color:#1e3c72;font-weight:600;">' + budgetMoney_(unitCost) + '</td>' +
-      '<td style="text-align:left;" style="color:#155724;font-weight:600;">' + budgetMoney_(c) + '</td>' +
-      '<td style="text-align:left;" style="color:#0c5460;font-weight:600;">' + budgetMoney_(s) + '</td>' +
-      '<td>' + esc(l['المعاملة'] || 'مشتريات') + '</td>' +
-      '<td>' + esc(l['تاريخ الانتاج'] || '-') + '</td>' +
-      '<td>' + esc(l['تاريخ الانتهاء'] || '-') + '</td>' +
-      '</tr>';
-  }).join('') || '<tr><td colspan="11" style="text-align:center;">لا توجد بنود مرتبطة</td></tr>';
-
   const certNo = esc(h['رقم الشهاده'] || h['الرقم'] || '-');
-  const body = '' +
-    '<div class="print-header">' +
-    '<div class="print-title">شهادة تسعير وتكاليف المشتريات</div>' +
-    '<div class="print-subtitle">توب كيميكال للكيماويات</div>' +
+  let logo = '';
+  try { logo = getCompanyLogoUrl_('3fe1b5cb67b7223e') || ''; } catch (e) { logo = ''; }
+
+  const items = (lines || []).map(function (l) {
+    return {
+      product: esc(l['المادة'] || l['الصنف'] || '-'),
+      cert: esc(l['الرقم'] || l['رقم الشهاده'] || h['رقم الشهاده'] || '')
+    };
+  });
+  const rowCount = Math.max(COSTING_REVIEW_LINES_.length, items.length);
+  let body = '';
+  for (let i = 0; i < rowCount; i++) {
+    const line = COSTING_REVIEW_LINES_[i];
+    const item = items[i];
+    const hasLine = !!line;
+    body += '<tr' + (hasLine ? '' : ' class="no-line"') + '>' +
+      '<td class="c-val">' + (hasLine ? budgetMoney_(h[line.key]) : '') + '</td>' +
+      '<td class="c-lbl">' + (hasLine ? esc(line.label) : '') + '</td>' +
+      '<td class="c-no">' + (hasLine ? (i + 1) : '') + '</td>' +
+      '<td class="c-plus">' + (hasLine && line.plus ? '<span class="plus">+</span>' : '') +
+        (hasLine && line.note ? '<span class="note">' + esc(line.note) + '</span>' : '') + '</td>' +
+      '<td class="c-prod">' + (item ? item.product : '') + '</td>' +
+      '<td class="c-cert">' + (item ? item.cert : '') + '</td>' +
+      '</tr>';
+  }
+
+  const html = '' +
+    '<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="utf-8">' +
+    '<title>' + esc('مراجعة تكليف المدخلات - ' + (h['رقم الشهاده'] || '')) + '</title><style>' +
+    '@page{size:A4 portrait;margin:10mm;}' +
+    '@media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact;}}' +
+    'body{margin:0;font-family:"Segoe UI",Tahoma,Arial,sans-serif;color:#222;background:#fff;direction:rtl;}' +
+    '.sheet{max-width:190mm;margin:0 auto;padding:2mm 0;}' +
+    '.top{position:relative;height:24mm;}' +
+    '.title{text-align:center;font-size:15pt;font-weight:700;padding-top:3mm;}' +
+    '.logo{position:absolute;left:0;top:0;height:22mm;max-width:40mm;object-fit:contain;}' +
+    '.meta{display:flex;justify-content:space-between;align-items:flex-end;gap:6mm;margin:2mm 0 4mm;}' +
+    '.fields{display:flex;gap:10mm;border-bottom:1px solid #999;padding:0 2mm 1.5mm;flex:0 0 auto;}' +
+    '.field .k{font-size:10pt;font-weight:700;text-align:center;}' +
+    '.field .v{font-size:14pt;text-align:center;margin-top:1.5mm;white-space:nowrap;}' +
+    '.certbox{border:1px solid #ccc;border-radius:3mm;box-shadow:0 1px 3px rgba(0,0,0,.18);padding:3mm 5mm;font-size:14pt;display:flex;gap:10mm;align-items:center;min-width:70mm;justify-content:space-between;}' +
+    '.certbox .count{color:#444;}' +
+    'table.review{width:100%;border-collapse:separate;border-spacing:0;border:1px solid #333;border-radius:3mm;overflow:hidden;font-size:14pt;table-layout:fixed;}' +
+    'table.review th{font-weight:400;text-align:right;height:9mm;padding:0 2mm;border-bottom:1px solid #333;}' +
+    'table.review td{height:9.6mm;padding:0 2mm;vertical-align:middle;line-height:1;white-space:nowrap;}' +
+    'table.review tr:not(.no-line) td.c-val,table.review tr:not(.no-line) td.c-lbl,table.review tr:not(.no-line) td.c-no{border-bottom:1px solid #999;}' +
+    'table.review tbody tr:last-child td{border-bottom:0!important;}' +
+    '.c-val{width:19%;text-align:right;border-left:1px solid #999;font-variant-numeric:tabular-nums;}' +
+    'td.c-val{direction:ltr;}' +
+    '.c-lbl{width:31%;}' +
+    '.c-no{width:5%;text-align:right;}' +
+    '.c-plus{width:6%;text-align:center;position:relative;overflow:visible;}' +
+    '.c-plus .plus{font-size:20pt;font-weight:900;line-height:9mm;}' +
+    /* the note sits to the LEFT of the «+» (toward الصنف), as on the review */
+    '.c-plus .note{position:absolute;right:100%;top:50%;transform:translateY(-50%);font-size:8pt;text-decoration:underline;white-space:nowrap;margin-right:-1mm;}' +
+    '.c-prod{width:23%;overflow:hidden;text-overflow:ellipsis;}' +
+    '.c-cert{width:16%;}' +
+    '</style></head><body><div class="sheet">' +
+    '<div class="top">' +
+      (logo ? '<img class="logo" src="' + esc(logo) + '" alt="">' : '') +
+      '<div class="title">مراجعة تكليف المدخلات</div>' +
     '</div>' +
-    '<div class="print-meta">' +
-    '<div class="print-meta-code">شهادة رقم: ' + certNo + '</div>' +
+    '<div class="meta">' +
+      '<div class="fields">' +
+        '<div class="field"><div class="k">التاريخ</div><div class="v">' + esc(costingReviewDate_(h['تاريخ الافراج'])) + '</div></div>' +
+        '<div class="field"><div class="k">هدف من المشتريات</div><div class="v">' + esc(h['نوع الشهادة'] || '-') + '</div></div>' +
+      '</div>' +
+      '<div class="certbox"><span>رقم الشهاده: ' + certNo + '</span><span class="count">(' + items.length + ')</span></div>' +
     '</div>' +
-    '<div class="print-body">' +
-    '<div class="section-title">معلومات الشهادة</div>' +
-    '<table class="info">' +
-    '<tr><td class="info-label">رقم الشهادة</td><td class="info-value">' + certNo + '</td></tr>' +
-    '<tr><td class="info-label">تاريخ الإفراج</td><td class="info-value">' + esc(h['تاريخ الافراج'] || '-') + '</td></tr>' +
-    '<tr><td class="info-label">الصنف</td><td class="info-value">' + esc(h['الصنف'] || '-') + '</td></tr>' +
-    '<tr><td class="info-label">نوع الشهادة</td><td class="info-value">' + esc(h['نوع الشهادة'] || '-') + '</td></tr>' +
-    '<tr><td class="info-label">نوع الشحن</td><td class="info-value">' + esc(h['نوع الشحن'] || '-') + '</td></tr>' +
-    '<tr><td class="info-label">المورد</td><td class="info-value">' + esc(h['اسم_المورد'] || '-') + '</td></tr>' +
-    '<tr><td class="info-label">القيمة بالعملة الأصلية</td><td class="info-value">' + budgetMoney_(h['القيمه بالدولار']) + '</td></tr>' +
-    '<tr><td class="info-label">سعر الصرف</td><td class="info-value">' + esc(h['سعر الصرف'] || '-') + '</td></tr>' +
-    '<tr><td class="info-label">القيمة بالسعر المعلن</td><td class="info-value">' + budgetMoney_(h['القيمه بالسعر المعلن']) + '</td></tr>' +
-    '</table>' +
-    '<div class="info-section" style="display:flex;justify-content:space-between;align-items:center;">' +
-    '<div style="text-align:center;flex:1;">' +
-      '<div class="info-label">إجمالي التكاليف</div>' +
-      '<div class="info-value" style="color:#155724;font-size:16pt;font-weight:800;">' + budgetMoney_(h['اجمالي التكاليف']) + '</div>' +
+    '<table class="review"><thead><tr>' +
+      '<th class="c-val">القيمة</th><th class="c-lbl">بند القيمة</th><th class="c-no">#</th><th class="c-plus"></th>' +
+      '<th class="c-prod">الصنف</th><th class="c-cert">رقم الشهاده</th>' +
+    '</tr></thead><tbody>' + body + '</tbody></table>' +
     '</div>' +
-    '<div style="text-align:center;flex:1;">' +
-      '<div class="info-label">المبيعات المحسوبة</div>' +
-      '<div class="info-value" style="color:#0c5460;font-size:16pt;font-weight:800;">' + budgetMoney_(h['المبيعات']) + '</div>' +
-    '</div>' +
-    '<div style="text-align:center;flex:1;">' +
-      '<div class="info-label">البنك المرتبط</div>' +
-      '<div class="info-value">' + esc(h['البنك المرتبط'] || '-') + '</div>' +
-    '</div>' +
-    '</div>' +
-    '<div class="section-title">بنود المنتجات المرتبطة بالشهادة</div>' +
-    '<table class="grid">' +
-    '<thead><tr style="background:linear-gradient(135deg,#1e3c72,#2a5298);color:#fff;">' +
-      '<th>كود المعاملة</th><th>المادة</th><th>تفاصيل البند</th><th>نوع البند</th><th>الكمية</th><th>تكلفة الوحدة</th><th>قيمة التكلفة</th><th>سعر البيع</th><th>المعاملة</th><th>تاريخ الإنتاج</th><th>تاريخ الانتهاء</th>' +
-    '</tr></thead>' +
-    '<tbody>' + rows + '</tbody>' +
-    '<tfoot><tr class="total">' +
-      '<th colspan="4">الإجمالي الكلي للبنود</th>' +
-      '<td style="text-align:center;">' + totalQty.toLocaleString('en-US') + '</td>' +
-      '<td>-</td>' +
-      '<td style="text-align:left;font-weight:800;color:#155724;">' + budgetMoney_(totalCost) + '</td>' +
-      '<td style="text-align:left;font-weight:800;color:#0c5460;">' + budgetMoney_(totalSales) + '</td>' +
-      '<td colspan="3"></td>' +
-    '</tr></tfoot>' +
-    '</table>' +
-    '<div class="signature-section">' +
-    '<div class="signature-box">' +
-    '<div class="signature-title">المسؤول / المحاسب</div>' +
-    '<div class="signature-line"></div>' +
-    '<div class="signature-name">__________________</div>' +
-    '</div>' +
-    '<div class="signature-box">' +
-    '<div class="signature-title">المدير المالي</div>' +
-    '<div class="signature-line"></div>' +
-    '<div class="signature-name">__________________</div>' +
-    '</div>' +
-    '<div class="signature-box">' +
-    '<div class="signature-title">اعتماد و ختم</div>' +
-    '<div class="qr-placeholder"></div>' +
-    '<div class="signature-name">__________________</div>' +
-    '</div>' +
-    '</div>' +
-    '</div>';
-  return budgetPrintShell_('شهادة تسعير رقم ' + certNo, body);
+    '<script>window.onload=function(){setTimeout(function(){window.print();window.close();},500);};</script>' +
+    '</body></html>';
+  return html;
 }
 
 function buildCashReceiptHtml_(r) {
