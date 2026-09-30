@@ -70,8 +70,13 @@
   function renderProducts(list) {
     window.__products = list;
     var rows = list.map(function (p) {
+      /* Tier A: a __pending row is the form's own JSON drawn before the server
+         answers. Its id is a client-side __tmp_ key the server has never seen,
+         so it shows «—» and offers no actions until the saved record (with its
+         real id) replaces it — as on et_categories and et_cash. */
+      var pending = !!p.__pending;
       return {
-        id: p.id,
+        id: pending ? '—' : p.id,
         name_ar: p.name_ar,
         name_en: p.name_en || '-',
         category: p.category_name || '-',
@@ -79,7 +84,7 @@
         carton: p.carton || '-',
         current_qty: FMT.number(p.current_qty),
         total_cost_sign: FMT.currency(p.total_cost_sign),
-        actions: UIC.actionBtns([
+        actions: pending ? '…' : UIC.actionBtns([
           { label: 'حركة', onclick: "openMovement('" + FMT.escape(p.id) + "')" }
         ].concat(UIC.canFull_() ? [{ label: 'تعديل', onclick: "openProductModal('" + FMT.escape(p.id) + "')" }] : []))
       };
@@ -90,7 +95,7 @@
       { key: 'name_en', label: 'الاسم الإنجليزي' },
       { key: 'category', label: 'التصنيف' },
       { key: 'unit', label: 'الوحدة' },
-      { key: 'carton', label: 'الكرتونة' },
+      { key: 'carton', label: 'الكمية بالكرتونة او الشيكارة' },
       { key: 'current_qty', label: 'الرصيد الحالي', numeric: true },
       { key: 'total_cost_sign', label: 'قيمة الكمية المتاحة', numeric: true },
       { key: 'actions', label: 'إجراءات' }
@@ -135,7 +140,7 @@
       UIC.field({ key: 'name_ar', label: 'الاسم العربي', value: p ? p.name_ar : '', required: true }) +
       UIC.field({ key: 'name_en', label: 'الاسم الإنجليزي', value: p ? p.name_en : '' }) +
       UIC.enumSelect({ key: 'unit', label: 'الوحدة', value: p ? p.unit : '', options: window.__unitOptions || [], required: true }) +
-      UIC.field({ key: 'carton', label: 'الكرتونة', value: p ? p.carton : '', required: true }) +
+      UIC.field({ key: 'carton', label: 'الكمية بالكرتونة او الشيكارة', value: p ? p.carton : '', required: true }) +
       UIC.field({ key: 'asset_code', label: 'كود الأصل', type: 'select', required: true,
         options: assetCodeOptions, placeholder: 'اختر كود الأصل...', value: p ? p.asset_code : '' }) +
       UIC.combo({ key: 'category', label: 'التصنيف', value: p ? p.category : '', options: categoryOptions, required: true, placeholder: 'اختر التصنيف...' }) +
@@ -150,38 +155,48 @@
     });
   }
 
+  /* The modal's حفظ button already wraps its onclick in UI.submitOnce (see
+     UIC.openModal in UI_Components.html), so this handler runs synchronously
+     and hands the save straight to UIC.Live.save for the optimistic-JSON
+     path. A second, nested submitOnce saw the guard its own button had just
+     set and returned before running any save code — the button did nothing.
+     Same shape as saveCategory in Company_ErpTest_Categories.html. */
   function saveProduct(id) {
-    var btn = document.querySelector('#product-modal .btn-primary');
-    UI.submitOnce(btn, function () {
-      var data = UIC.collectForm('product-form');
-      if (!UIC.validateForm('product-form')) return Promise.reject();
-      ['unit'].forEach(function (k) {
-        if (data[k] === '__new__') data[k] = data[k + '_custom'] || '';
-        delete data[k + '_custom'];
-      });
-      delete data.category_custom;
-      if (id) data.id = id;
-      /* [RT-4] Optimistic. The rotating reassurance messages are deleted with
-         the wait they were reassuring about. */
-      if (!window.__products) window.__products = [];
-      return UIC.Live.save({
-        call: companyCall,
-        action: id ? 'edit_et_product' : 'add_et_product',
-        data: data,
-        list: window.__products,
-        key: 'id',
-        draft: Object.assign({}, data),
-        render: function () { renderProducts(window.__products); },
-        modal: 'product-modal',
-        message: 'تم الحفظ',
-        recordOf: function (r) {
-          var rec = (r && r.record) || null;
-          if (rec && !rec.id) rec.id = r.assignedId || r.unique_id;
-          return rec;
-        },
-        reload: fetchProducts
-      }).catch(function () { /* Live.save has already toasted and rolled back */ });
+    if (!UIC.validateForm('product-form')) return;
+    var data = UIC.collectForm('product-form');
+    ['unit'].forEach(function (k) {
+      if (data[k] === '__new__') data[k] = data[k + '_custom'] || '';
+      delete data[k + '_custom'];
     });
+    delete data.category_custom;
+    if (id) data.id = id;
+    /* [RT-4] Optimistic. The rotating reassurance messages are deleted with
+       the wait they were reassuring about. */
+    if (!window.__products) window.__products = [];
+    var draft = Object.assign({}, data);
+    /* The draft is drawn by renderProducts, which reads the joined/computed
+       fields the server returns — not the form's raw ids. Carry what the row
+       needs so a pending row reads like a real one. */
+    var cat = (window.__categoryOptions || []).find(function (c) { return String(c.id) === String(data.category); });
+    draft.category_name = cat ? cat.name_ar : '';
+    if (!id) { draft.current_qty = 0; draft.total_cost_sign = 0; }
+    UIC.Live.save({
+      call: companyCall,
+      action: id ? 'edit_et_product' : 'add_et_product',
+      data: data,
+      list: window.__products,
+      key: 'id',
+      draft: draft,
+      render: function () { renderProducts(window.__products); },
+      modal: 'product-modal',
+      message: 'تم الحفظ',
+      recordOf: function (r) {
+        var rec = (r && r.record) || null;
+        if (rec && !rec.id) rec.id = r.assignedId || r.unique_id;
+        return rec;
+      },
+      reload: fetchProducts
+    }).catch(function () { /* Live.save has already toasted and rolled back */ });
   }
 
   function showError(e) {
