@@ -65,6 +65,7 @@
     ] });
     companyCall('get_et_parties', { direction: DIRECTION_FILTER })
       .then(function (r) {
+        window.__directionOptions = r.direction_options || [];
         window.__typeOptions = r.type_options || [];
         window.__countryOptions = r.country_options || [];
         window.__regionOptions = r.region_options || [];
@@ -77,11 +78,22 @@
   function renderParties(list) {
     window.__parties = list;
     var rows = list.map(function (p) {
-      var dir = String(p.customer_direction).toLowerCase();
+      /* `direction` is the side the server settled the classification on
+         (customer | vendor); `customer_direction` is the classification
+         itself. A row saved before the list existed has only the old word. */
+      var dir = String(p.direction || p.customer_direction || '').toLowerCase();
       var isCustomer = dir === 'customer' || dir === 'عميل' || dir === 'client';
+      /* Show the classification itself, except on a legacy row whose stored
+         value is just the bare side word — «عميل» reads better than the raw
+         «customer» the sheet holds. */
+      var rawDir = String(p.customer_direction || '').trim();
+      var bareDir = /^(customer|vendor|client|supplier|عميل|مورد)$/i.test(rawDir);
+      var dirLabel = (rawDir && !bareDir) ? rawDir : (isCustomer ? 'عميل' : 'مورد');
       return {
         name: p.name,
-        direction: UIC.statusPill(isCustomer ? 'عميل' : 'مورد', isCustomer ? 'success' : 'warning'),
+        /* The pill names the classification and is coloured by its side, so
+           the six-way value is visible without a second column. */
+        direction: UIC.statusPill(dirLabel, isCustomer ? 'success' : 'warning'),
         type: p.type || '-',
         country: p.country || '-',
         region: p.region || '-',
@@ -163,14 +175,31 @@
       .finally(function () { UI.hideSpinner(); });
   }
 
+  /* The six classifications, plus whatever this party already carries when it
+     is not one of them — a row written before the list existed would
+     otherwise be cleared by the picker on the next save. */
+  function directionOptions(current) {
+    var opts = (window.__directionOptions || []).map(function (v) { return { value: v, label: v }; });
+    var cur = String(current == null ? '' : current).trim();
+    if (cur && !opts.some(function (o) { return o.value === cur; })) {
+      opts.unshift({ value: cur, label: cur });
+    }
+    return opts;
+  }
+
   function openPartyModal(id) {
     var p = (window.__parties || []).find(function (x) { return String(x.id) === String(id); });
     var body =
       '<form id="party-form">' +
       UIC.field({ key: 'name', label: 'الاسم', value: p ? p.name : '', required: true }) +
-      UIC.field({ key: 'customer_direction', label: 'النوع', type: 'select', required: true,
-        options: [{ value: 'customer', label: 'عميل' }, { value: 'vendor', label: 'مورد' }],
-        value: p ? (p.customer_direction || 'customer') : 'customer' }) +
+      /* A CLOSED list (UIC.combo, not UIC.enumSelect): the six values decide
+         which side of العملاء / الموردون a party falls on, and a typed-in
+         seventh would normalize to '' on the server and drop the party out of
+         both filters. Searchable, and the stored value is the label itself. */
+      UIC.combo({ key: 'customer_direction', label: 'النوع', required: true,
+        options: directionOptions(p ? p.customer_direction : ''),
+        value: p ? (p.customer_direction || '') : '',
+        placeholder: 'اختر النوع...' }) +
       UIC.enumSelect({ key: 'type', label: 'الصنف', value: p ? p.type : '', options: window.__typeOptions || [], required: true }) +
       UIC.enumSelect({ key: 'country', label: 'الدولة', value: p ? p.country : '', options: window.__countryOptions || [], required: true }) +
       UIC.enumSelect({ key: 'region', label: 'المنطقة', value: p ? p.region : '', options: window.__regionOptions || [], required: true }) +

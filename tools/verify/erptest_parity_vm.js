@@ -145,21 +145,38 @@ const cases = [
   ['get_product_movement', { product_id: P[0] }], ['get_kpi_data', {}]
 ];
 const IGNORE = { now: true, created_at: true, asof: true };
-function diff(a, b, p, out, allowMfg) {
+/* `allow` names the DELIBERATE divergences from Top Light, per case:
+     mfg     — the manufacturing extras Top Light has no column for
+     parties — et_customers classifies a party six ways («النوع»), so
+               get_et_parties returns the STORED classification plus the side
+               it settles on, where Top Light returns only the side. The
+               parity that still matters is that the side agrees, and that is
+               asserted below rather than skipped. */
+function diff(a, b, p, out, allow) {
+  allow = allow || {};
+  const allowMfg = allow.mfg;
   if (out.length > 30) return;
   const ta = Object.prototype.toString.call(a), tb = Object.prototype.toString.call(b);
   if (ta !== tb) { out.push(p + ': ' + JSON.stringify(a) + ' != ' + JSON.stringify(b)); return; }
   if (ta === '[object Array]') {
     if (a.length !== b.length) out.push(p + '.length ' + a.length + ' != ' + b.length);
-    for (let i = 0; i < Math.min(a.length, b.length); i++) diff(a[i], b[i], p + '[' + i + ']', out, allowMfg);
+    for (let i = 0; i < Math.min(a.length, b.length); i++) diff(a[i], b[i], p + '[' + i + ']', out, allow);
     return;
   }
   if (ta === '[object Object]') {
     const keys = Array.from(new Set(Object.keys(a).concat(Object.keys(b))));
+    /* One party row: Top Light's normalized customer_direction must equal the
+       side erp_test reports, whatever classification it stored. */
+    const partyRow = allow.parties && ('direction' in b) && !('direction' in a) && ('customer_direction' in a);
+    if (partyRow && String(a.customer_direction) !== String(b.direction)) {
+      out.push(p + '.direction: ' + JSON.stringify(a.customer_direction) + ' != ' + JSON.stringify(b.direction));
+    }
     keys.forEach(function (k) {
       if (IGNORE[k]) return;
       if (allowMfg && k === 'mfgExtra' && !(k in a) && Number(b[k]) === 0) return;
-      diff(a[k], b[k], p + '.' + k, out, allowMfg);
+      if (partyRow && (k === 'direction' || k === 'customer_direction')) return;
+      if (allow.parties && k === 'direction_options' && !(k in a)) return;
+      diff(a[k], b[k], p + '.' + k, out, allow);
     });
     return;
   }
@@ -180,7 +197,10 @@ cases.forEach(function (c) {
     try { b = jsonSafe(ET.dispatch_({ module_action: newName, data: c[1] }, ETSU, ET_DB)); } catch (e) { bErr = String(e.message); }
     const out = [];
     if (aErr || bErr) { if (aErr !== bErr) out.push('error: ' + aErr + ' != ' + bErr); }
-    else diff(a, b, '', out, /movement|income_statement|financial_position/.test(newName));
+    else diff(a, b, '', out, {
+      mfg: /movement|income_statement|financial_position/.test(newName),
+      parties: newName === 'get_et_parties'
+    });
     ok(out.length === 0, 'parity ' + newName + ' ' + JSON.stringify(c[1]) + (modes.length > 1 ? ' [ET_SJS_READ=' + flag + ']' : '') + (out.length ? '\n        ' + out.slice(0, 5).join('\n        ') : ''));
   });
 });

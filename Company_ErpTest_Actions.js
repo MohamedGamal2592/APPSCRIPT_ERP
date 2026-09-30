@@ -895,9 +895,31 @@ const ErpTest = (function () {
     noteMutation_(sheet); etPackTouched_(sheet);
   }
 
+  /* The party classification offered by et_customers («النوع»), and which side
+     — customer or vendor — each value settles on.
+
+     The side is not decoration: getParties_ filters on it for the
+     العملاء / الموردون buttons, and a value missing from this table normalizes
+     to '' and so falls out of BOTH filters. Any new classification must be
+     added here at the same time as the list, never only in the page. */
+  const ET_PARTY_DIRECTIONS = [
+    { value: 'محلي - موزع', side: 'customer' },
+    { value: 'محلي - تجزأة', side: 'customer' },
+    { value: 'محلي - عميل مباشر', side: 'customer' },
+    { value: 'مورد - محلي', side: 'vendor' },
+    { value: 'مقدم خدمات', side: 'vendor' },
+    { value: 'مورد - خارجي', side: 'vendor' }
+  ];
+
   // Normalize customer_direction to 'customer' | 'vendor' (handles Arabic + English).
   function normalizeDirection_(val) {
-    const v = String(val).trim().toLowerCase();
+    const raw = String(val == null ? '' : val).trim();
+    for (let i = 0; i < ET_PARTY_DIRECTIONS.length; i++) {
+      if (ET_PARTY_DIRECTIONS[i].value === raw) return ET_PARTY_DIRECTIONS[i].side;
+    }
+    /* Rows written before the classification list existed, and the plain
+       words the sheet may still hold. */
+    const v = raw.toLowerCase();
     if (v === 'vendor' || v === 'مورد' || v === 'supplier') return 'vendor';
     if (v === 'customer' || v === 'عميل' || v === 'client') return 'customer';
     return '';
@@ -1266,7 +1288,12 @@ const ErpTest = (function () {
       .map(p => ({
         id: p.id,
         name: p.name,
-        customer_direction: normalizeDirection_(p.customer_direction) || p.customer_direction,
+        /* The STORED classification, not the normalized side: the edit form
+           puts this straight back into the picker, so normalizing here would
+           hand «customer» to a six-value list and blank the row's real
+           classification on the next save. `direction` carries the side. */
+        customer_direction: p.customer_direction,
+        direction: normalizeDirection_(p.customer_direction),
         type: p.type,
         country: p.country,
         region: p.region,
@@ -1280,6 +1307,7 @@ const ErpTest = (function () {
     return {
       status: 'success',
       parties: parties,
+      direction_options: ET_PARTY_DIRECTIONS.map(d => d.value),
       type_options: distinctValues_(rows, 'type'),
       country_options: distinctValues_(rows, 'country'),
       region_options: distinctValues_(rows, 'region')
@@ -1312,7 +1340,11 @@ const ErpTest = (function () {
     var savedParty = {
       id: id,
       name: name,
-      customer_direction: normalizeDirection_(directionVal) || directionVal,
+      /* Same shape getParties_ returns: the stored classification, plus the
+         side beside it. This record replaces the optimistic row in the page's
+         list, so a normalized value here would blank the picker on a re-edit. */
+      customer_direction: directionVal,
+      direction: normalizeDirection_(directionVal),
       type: String((data && data.type) || '').trim(),
       country: String((data && data.country) || '').trim(),
       region: String((data && data.region) || '').trim(),
@@ -1353,7 +1385,8 @@ const ErpTest = (function () {
     var savedParty2 = {
       id: id,
       name: String((data && data.name) || '').trim(),
-      customer_direction: normalizeDirection_(dirVal) || dirVal,
+      customer_direction: dirVal,
+      direction: normalizeDirection_(dirVal),
       type: String((data && data.type) || '').trim(),
       country: String((data && data.country) || '').trim(),
       region: String((data && data.region) || '').trim(),
