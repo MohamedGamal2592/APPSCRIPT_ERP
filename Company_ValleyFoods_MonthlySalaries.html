@@ -128,6 +128,7 @@
       html += '<div class="vf-filter-group vf-msal-print-actions" style="align-self:flex-end;">';
       html += '<button id="vf-msal-cards-btn" class="vf-btn vf-btn-outline" style="padding:8px 14px;">🖨️ كشف الكروت</button>';
       html += '<button id="vf-msal-sections-btn" class="vf-btn vf-btn-outline" style="padding:8px 14px;">🖨️ كشف الأقسام</button>';
+      html += '<button id="vf-msal-sections-xlsx-btn" class="vf-btn vf-btn-outline" style="padding:8px 14px;">📥 كشف الأقسام Excel</button>';
       html += '</div>';
 
       html += '</div>';
@@ -196,6 +197,8 @@
       if (cardsBtn) cardsBtn.onclick = function() { printPayrollReport('cards'); };
       var sectionsBtn = document.getElementById('vf-msal-sections-btn');
       if (sectionsBtn) sectionsBtn.onclick = function() { printPayrollReport('sections'); };
+      var sectionsXlsxBtn = document.getElementById('vf-msal-sections-xlsx-btn');
+      if (sectionsXlsxBtn) sectionsXlsxBtn.onclick = function() { exportSectionsExcel(); };
     }
 
     function loadData() {
@@ -241,6 +244,167 @@
         '&sessionToken=' + encodeURIComponent(SESSION_TOKEN),
         'فتح تقرير الرواتب'
       );
+    }
+
+    /* 📥 كشف الأقسام Excel — same scope and grouping as the 🖨️ print report
+     * (full month/year from the server, grouped per section + summary sheet).
+     * Client-side SheetJS export, following Company_ValleyFoods_CashBoxBalances. */
+    var VF_MSAL_XLSX_HEADERS_ = ['unique_id', 'emp_id', 'name_ar', 'basic_salary', 'allow', 'title', 'section',
+      'working_days', 'working_hours', 'working_days_value', 'overtime_days', 'overtime_days_value',
+      'vacation_days', 'vacation_days_value', 'other_addition', 'loans_value_deductions',
+      'deduction_day', 'deduction_day_value', 'penalty_deduction_days', 'penalty_deduction_days_value',
+      'delay_deductions', 'delay_deductions_value', 'net_salary_nearest'];
+    var VF_MSAL_XLSX_LABELS_ = { unique_id: 'المعرف', emp_id: 'كود الموظف', name_ar: 'اسم الموظف',
+      basic_salary: 'الراتب الأساسي', allow: 'البدلات', title: 'الوظيفة', section: 'القسم',
+      working_days: 'أيام العمل', working_hours: 'ساعات العمل',
+      working_days_value: 'راتب أيام العمل', overtime_days: 'ساعات الإضافي',
+      overtime_days_value: 'قيمة ساعات الإضافي', vacation_days: 'أيام الإجازات',
+      vacation_days_value: 'قيمة أيام الإجازات', other_addition: 'إضافات أخرى',
+      loans_value_deductions: 'قيمة السلف والخصومات', deduction_day: 'الغياب',
+      deduction_day_value: 'قيمة الغياب', penalty_deduction_days: 'الجزاءات',
+      penalty_deduction_days_value: 'قيمة الجزاءات', delay_deductions: 'التأخيرات',
+      delay_deductions_value: 'قيمة التأخيرات',
+      net_salary_nearest: 'الصافي بعد التقريب' };
+    var VF_MSAL_XLSX_MONEY_ = { basic_salary: true, allow: true, working_days_value: true,
+      overtime_days_value: true, vacation_days_value: true, other_addition: true,
+      loans_value_deductions: true, deduction_day_value: true, penalty_deduction_days_value: true,
+      delay_deductions_value: true, net_salary_nearest: true,
+      working_days: true, working_hours: true, overtime_days: true, vacation_days: true,
+      deduction_day: true, penalty_deduction_days: true, delay_deductions: true };
+
+    function vfMsalMonthName_(month) {
+      var opts = (salariesData && salariesData.month_options) || [];
+      for (var i = 0; i < opts.length; i++) {
+        if (String(opts[i].value) === String(month)) return opts[i].label;
+      }
+      return String(month);
+    }
+
+    function vfMsalSectionOf_(row) {
+      var s = row ? row.section : '';
+      s = (s === null || s === undefined) ? '' : String(s).trim();
+      return s || 'غير محدد';
+    }
+
+    function vfMsalSheetName_(name, used) {
+      var s = String(name || 'غير محدد').replace(/[\[\]\*\?\/\\:]/g, ' ').trim() || 'غير محدد';
+      if (s.length > 28) s = s.slice(0, 28);
+      var base = s, i = 2;
+      while (used[s]) { var suf = ' (' + i + ')'; s = base.slice(0, 28 - suf.length) + suf; i++; }
+      used[s] = true;
+      return s;
+    }
+
+    function exportSectionsExcel() {
+      var monthEl = document.getElementById('vf-msal-month');
+      var yearEl = document.getElementById('vf-msal-year');
+      var month = monthEl ? monthEl.value : FILTER_MONTH;
+      var year = yearEl ? yearEl.value : FILTER_YEAR;
+      if (!month || !year) {
+        UIC.toast('اختر الشهر والسنة أولاً لتصدير التقرير', 'error');
+        return;
+      }
+      UIC.toast('جاري إعداد ملف Excel...', 'info');
+      UI.showSpinner();
+      companyCall('get_monthly_salaries_data', { month: month, year: year, loadAll: true }).then(function(res) {
+        var rows = (res && res.salaries) || [];
+        if (!rows.length) { UIC.toast('لا توجد رواتب للشهر المحدد', 'error'); return; }
+        /* Same ordering as the print report: section (ar) then emp_id numeric. */
+        rows = rows.slice().sort(function(a, b) {
+          var sa = vfMsalSectionOf_(a), sb = vfMsalSectionOf_(b);
+          if (sa !== sb) return sa.localeCompare(sb, 'ar');
+          return (Number(a.emp_id) || 0) - (Number(b.emp_id) || 0);
+        });
+        /* Keep only columns that carry at least one value this month. */
+        var columns = VF_MSAL_XLSX_HEADERS_.filter(function(h) {
+          return rows.some(function(r) {
+            var v = r[h];
+            return v !== null && v !== undefined && !(typeof v === 'string' && v.trim() === '');
+          });
+        });
+        if (!columns.length) { UIC.toast('لا توجد أعمدة قابلة للتصدير', 'error'); return; }
+        var monthName = vfMsalMonthName_(month);
+        var title = 'كشف الأقسام — ' + monthName + ' ' + year;
+        return API.ensureXlsx().then(function() {
+          var wb = XLSX.utils.book_new();
+          wb.Workbook = { Views: [{ RTL: true }] };
+          var moneyFmt = '#,##0.00';
+          var used = {};
+          var sections = {};
+          rows.forEach(function(r) {
+            var s = vfMsalSectionOf_(r);
+            if (!sections[s]) sections[s] = [];
+            sections[s].push(r);
+          });
+          var names = Object.keys(sections).sort(function(a, b) { return a.localeCompare(b, 'ar'); });
+          var grand = { count: 0, basic: 0, additions: 0, deductions: 0, net: 0 };
+          var summaryAoa = [['ملخص الأقسام — ' + monthName + ' ' + year], [],
+            ['القسم', 'عدد الموظفين', 'إجمالي الأساسي', 'الإضافات', 'الخصومات', 'الصافي']];
+          names.forEach(function(name) {
+            var list = sections[name];
+            var labels = columns.map(function(h) { return VF_MSAL_XLSX_LABELS_[h] || h; });
+            var aoa = [[title + ' — ' + name], ['عدد الموظفين: ' + list.length], []].concat([labels]);
+            list.forEach(function(r) {
+              aoa.push(columns.map(function(h) {
+                var v = r[h];
+                if (v === null || v === undefined || (typeof v === 'string' && v.trim() === '')) return '';
+                if (VF_MSAL_XLSX_MONEY_[h] || h === 'emp_id') {
+                  var n = Number(v);
+                  return isFinite(n) ? n : String(v);
+                }
+                return v;
+              }));
+            });
+            var ws = XLSX.utils.aoa_to_sheet(aoa);
+            var ciByHeader = {};
+            columns.forEach(function(h, i) { ciByHeader[h] = i; });
+            function applyMoney(rowIdx, ci) {
+              var ref = XLSX.utils.encode_cell({ r: rowIdx, c: ci });
+              if (ws[ref] && typeof ws[ref].v === 'number') ws[ref].z = moneyFmt;
+            }
+            for (var ri = 0; ri < list.length; ri++) {
+              Object.keys(VF_MSAL_XLSX_MONEY_).forEach(function(h) {
+                if (ciByHeader[h] !== undefined) applyMoney(3 + 1 + ri, ciByHeader[h]);
+              });
+            }
+            ws['!cols'] = columns.map(function() { return { wch: 18 }; });
+            ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: columns.length - 1 } }];
+            try { ws['!sheetPr'] = { pageSetUpPr: { fitToPage: true } }; } catch (e) {}
+            XLSX.utils.book_append_sheet(wb, ws, vfMsalSheetName_(name, used));
+            /* Summary accumulation mirrors the print report totals. */
+            var t = { count: 0, basic: 0, additions: 0, deductions: 0, net: 0 };
+            list.forEach(function(r) {
+              var num = function(k) { var n = Number(r[k]); return isFinite(n) ? n : 0; };
+              t.count++;
+              t.basic += num('basic_salary');
+              t.additions += num('allow') + num('overtime_days_value') + num('vacation_days_value') + num('other_addition');
+              t.deductions += num('loans_value_deductions') + num('deduction_day_value') + num('penalty_deduction_days_value') + num('delay_deductions_value');
+              t.net += num('net_salary_nearest') || num('net_salary');
+            });
+            grand.count += t.count; grand.basic += t.basic; grand.additions += t.additions;
+            grand.deductions += t.deductions; grand.net += t.net;
+            summaryAoa.push([name, t.count, t.basic, t.additions, t.deductions, t.net]);
+          });
+          summaryAoa.push(['الإجمالي العام', grand.count, grand.basic, grand.additions, grand.deductions, grand.net]);
+          var sws = XLSX.utils.aoa_to_sheet(summaryAoa);
+          for (var si = 3; si < summaryAoa.length; si++) {
+            for (var sj = 2; sj <= 5; sj++) {
+              var sref = XLSX.utils.encode_cell({ r: si, c: sj });
+              if (sws[sref] && typeof sws[sref].v === 'number') sws[sref].z = moneyFmt;
+            }
+          }
+          sws['!cols'] = [{ wch: 26 }, { wch: 14 }, { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 16 }];
+          sws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 5 } }];
+          XLSX.utils.book_append_sheet(wb, sws, 'ملخص الأقسام');
+          XLSX.writeFile(wb, 'كشف الأقسام_' + month + '_' + year + '.xlsx');
+          UIC.toast('تم تنزيل ملف Excel', 'success');
+        });
+      }).catch(function(err) {
+        console.error('Error exporting sections xlsx:', err);
+        UIC.toast((err && err.message) || 'تعذر إنشاء ملف Excel', 'error');
+      }).finally(function() {
+        UI.hideSpinner();
+      });
     }
 
     function openGenerateModal() {
