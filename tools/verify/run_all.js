@@ -126,6 +126,7 @@ const STEPS = [
   ['erptest_mfg_vm.js', 'ET-MFG — Testing System T-MFG / T-STOCK on the real erp_test headers'],
   ['erptest_parity_vm.js', 'ET-PARITY — Testing System reads equal Top Light (legacy and packs)'],
   ['erptest_write_vm.js', 'ET-WRITE — Testing System write layer: T-WRITE, T-ATOMIC, compaction, reconcile, get_et_sync'],
+  ['live_notice_server.js', 'LIVE-NOTICE P1 — stamps carry writer and request; get_page_versions returns views, labels and the union of tables'],
   ['erptest_packs_client.js', 'ET-CLIENT — Testing System browser packs: warm render, sync, logout / user isolation'],
   ['dblive_products_paging.js', 'DBLIVE-1 — tc_products_live paging: 50/page, cached total, bust on write'],
   ['tc_budget_stock_balance.js', 'TC-BALANCE — رصيد أصناف الميزانية: name_ar join aggregation, duplicate/unmatched policy, MySQL view join, page wiring'],
