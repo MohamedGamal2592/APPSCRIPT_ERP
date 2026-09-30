@@ -65,6 +65,9 @@ function scriptOf(file) {
 function bootPage(opts) {
   const o = opts || {};
   const sandbox = makeSandbox();
+  /* Globals the page's environment provides before any script runs (a shared
+     localStorage for "the same browser", the signed-in email, the company). */
+  if (o.globals) Object.assign(sandbox, o.globals);
 
   /* Containers the page's draw functions write into. innerHTML is captured, so
      a test can read exactly what was rendered. */

@@ -30,6 +30,8 @@
     var CAN_SEE_COST = true;
     function canCost() { return CAN_SEE_COST !== false; }
 
+    /* [live-notice D6] list replies from the device cache, trusted by the stamps */
+    companyCall = UIC.Live.viewCache(companyCall, { company: '9940659bd83035d7', page: 'vf_purchasing', view: 'list', lists: ['get_valley_purchasing_costing', 'get_valley_purchasing_options'] });
     function companyCall(moduleAction, data) {
       return API.call('company_action', {
         target_system: '9940659bd83035d7',

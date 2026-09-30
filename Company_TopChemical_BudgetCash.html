@@ -26,6 +26,8 @@
   var LAST = { total: 0, summary: { debit: 0, credit: 0, count: 0 }, boxes: [] };
   var REFS = null;
 
+  /* [live-notice D6] list replies from the device cache, trusted by the stamps */
+  companyCall = UIC.Live.viewCache(companyCall, { company: '3fe1b5cb67b7223e', page: 'tc_budget_cash', view: 'list', lists: ['get_legal_cash'] });
   function companyCall(moduleAction, data) {
     return API.call('company_action', {
       target_system: '3fe1b5cb67b7223e',

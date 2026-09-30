@@ -128,6 +128,7 @@ const STEPS = [
   ['erptest_write_vm.js', 'ET-WRITE — Testing System write layer: T-WRITE, T-ATOMIC, compaction, reconcile, get_et_sync'],
   ['live_notice_server.js', 'LIVE-NOTICE P1 — stamps carry writer and request; get_page_versions returns views, labels and the union of tables'],
   ['live_notice_client.js', 'LIVE-NOTICE P2 — own saves are silent, off-view changes go stale, the notice names what/who/when'],
+  ['live_views_cache.js', 'LIVE-NOTICE P6 — views from device JSON: inert paint, trusted only when the stamps match, exact bust, per-user, logout, limits'],
   ['erptest_packs_client.js', 'ET-CLIENT — Testing System browser packs: warm render, sync, logout / user isolation'],
   ['dblive_products_paging.js', 'DBLIVE-1 — tc_products_live paging: 50/page, cached total, bust on write'],
   ['tc_budget_stock_balance.js', 'TC-BALANCE — رصيد أصناف الميزانية: name_ar join aggregation, duplicate/unmatched policy, MySQL view join, page wiring'],

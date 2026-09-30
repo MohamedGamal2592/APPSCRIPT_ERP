@@ -24,6 +24,8 @@
     var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
     var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
 
+    /* [live-notice D6] list replies from the device cache, trusted by the stamps */
+    companyCall = UIC.Live.viewCache(companyCall, { company: '9940659bd83035d7', page: 'vf_sales', view: 'list', lists: ['get_valley_sales_bootstrap', 'get_valley_sales_page'] });
     function companyCall(moduleAction, data) {
       return API.call('company_action', {
         target_system: '9940659bd83035d7',

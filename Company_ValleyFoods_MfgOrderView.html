@@ -72,6 +72,8 @@
     var PERM_ACTION = 'vf_mfg_orders';
     var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
 
+    /* [live-notice D6] list replies from the device cache, trusted by the stamps */
+    companyCall = UIC.Live.viewCache(companyCall, { company: '9940659bd83035d7', page: 'vf_mfg_orders', view: 'detail', lists: ['get_valley_mfg_order_detail', 'get_valley_product_batches_multi', 'get_valley_recipe_plan'] });
     function companyCall(moduleAction, data) {
       return API.call('company_action', {
         target_system: '9940659bd83035d7',

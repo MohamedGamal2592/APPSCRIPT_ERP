@@ -5738,6 +5738,11 @@ document.addEventListener('keydown', function (e) {
     display: flex; align-items: center; gap: var(--space-1);
     max-width: calc(100vw - 32px);
   }
+  /* [live-notice D6] a view painted from the device cache is a picture until
+     its stamps are confirmed: dimmed, and nothing on it can be clicked. */
+  body.uic-live-inert .table-wrap,
+  body.uic-live-inert table,
+  body.uic-live-inert .card { pointer-events: none; opacity: .6; filter: saturate(.6); }
   /* [live-notice] × hides the notice; the refresh stays pending. */
   .uic-live-fresh-x {
     flex: none; width: 28px; height: 28px; padding: 0;
@@ -7168,8 +7173,52 @@ UIC.Cache = (function () {
     }
     var ix = readIndex();
     ix[key] = { b: body.length, t: Date.now() };
+    /* [live-notice D6] the tables this entry was read from, so a change to one
+       of them drops exactly the entries that depend on it */
+    if (Array.isArray(o.tables)) ix[key].tb = o.tables.slice();
     writeIndex(ix);
     return true;
+  }
+
+  /** [live-notice D6] The stored record {d, at, v} without the age/version
+   *  checks, or null — a view is painted inert first and trusted later. */
+  function peek(key) {
+    var body = raw(key);
+    if (body === null) return null;
+    try {
+      var rec = JSON.parse(body);
+      return (rec && typeof rec === 'object') ? rec : null;
+    } catch (e) { return null; }
+  }
+
+  /** [live-notice D6] Drop the entries that depend on any of these tables.
+   *  An entry that recorded no table list is dropped too: its dependencies
+   *  are unknown, which is exactly what bust() assumed for everything. */
+  function bustTables(tables) {
+    var want = {};
+    (tables || []).forEach(function (t) { want[t] = true; });
+    var ix = readIndex();
+    var hit = Object.keys(ix).filter(function (k) {
+      var tb = ix[k].tb;
+      if (!Array.isArray(tb)) return true;
+      return tb.some(function (t) { return want[t]; });
+    });
+    hit.forEach(function (k) { drop(k); delete ix[k]; });
+    writeIndex(ix);
+    return hit.length;
+  }
+
+  /** [live-notice D6] Every erp_c_* key on this origin, indexed or not (logout). */
+  function clearPrefix() {
+    clear();
+    try {
+      var keys = [];
+      for (var i = 0; i < localStorage.length; i++) {
+        var k = localStorage.key(i);
+        if (k && k.indexOf(PREFIX) === 0) keys.push(k);
+      }
+      keys.forEach(drop);
+    } catch (e) {}
   }
 
   function remove(key) {
@@ -7287,6 +7336,7 @@ UIC.Cache = (function () {
   return {
     key: keyFor, hash: hash, cacheable: function (company) { return scopeOf(company).ok; },
     get: get, set: set, remove: remove, bust: bust, clear: clear, swr: swr,
+    peek: peek, bustTables: bustTables, clearPrefix: clearPrefix,
     saveLastPaint: saveLastPaint, lastPaint: lastPaint,
     _index: readIndex, _bytes: function () { return totalBytes(readIndex()); },
     MAX_BYTES: MAX_BYTES
@@ -8423,11 +8473,228 @@ UIC.Live = (function () {
     return out;
   }
 
-  /** Drop client-cached replies that depend on these tables. */
+  /** Drop client-cached replies that depend on these tables — exactly those
+   *  (D6), plus, after my own save, the current view's entries. */
   function bustTables(tables, split) {
-    void tables; void split;
-    UIC.Cache.bust();
+    UIC.Cache.bustTables(tables);
+    if (split && split.mine && split.mine.length && watchedPage) {
+      UIC.Cache.bust('|lv:' + watchedPage + ':' + currentView + ':');
+    }
   }
+
+  /* ── [live-notice D6] views from JSON kept on the device ─────────────────
+   *
+   * A view's last server reply is kept in UIC.Cache and painted at once, but
+   * INERT (the .rt-stale rule: rows may have been deleted or renumbered, so
+   * nothing on it may be clicked). One get_page_versions — memory, no sheet —
+   * then decides: the view's stamps equal the tag the reply was stored with,
+   * no stamp is missing, and the reply is younger than VIEW_MAX_AGE → the
+   * painted reply is made live and the list call is skipped. Anything else →
+   * the list call runs and its reply replaces the painted one.
+   *
+   * On a miss the stamps are read BEFORE the list call, never in parallel: a
+   * tag read after the data could hide a write that landed in between, and
+   * the next visit would trust data that is already wrong.
+   *
+   * Off: UIC.Live.VIEW_CACHE = false, or the page id in VIEW_CACHE_OPT_OUT
+   * (OD7: salaries, HR, deductions, overtime, attendance, cash and bank). */
+  var VIEW_MAX_AGE = 10 * 60 * 1000;      // OD8
+  var VIEW_MAX_BYTES = 400000;
+  var VIEW_CACHE_OPT_OUT = [
+    'et_cash', 'tl_cash',
+    'tc_budget_cash', 'tc_budget_hr', 'tc_emp_deductions', 'tc_emp_overtime', 'tc_emp_permits',
+    'tc_emp_salaries', 'tc_employee_salary', 'tc_employee_status', 'tc_employee_reg',
+    'vf_cash', 'vf_hr_attendance', 'vf_hr_contracts', 'vf_hr_deductions', 'vf_hr_shifts',
+    'vf_hr_overtime', 'vf_hr_salary', 'vf_hr_vacation_alloc', 'vf_hr_vacations'
+  ];
+  var watchedPage = '';
+  var freshReplies = {};                  // key -> reply fetched to replace an inert paint
+  var lastConfirm = null;                 // {page, resp, at}
+  var inertOn = false;
+
+  function viewCacheOn(page, company) {
+    if (UIC.Live && UIC.Live.VIEW_CACHE === false) return false;
+    var off = (UIC.Live && UIC.Live.VIEW_CACHE_OPT_OUT) || VIEW_CACHE_OPT_OUT;
+    if (off.indexOf(String(page)) !== -1) return false;
+    try { if (window.ET_PACKS && typeof ET_PACKS.enabled === 'function' && ET_PACKS.enabled()) return false; } catch (e) {}
+    return !!(UIC.Cache && UIC.Cache.cacheable(company || ''));
+  }
+
+  function viewKey(company, page, view, action, payload) {
+    return UIC.Cache.key(company || '', 'lv:' + page + ':' + view + ':' + action, payload, '');
+  }
+
+  /** The tables a view's cached reply depends on, from a get_page_versions reply. */
+  function tablesFor(resp, view) {
+    if (resp && resp.views && resp.views[view]) return resp.views[view];
+    return (resp && resp.tables) || [];
+  }
+
+  /** A stable tag of the view's stamps, or null when any is missing (unknown). */
+  function tagFor(resp, view) {
+    var tables = tablesFor(resp, view).slice().sort();
+    if (!tables.length || !resp || !resp.versions) return null;
+    var parts = [];
+    for (var i = 0; i < tables.length; i++) {
+      var raw = resp.versions[tables[i]];
+      if (raw === undefined || raw === null) return null;
+      parts.push(tables[i] + ':' + stampT(raw));
+    }
+    return parts.join('|');
+  }
+
+  function setInert(on) {
+    inertOn = !!on;
+    try {
+      if (document.body && document.body.classList) {
+        if (inertOn) document.body.classList.add('uic-live-inert');
+        else document.body.classList.remove('uic-live-inert');
+      }
+    } catch (e) {}
+  }
+  /** True when a click must be ignored: a row on an inert paint. */
+  function inertBlocks(e) {
+    if (!inertOn) return false;
+    var t = e && e.target;
+    try {
+      if (t && t.closest && t.closest('nav, header, .uic-nav, .top-nav, #uic-live-fresh, .uic-live-chip')) return false;
+    } catch (e2) {}
+    return true;
+  }
+  try {
+    document.addEventListener('click', function (e) {
+      if (inertBlocks(e)) { try { e.preventDefault(); e.stopPropagation(); } catch (e3) {} }
+    }, true);
+  } catch (e) {}
+
+  /** One get_page_versions for a view load; it also seeds the watch baseline. */
+  function confirmStamps(call, page) {
+    var p;
+    try { p = Promise.resolve(call('get_page_versions', { page: page })); }
+    catch (e) { p = Promise.reject(e); }
+    return p.then(function (resp) {
+      if (!resp || resp.status === 'error' || !resp.versions) return null;
+      noteLiveReply(resp);
+      lastConfirm = { page: page, resp: resp, at: Date.now() };
+      if (watch && watch.page === page && typeof watch.seed === 'function') watch.seed(resp);
+      return resp;
+    }, function () { return null; });
+  }
+
+  function storeView(key, reply, tag, resp, view) {
+    if (!tag || !reply || reply.status === 'error') return false;
+    var body;
+    try { body = JSON.stringify(reply); } catch (e) { return false; }
+    if (!body || body.length > VIEW_MAX_BYTES) return false;
+    return UIC.Cache.set(key, reply, { version: tag, tables: tablesFor(resp, view) });
+  }
+
+  /**
+   * Load a view through the device cache (D6.2).
+   *   o.view     'list' (default) | 'report' | 'detail' | …
+   *   o.page     the page id get_page_versions is asked about
+   *   o.company  the company uid (the cache is scoped by company + user)
+   *   o.action   the list action; o.payload its data
+   *   o.call     function(action, data) -> Promise (the page's companyCall)
+   *   o.render   function(reply, {inert:boolean}) — called once inert (from the
+   *              cache) and again live, or once live
+   * Returns a promise for the reply that ends up live.
+   */
+  function loadView(o) {
+    o = o || {};
+    var view = o.view || 'list';
+    var render = typeof o.render === 'function' ? o.render : function () {};
+    if (!o.call || !o.action || !o.page || !viewCacheOn(o.page, o.company)) {
+      return Promise.resolve(o.call(o.action, o.payload)).then(function (r) { render(r, { inert: false }); return r; });
+    }
+    hookLogout();
+    var key = viewKey(o.company, o.page, view, o.action, o.payload);
+    var rec = UIC.Cache.peek(key);
+    var fresh = rec && (Date.now() - (Number(rec.at) || 0)) <= VIEW_MAX_AGE;
+    if (fresh) { setInert(true); try { render(rec.d, { inert: true }); } catch (e) {} }
+    return confirmStamps(o.call, o.page).then(function (resp) {
+      var tag = tagFor(resp, view);
+      if (fresh && tag && String(rec.v) === tag && (Date.now() - (Number(rec.at) || 0)) <= VIEW_MAX_AGE) {
+        setInert(false);
+        try { render(rec.d, { inert: false }); } catch (e) {}
+        return rec.d;
+      }
+      return Promise.resolve(o.call(o.action, o.payload)).then(function (reply) {
+        storeView(key, reply, tag, resp, view);
+        setInert(false);
+        render(reply, { inert: false });
+        return reply;
+      });
+    }).catch(function (err) { setInert(false); throw err; });
+  }
+
+  /**
+   * The same, for a page that already has its own list loader: wrap its
+   * companyCall once, and every call to one of cfg.lists answers from the
+   * device cache per the rules above. A cached answer that turns out to be
+   * stale is replaced by running the view's refresh (registered by setView),
+   * which calls the list again and receives the fresh reply without a second
+   * request. Every other action passes straight through.
+   */
+  function viewCache(call, cfg) {
+    if (typeof call !== 'function' || !cfg || !cfg.page || call.__liveViews) return call;
+    var lists = cfg.lists || [];
+    var view = cfg.view || 'list';
+    var wrapped = function (action, payload) {
+      if (lists.indexOf(action) === -1 || !viewCacheOn(cfg.page, cfg.company)) return call.apply(this, arguments);
+      hookLogout();
+      var key = viewKey(cfg.company, cfg.page, view, action, payload);
+      if (freshReplies[key]) {
+        var f = freshReplies[key];
+        delete freshReplies[key];
+        setInert(false);
+        return Promise.resolve(f);
+      }
+      var rec = UIC.Cache.peek(key);
+      var usable = rec && (Date.now() - (Number(rec.at) || 0)) <= VIEW_MAX_AGE;
+      if (!usable) {
+        /* A miss: stamps first, then the list — see the note above. */
+        return confirmStamps(call, cfg.page).then(function (resp) {
+          return Promise.resolve(call(action, payload)).then(function (reply) {
+            storeView(key, reply, tagFor(resp, view), resp, view);
+            return reply;
+          });
+        });
+      }
+      setInert(true);
+      confirmStamps(call, cfg.page).then(function (resp) {
+        var tag = tagFor(resp, view);
+        if (tag && String(rec.v) === tag && (Date.now() - (Number(rec.at) || 0)) <= VIEW_MAX_AGE) { setInert(false); return; }
+        return Promise.resolve(call(action, payload)).then(function (reply) {
+          storeView(key, reply, tag, resp, view);
+          var fn = viewRefresh[view];
+          if (typeof fn === 'function') { freshReplies[key] = reply; try { fn(); } catch (e) { setInert(false); } }
+          else setInert(false);
+        });
+      }).catch(function () { setInert(false); });
+      return Promise.resolve(rec.d);
+    };
+    wrapped.__liveViews = true;
+    return wrapped;
+  }
+
+  /* Logout clears every erp_c_* entry, as Company_ErpTest_Packs does for its
+     database. Hooked lazily: SESSION is defined after this file. */
+  function hookLogout() {
+    try {
+      if (window.SESSION && typeof SESSION.logout === 'function' && !SESSION.logout.__liveViews) {
+        var orig = SESSION.logout;
+        SESSION.logout = function () { try { UIC.Cache.clearPrefix(); } catch (e) {} return orig.apply(this, arguments); };
+        SESSION.logout.__liveViews = true;
+      }
+      if (typeof window.logout === 'function' && !window.logout.__liveViews) {
+        var origL = window.logout;
+        window.logout = function () { try { UIC.Cache.clearPrefix(); } catch (e) {} return origL.apply(this, arguments); };
+        window.logout.__liveViews = true;
+      }
+    } catch (e) {}
+  }
+  try { document.addEventListener('DOMContentLoaded', hookLogout); } catch (e) {}
 
   /* ── change polling ──────────────────────────────────────────────────── */
   var watch = null;
@@ -8571,7 +8838,16 @@ UIC.Live = (function () {
         });
     }
 
+    watchedPage = String(o.page);
+    /* [live-notice D6] a view load's get_page_versions is the baseline. */
+    var seedFrom = function (resp) {
+      noteLiveReply(resp);
+      if (seen === null && resp && resp.versions) seen = resp.versions;
+    };
+    if (lastConfirm && lastConfirm.page === o.page && (Date.now() - lastConfirm.at) < interval) seedFrom(lastConfirm.resp);
     watch = {
+      page: o.page,
+      seed: function (resp) { if (!stopped && gen === gens.watch) seedFrom(resp); },
       stop: function () {
         stopped = true;
         if (timer) clearTimeout(timer);
@@ -8679,6 +8955,13 @@ UIC.Live = (function () {
     dismissFresh: dismissFresh,
     currentView: function () { return currentView; },
     staleTables: function () { return Object.keys(staleTables); },
+    loadView: loadView,
+    viewCache: viewCache,
+    isInert: function () { return inertOn; },
+    _inertBlocks: inertBlocks,
+    VIEW_CACHE: true,
+    VIEW_CACHE_OPT_OUT: VIEW_CACHE_OPT_OUT,
+    VIEW_MAX_AGE: VIEW_MAX_AGE,
     _modalOpened: modalOpened,
     _modalClosed: modalClosed,
     retryNow: retryNow,

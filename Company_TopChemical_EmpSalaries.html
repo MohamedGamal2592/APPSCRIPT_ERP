@@ -51,6 +51,8 @@
   var SAL_PAGE = 1;
   var SAL_PAGE_SIZE = 50;
 
+  /* [live-notice D6] list replies from the device cache, trusted by the stamps */
+  companyCall = UIC.Live.viewCache(companyCall, { company: '3fe1b5cb67b7223e', page: 'tc_emp_salaries', view: 'list', lists: ['get_emp_salaries', 'get_emp_salary_comparison'] });
   function companyCall(a, d) {
     return API.call('company_action', { target_system: '3fe1b5cb67b7223e', module_action: a, data: d || {} }, SESSION_TOKEN);
   }
