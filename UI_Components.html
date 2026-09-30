@@ -5821,6 +5821,26 @@ document.addEventListener('keydown', function (e) {
   .uic-live-retry-go { color: var(--brand-primary); text-decoration: underline; }
   .uic-live-retry-drop { color: var(--text-muted); }
   .uic-live-retry { flex-wrap: wrap; max-inline-size: min(92vw, 520px); }
+  /* [§P2] The same failure, seen from a page that does not own it. It keeps the
+     shape and the position of the alert chip so it is noticed, and drops the
+     danger colours and the alert role so it does not read as this page's
+     alarm. Lower z-index than .uic-live-retry (9001): the two are mutually
+     exclusive, and if a bug ever showed both, the alarm must win. */
+  .uic-live-elsewhere {
+    position: fixed; inset-inline-end: var(--space-4); inset-block-end: calc(var(--space-4) + 44px);
+    z-index: 9000; display: flex; align-items: center; gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    background: var(--bg-sunken); color: var(--text-muted);
+    border: 1px solid var(--border-color); border-radius: var(--radius-pill);
+    font-size: var(--text-xs); font-weight: 700;
+    box-shadow: 0 2px 10px rgba(0,0,0,.12);
+    flex-wrap: wrap; max-inline-size: min(92vw, 420px);
+  }
+  .uic-live-elsewhere-go {
+    background: none; border: 0; padding: 4px 8px; cursor: pointer;
+    font: inherit; border-radius: var(--radius-sm);
+    color: var(--brand-primary); text-decoration: underline;
+  }
 
   /* ── [UI-5.2 / U-28] Styled confirm ──────────────────────────────────── */
   .uic-confirm-msg { font-size: var(--text-base); color: var(--text-main); line-height: 1.7; }
@@ -7814,27 +7834,143 @@ UIC.Live = (function () {
    * user discards it, because the whole point is that a failure must not be
    * able to scroll off the screen unnoticed.
    */
+  /* ── [§P2] Whose failure is it? ───────────────────────────────────────────
+   *
+   * The queue is ONE localStorage key for the whole app — every company is an
+   * ?action= on the same Apps Script URL, so they share an origin and a store.
+   * That is right for the drain (§I4 needs one leader over one key) and wrong
+   * for the chip, which was reading session-wide state and drawing a page-level
+   * alarm from it. Storage stays global; rendering becomes page-scoped here.
+   *
+   * An entry with NO page stamp is treated as belonging to every page. That is
+   * deliberate and it is not optional: entries written by the previous build
+   * are already sitting in users' localStorage, and the one thing worse than a
+   * chip on the wrong page is a failed write that has gone quiet.
+   */
+  function currentAction_() {
+    try { return String(window.CURRENT_ACTION || ''); } catch (e) { return ''; }
+  }
+
+  function ownsPage(e) {
+    var p = e && (e.page || e.p);       /* queue entries use .page, dead use .p */
+    return !p || p === currentAction_();
+  }
+
+  function splitQueue() {
+    var mine = [], elsewhere = [], deadMine = [], deadOther = [];
+    queue.forEach(function (e) { (ownsPage(e) ? mine : elsewhere).push(e); });
+    dead.forEach(function (e) { (ownsPage(e) ? deadMine : deadOther).push(e); });
+    return { mine: mine, elsewhere: elsewhere, deadMine: deadMine, deadOther: deadOther };
+  }
+
+  /** The Arabic name of a page from COMPANY_PAGES. Never the raw action key:
+   *  «تغيير لم يُحفظ في صفحة tc_products» is not a sentence for a user. */
+  function pageLabel(action) {
+    if (!action) return '';
+    try {
+      var pages = window.COMPANY_PAGES || [];
+      for (var i = 0; i < pages.length; i++) {
+        if (pages[i] && pages[i].action === action) return String(pages[i].label || '');
+      }
+    } catch (e) {}
+    return '';
+  }
+
+  /** The single page every stranded entry belongs to, or '' when they differ
+   *  or any of them is unstamped — in which case the chip stays generic and
+   *  offers no destination, because it cannot name one truthfully. */
+  function onePageOf(entries) {
+    var p = '';
+    for (var i = 0; i < entries.length; i++) {
+      var q = String((entries[i] && (entries[i].page || entries[i].p)) || '');
+      if (!q) return '';
+      if (!p) p = q;
+      else if (p !== q) return '';
+    }
+    return p;
+  }
+
   function renderChip() {
+    var s = splitQueue();
     var el = document.getElementById('uic-live-retry');
-    if (!queue.length && !dead.length) { if (el) el.remove(); return; }
-    if (!el) {
-      el = document.createElement('div');
-      el.id = 'uic-live-retry';
-      el.className = 'uic-live-retry';
-      el.setAttribute('role', 'alert');
-      document.body.appendChild(el);
+    var quiet = document.getElementById('uic-live-elsewhere');
+    var mineN = s.mine.length;
+    var deadMineN = s.deadMine.length;
+    var otherN = s.elsewhere.length + s.deadOther.length;
+
+    /* ── This page owns a stranded write: the alarm, as loud as it ever was. */
+    if (mineN || deadMineN) {
+      if (quiet && quiet.remove) quiet.remove();
+      if (!el) {
+        el = document.createElement('div');
+        el.id = 'uic-live-retry';
+        el.className = 'uic-live-retry';
+        el.setAttribute('role', 'alert');
+        document.body.appendChild(el);
+      }
+      var html = '';
+      if (mineN) {
+        var lbl = (mineN === 1 && s.mine[0].label) ? String(s.mine[0].label) : '';
+        html +=
+          '<span>' + (mineN === 1
+            ? (lbl ? ('تعديل «' + esc(lbl) + '» بانتظار التأكيد') : 'طلب واحد بانتظار التأكيد')
+            : (mineN + ' طلبات بانتظار التأكيد')) + '</span>' +
+          '<button type="button" class="uic-live-retry-go" onclick="UIC.Live.retryNow()">إعادة المحاولة</button>' +
+          '<button type="button" class="uic-live-retry-drop" onclick="UIC.Live.discardQueue()" ' +
+          'title="تجاهل التغييرات غير المحفوظة">تجاهل</button>';
+      }
+      /* The queue line and its two buttons are rendered ONLY when there is a
+         queue. Before this, a dead-letter-only state printed «0 طلبات بانتظار
+         التأكيد» above an إعادة المحاولة that drained an empty queue and a
+         تجاهل that returned at its own guard — a chip that could not be
+         cleared by either button offered for clearing it. */
+      if (deadMineN) {
+        html += '<div>' + s.deadMine.map(function (d) {
+          return '<div>' + esc(d.m) + ' (' + esc(d.a) + ')</div>';
+        }).join('') + '<button type="button" onclick="UIC.Live.ackDead()">تم</button></div>';
+      }
+      el.innerHTML = html;
+      return;
     }
-    var n = queue.length;
-    el.innerHTML =
-      '<span>' + (n === 1 ? 'طلب واحد بانتظار التأكيد' : (n + ' طلبات بانتظار التأكيد')) + '</span>' +
-      '<button type="button" class="uic-live-retry-go" onclick="UIC.Live.retryNow()">إعادة المحاولة</button>' +
-      '<button type="button" class="uic-live-retry-drop" onclick="UIC.Live.discardQueue()" ' +
-      'title="تجاهل التغييرات غير المحفوظة">تجاهل</button>';
-    if (dead.length) {
-      el.innerHTML += '<div>' + dead.map(function (d) {
-        return '<div>' + d.m + ' (' + d.a + ')</div>';
-      }).join('') + '<button type="button" onclick="UIC.Live.ackDead()">تم</button></div>';
+
+    /* ── Nothing here, something elsewhere. Still impossible to miss, and it
+     * no longer reads as this page's problem: neutral, role="status", and the
+     * one action that helps is the one offered — go where the record is. There
+     * is deliberately no إعادة المحاولة and no تجاهل on this chip; you act on
+     * a record from the page that owns it. The drain keeps running regardless,
+     * so a chip nobody clicks still clears itself when the network returns. */
+    if (el && el.remove) el.remove();
+    if (!otherN) { if (quiet && quiet.remove) quiet.remove(); return; }
+    if (!quiet) {
+      quiet = document.createElement('div');
+      quiet.id = 'uic-live-elsewhere';
+      quiet.className = 'uic-live-elsewhere';
+      quiet.setAttribute('role', 'status');
+      document.body.appendChild(quiet);
     }
+    var stranded = s.elsewhere.concat(s.deadOther);
+    var page = onePageOf(stranded);
+    var label = page ? pageLabel(page) : '';
+    var go = '<button type="button" class="uic-live-elsewhere-go" ' +
+             'onclick="UIC.Live.goToStranded()">انتقل إليها</button>';
+    if (page && label) {
+      quiet.innerHTML = '<span>تغيير لم يُحفظ في صفحة ' + esc(label) + '</span>' + go;
+    } else if (page) {
+      quiet.innerHTML = '<span>تغيير لم يُحفظ في صفحة أخرى</span>' + go;
+    } else {
+      quiet.innerHTML = '<span>' + stranded.length + ' تغييرات لم تُحفظ في صفحات أخرى</span>';
+    }
+  }
+
+  /** The quiet chip's button. Nothing is retried or discarded here — the user
+   *  is simply taken to the page that can act on the record. */
+  function goToStranded() {
+    var s = splitQueue();
+    var page = onePageOf(s.elsewhere.concat(s.deadOther));
+    if (!page) return;
+    var url = UIC.baseUrl() + '?action=' + encodeURIComponent(page) +
+              '&sessionToken=' + encodeURIComponent(UIC.token());
+    try { UIC.navTo(null, url); } catch (e) { window.location.href = url; }
   }
 
   function enqueue(entry) {
@@ -9035,7 +9171,12 @@ UIC.Live = (function () {
     retryNow: retryNow,
     discardQueue: discardQueue,
     ackDead: ackDead,
-    queued: function () { return queue.length; }
+    goToStranded: goToStranded,
+    /* [§P5] The router keeps the chip across a soft navigation, so something
+       has to tell it that ownership changed under it. */
+    refreshChip: renderChip,
+    queued: function () { return queue.length; },
+    _splitQueue: splitQueue
   };
 })();
 
