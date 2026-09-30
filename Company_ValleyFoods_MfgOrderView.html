@@ -45,6 +45,13 @@
        min-height, so the two read as one control at any text size. */
     .mo-calc-field{display:grid;grid-template-columns:minmax(0,1fr) 44px;gap:8px;align-items:end;}
     .mo-calc-trigger{min-width:44px;height:44px;padding:0;font-size:18px;line-height:1;margin-bottom:16px;}
+    /* The same trigger beside a compact .odoo-input (row quantity, pause hours). */
+    .mo-calc-inline{display:flex;gap:4px;align-items:center;}
+    .mo-calc-inline .odoo-input{flex:1 1 auto;min-width:0;}
+    .mo-calc-mini{flex:0 0 auto;padding:4px 8px;font-size:15px;line-height:1;}
+    .pc-modes{display:flex;gap:6px;margin-bottom:10px;}
+    .pc-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) 70px 30px;gap:6px;align-items:center;margin-bottom:6px;}
+    .pc-total{margin-top:10px;padding:8px 10px;border-radius:8px;background:var(--bg-subtle, #f8fafc);font-weight:700;}
     .odoo-sub{background:var(--bg-subtle, #fafafa);border:1px dashed var(--border-color, #e2e8f0);border-radius:8px;padding:8px 10px;margin-top:8px;}
     .btn{cursor:pointer;border:none;border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;}
     .btn-primary{background:#16a34a;color:#fff;}
@@ -188,6 +195,11 @@
         if (!editable()) return;
         var el = document.getElementById(targetId);
         if (!el) return;
+        if (targetId.indexOf('out-qty-') === 0) {
+          var mo = MFG_OUTPUTS[Number(targetId.slice(8))];
+          UIC.Calculator.open({ target: el, title: 'الحاسبة — كمية الخامة' + (mo && mo.product_name ? ' (' + mo.product_name + ')' : ''), precision: 3, min: 0 });
+          return;
+        }
         if (targetId === 'f-manufactured') {
           UIC.Calculator.open({ target: el, title: 'الحاسبة — كمية الخام الداخلة', precision: 3, min: 0 });
           return;
@@ -206,6 +218,13 @@
         if (!editable()) return fieldHtml;
         return '<div class="mo-calc-field">' + fieldHtml +
           '<button type="button" class="btn btn-outline mo-calc-trigger" id="calc-' + targetId + '" title="الحاسبة" aria-label="' + esc(aria) + '">⌗</button></div>';
+      }
+      /* Compact variant for the row inputs: the calculator button sits inside
+         the same cell, so it survives a row redraw with no extra wiring. */
+      function inlineCalc_(inputHtml_, onClick, aria) {
+        if (!editable()) return inputHtml_;
+        return '<div class="mo-calc-inline">' + inputHtml_ +
+          '<button type="button" class="btn btn-outline mo-calc-mini" title="الحاسبة" aria-label="' + esc(aria) + '" onclick="' + onClick + '">⌗</button></div>';
       }
       function rememberDeleted_(section, uid) {
         uid = String(uid || '').trim();
@@ -1117,9 +1136,9 @@
             ? UIC.combo({ key: 'out-prod-' + i, label: '', required: true, options: PRODUCT_OPTIONS, value: o.product_id, placeholder: 'ابحث عن منتج…' })
             : (esc(o.product_name || o.product_id) || '<span class="odoo-ro">—</span>');
           return '<div class="odoo-card-b" style="padding:10px 12px;">' +
-            '<div class="odoo-grid" style="grid-template-columns:1fr 150px 40px;">' +
+            '<div class="odoo-grid" style="grid-template-columns:1fr 190px 40px;">' +
               '<div class="odoo-fld"><label>الخامة الداخلة</label>' + prodCell + '</div>' +
-              '<div class="odoo-fld"><label>الكمية</label>' + inputHtml('out-qty-' + i, o.qty, 'number', 'MFGVIEW_PAGE.setOutputQty(' + i + ',this.value)', { min: '0.001', step: '0.001', disabled: !editable() }) + '</div>' +
+              '<div class="odoo-fld"><label>الكمية</label>' + inlineCalc_(inputHtml('out-qty-' + i, o.qty, 'number', 'MFGVIEW_PAGE.setOutputQty(' + i + ',this.value)', { min: '0.001', step: '0.001', disabled: !editable() }), 'MFGVIEW_PAGE.openCalc(\'out-qty-' + i + '\')', 'حاسبة كمية الخامة') + '</div>' +
               (editable() ? '<div style="display:flex;align-items:flex-end;"><button class="btn btn-ghost" style="padding:6px 8px;" onclick="MFGVIEW_PAGE.removeOutput(' + i + ')">✕</button></div>' : '<div></div>') +
             '</div>' +
             (ready
@@ -1597,7 +1616,7 @@
             '<td data-label="' + WORKOP_COLS[1] + '"><span class="odoo-pill ' + (w.operation_status === 'Done' ? 'Done' : (w.operation_status === 'Paused' ? 'Paused' : (w.operation_status === 'In Progress' ? 'InProgress' : 'Draft'))) + '">' + statusLabel(w.operation_status) + '</span></td>' +
             '<td data-label="' + WORKOP_COLS[2] + '">' + inputHtml('wo-start-' + i, toDtInput(w.start_time), 'datetime-local', 'MFGVIEW_PAGE.setWorkOp(' + i + ',\'start_time\',this.value)', { disabled: !editable() }) + '</td>' +
             '<td data-label="' + WORKOP_COLS[3] + '">' + inputHtml('wo-end-' + i, toDtInput(w.end_time), 'datetime-local', 'MFGVIEW_PAGE.setWorkOp(' + i + ',\'end_time\',this.value)', { disabled: !editable() }) + '</td>' +
-            '<td data-label="' + WORKOP_COLS[4] + '">' + inputHtml('wo-pause-' + i, (w.total_pause_duration != null ? w.total_pause_duration : 0), 'number', 'MFGVIEW_PAGE.setWorkOp(' + i + ',\'total_pause_duration\',this.value)', { disabled: !editable(), min: 0, step: 0.01, inputmode: 'decimal' }) +
+            '<td data-label="' + WORKOP_COLS[4] + '">' + inlineCalc_(inputHtml('wo-pause-' + i, (w.total_pause_duration != null ? w.total_pause_duration : 0), 'number', 'MFGVIEW_PAGE.setWorkOp(' + i + ',\'total_pause_duration\',this.value)', { disabled: !editable(), min: 0, step: 0.01, inputmode: 'decimal' }), 'MFGVIEW_PAGE.openPauseCalc(' + i + ')', 'حاسبة ساعات التوقف') +
               '<div id="wo-err-' + i + '" style="color:#dc2626;font-size:10px;">' + esc(w._hours_error || '') + '</div></td>' +
             '<td class="odoo-ro" data-label="' + WORKOP_COLS[5] + '"><span id="wo-hours-' + i + '">' + (hoursState.hours === '' ? '—' : fmt3(hoursState.hours)) + '</span></td>' +
             '<td data-label="' + WORKOP_COLS[6] + '"><button class="btn ' + (String(w.notes || '').trim() ? 'btn-primary' : 'btn-outline') + '" style="padding:3px 10px;font-size:11px;" onclick="MFGVIEW_PAGE.openWorkOpNotes(' + i + ')">ملاحظات' + (String(w.notes || '').trim() ? ' •' : '') + '</button></td>' +
@@ -1670,6 +1689,150 @@
         setWorkOp(i, 'notes', ta ? ta.value : '');
         closeWorkOpNotes();
         drawWorkOps();
+      }
+
+      /* Pause-hours calculator. Two ways to arrive at a decimal-hours figure:
+         «من — إلى»: one or more stop periods, each (to − from); a period whose
+           end is earlier than its start crosses midnight (+24h).
+         «دقائق»: a minutes total, typed as one number or a sum (15+20+30).
+         The result is written into wo-pause-<i> and change is fired, so the
+         row's actual hours recompute through setWorkOp exactly as when typed. */
+      var PAUSE_CALC = null;
+      function pcDigits_(v) {
+        return String(v == null ? '' : v)
+          .replace(/[٠-٩]/g, function (c) { return String(c.charCodeAt(0) - 1632); })
+          .replace(/[۰-۹]/g, function (c) { return String(c.charCodeAt(0) - 1776); })
+          .replace(/[٫,]/g, '.').replace(/[＋]/g, '+');
+      }
+      function pcTimeMin_(t) {
+        var m = /^(\d{1,2}):(\d{2})/.exec(String(t || ''));
+        if (!m) return null;
+        var h = Number(m[1]), mm = Number(m[2]);
+        if (h > 23 || mm > 59) return null;
+        return h * 60 + mm;
+      }
+      function pcRowMinutes_(r) {
+        var a = pcTimeMin_(r.from), b = pcTimeMin_(r.to);
+        if (a == null || b == null) return null;
+        return b >= a ? b - a : b + 1440 - a;
+      }
+      /* Minutes from "15+20+30" style input; null when anything is not a number. */
+      function pcParseMinutes_(src) {
+        var text = pcDigits_(src).replace(/\s+/g, '');
+        if (!text) return null;
+        var parts = text.split('+'), total = 0;
+        for (var k = 0; k < parts.length; k++) {
+          if (!/^\d+(\.\d+)?$/.test(parts[k])) return null;
+          total += Number(parts[k]);
+        }
+        return total;
+      }
+      function pcTotalMinutes_() {
+        var st = PAUSE_CALC; if (!st) return null;
+        if (st.mode === 'minutes') return pcParseMinutes_(st.minutes);
+        var sum = 0, any = false;
+        st.rows.forEach(function (r) { var m = pcRowMinutes_(r); if (m != null) { sum += m; any = true; } });
+        return any ? sum : null;
+      }
+      function pcHours_(minutes) { return Math.round((minutes / 60) * 100) / 100; }
+      function pcFmtMin_(m) {
+        var h = Math.floor(m / 60), r = Math.round(m - h * 60);
+        return (h ? h + ' س ' : '') + r + ' د';
+      }
+      function pcBody_() {
+        var st = PAUSE_CALC;
+        var modeBtn = function (mode, text) {
+          return '<button type="button" class="btn ' + (st.mode === mode ? 'btn-primary' : 'btn-outline') + '" onclick="MFGVIEW_PAGE.pauseCalcMode(\'' + mode + '\')">' + text + '</button>';
+        };
+        var html = '<div class="pc-modes">' + modeBtn('range', 'من — إلى') + modeBtn('minutes', 'مجموع الدقائق') + '</div>';
+        if (st.mode === 'range') {
+          html += '<div class="odoo-ro" style="margin-bottom:6px;">أدخل كل فترة توقف (من ساعة إلى ساعة). الفترة التي تتخطى منتصف الليل تُحسب تلقائياً.</div>' +
+            '<div class="pc-row odoo-ro"><span>من</span><span>إلى</span><span>المدة</span><span></span></div>' +
+            st.rows.map(function (r, k) {
+              var m = pcRowMinutes_(r);
+              return '<div class="pc-row">' +
+                '<input id="pc-from-' + k + '" class="odoo-input" type="time" value="' + esc(r.from) + '" oninput="MFGVIEW_PAGE.pauseCalcSet(' + k + ',\'from\',this.value)" onchange="MFGVIEW_PAGE.pauseCalcSet(' + k + ',\'from\',this.value)" style="direction:ltr;">' +
+                '<input id="pc-to-' + k + '" class="odoo-input" type="time" value="' + esc(r.to) + '" oninput="MFGVIEW_PAGE.pauseCalcSet(' + k + ',\'to\',this.value)" onchange="MFGVIEW_PAGE.pauseCalcSet(' + k + ',\'to\',this.value)" style="direction:ltr;">' +
+                '<span id="pc-dur-' + k + '" class="odoo-ro">' + (m == null ? '—' : pcFmtMin_(m)) + '</span>' +
+                (st.rows.length > 1 ? '<button type="button" class="btn btn-ghost" style="padding:2px 6px;font-size:11px;" onclick="MFGVIEW_PAGE.pauseCalcRemove(' + k + ')">✕</button>' : '<span></span>') +
+                '</div>';
+            }).join('') +
+            '<button type="button" class="btn btn-outline" style="padding:3px 10px;font-size:12px;" onclick="MFGVIEW_PAGE.pauseCalcAdd()">+ فترة توقف</button>';
+        } else {
+          html += '<label class="odoo-ro" for="pc-minutes" style="display:block;margin-bottom:4px;">عدد الدقائق (يمكن كتابة مجموع مثل 15+20+30)</label>' +
+            '<input id="pc-minutes" class="odoo-input" type="text" inputmode="decimal" value="' + esc(st.minutes) + '" oninput="MFGVIEW_PAGE.pauseCalcSet(-1,\'minutes\',this.value)" style="direction:ltr;">';
+        }
+        return html + '<div id="pc-total" class="pc-total"></div>';
+      }
+      function pcPaintTotal_() {
+        var st = PAUSE_CALC; if (!st) return;
+        if (st.mode === 'range') st.rows.forEach(function (r, k) {
+          var d = document.getElementById('pc-dur-' + k); var m = pcRowMinutes_(r);
+          if (d) d.textContent = m == null ? '—' : pcFmtMin_(m);
+        });
+        var host = document.getElementById('pc-total'); if (!host) return;
+        var mins = pcTotalMinutes_();
+        if (mins == null) {
+          host.innerHTML = st.mode === 'minutes' && String(st.minutes || '').trim()
+            ? '<span style="color:#dc2626;">أدخل أرقاماً فقط، ويمكن جمعها بعلامة +</span>'
+            : '<span class="odoo-ro">الإجمالي: —</span>';
+          return;
+        }
+        host.innerHTML = 'الإجمالي: ' + pcFmtMin_(mins) + ' = <span style="direction:ltr;display:inline-block;">' + pcHours_(mins) + '</span> ساعة';
+      }
+      function pcRender_() {
+        var body = document.getElementById('pc-body');
+        if (body) body.innerHTML = pcBody_();
+        pcPaintTotal_();
+      }
+      function openPauseCalc(i) {
+        if (!editable() || !MFG_WORKOPS[i]) return;
+        var current = Number(MFG_WORKOPS[i].total_pause_duration) || 0;
+        PAUSE_CALC = { i: i, mode: 'range', rows: [{ from: '', to: '' }], minutes: '' };
+        var wcLabel = workCenterLabel_(MFG_WORKOPS[i].work_center_id);
+        UIC.openModal('vf-pause-calc', {
+          size: 'sm',
+          title: 'حاسبة التوقف (ساعات)' + (wcLabel ? ' — ' + wcLabel : ''),
+          body: '<div id="pc-body">' + pcBody_() + '</div>',
+          footer: UIC.button({ text: 'إلغاء', type: 'outline', onClick: 'MFGVIEW_PAGE.closePauseCalc()' }) + ' ' +
+            (current > 0 ? UIC.button({ text: 'إضافة إلى الحالي (' + current + ')', type: 'outline', onClick: 'MFGVIEW_PAGE.applyPauseCalc(true)' }) + ' ' : '') +
+            UIC.button({ text: 'إدخال', onClick: 'MFGVIEW_PAGE.applyPauseCalc(false)' })
+        });
+        pcPaintTotal_();
+      }
+      function pauseCalcMode(mode) { if (PAUSE_CALC) { PAUSE_CALC.mode = mode; pcRender_(); } }
+      function pauseCalcSet(k, field, value) {
+        var st = PAUSE_CALC; if (!st) return;
+        if (field === 'minutes') st.minutes = value; else if (st.rows[k]) st.rows[k][field] = value;
+        pcPaintTotal_();
+      }
+      function pauseCalcAdd() {
+        if (!PAUSE_CALC) return;
+        PAUSE_CALC.rows.push({ from: '', to: '' });
+        pcRender_();
+        var el = document.getElementById('pc-from-' + (PAUSE_CALC.rows.length - 1)); if (el) el.focus();
+      }
+      function pauseCalcRemove(k) {
+        if (!PAUSE_CALC || PAUSE_CALC.rows.length < 2) return;
+        PAUSE_CALC.rows.splice(k, 1);
+        pcRender_();
+      }
+      function closePauseCalc() { PAUSE_CALC = null; try { UIC.closeModal('vf-pause-calc'); } catch (e) {} }
+      function applyPauseCalc(addToCurrent) {
+        var st = PAUSE_CALC; if (!st) return;
+        var mins = pcTotalMinutes_();
+        if (mins == null) {
+          UI.toast && UI.toast(st.mode === 'minutes' ? 'أدخل عدد الدقائق' : 'أدخل فترة توقف واحدة على الأقل (من — إلى)', 'error');
+          return;
+        }
+        var el = document.getElementById('wo-pause-' + st.i);
+        var base = addToCurrent ? (Number(MFG_WORKOPS[st.i] && MFG_WORKOPS[st.i].total_pause_duration) || 0) : 0;
+        var hours = Math.round((base + mins / 60) * 100) / 100;
+        closePauseCalc();
+        if (el) {
+          el.value = hours;
+          try { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); } catch (e) {}
+        }
       }
 
       /* The same treatment as the notes cell: the row keeps a compact button
@@ -2118,7 +2281,9 @@
         openWorkOpNotes: openWorkOpNotes, closeWorkOpNotes: closeWorkOpNotes, saveWorkOpNotes: saveWorkOpNotes,
         openWorkOpWorkCenter: openWorkOpWorkCenter, closeWorkOpWorkCenter: closeWorkOpWorkCenter, saveWorkOpWorkCenter: saveWorkOpWorkCenter,
         addByproduct: addByproduct, removeByproduct: removeByproduct, setByproduct: setByproduct,
-        approveMo: approveMo, printMo: printMo, openCalc: openCalc
+        approveMo: approveMo, printMo: printMo, openCalc: openCalc,
+        openPauseCalc: openPauseCalc, closePauseCalc: closePauseCalc, applyPauseCalc: applyPauseCalc,
+        pauseCalcMode: pauseCalcMode, pauseCalcSet: pauseCalcSet, pauseCalcAdd: pauseCalcAdd, pauseCalcRemove: pauseCalcRemove
       };
       document.addEventListener('DOMContentLoaded', load);
       /* Another device's change to this page arrives on its own. The poll
