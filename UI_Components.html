@@ -8080,6 +8080,9 @@ UIC.Live = (function () {
       if (pendingCount() > 0) return true;
       /* A modal is open — almost always a form. */
       if (document.querySelector && document.querySelector('.modal-backdrop, .uic-modal, [data-modal-open="true"]')) return true;
+      /* [live-notice] ...and a UIC.openModal dialog, which is a .modal-overlay
+         the selector above never matched. */
+      if (anyModalOpen()) return true;
       /* Typing. */
       var a = document.activeElement;
       if (a && /^(INPUT|TEXTAREA|SELECT)$/.test(String(a.tagName || '').toUpperCase())) return true;
@@ -8170,22 +8173,29 @@ UIC.Live = (function () {
     return out;
   }
 
-  /** Run a view's refresh if any of its tables went stale while it was closed. */
-  function refreshIfStale(name) {
+  /** Run a view's refresh if any of its tables went stale while it was closed.
+   *  With `loading` the page is loading that view right now: the flags are
+   *  cleared and the caller is told, but its refresh is not run twice. */
+  function refreshIfStale(name, loading) {
     var tables = tablesOfView(name);
     if (!tables) return false;
     var hit = tables.filter(function (t) { return staleTables[t]; });
     if (!hit.length) return false;
-    hit.forEach(function (t) { delete staleTables[t]; });
     var fn = viewRefresh[name];
-    if (typeof fn === 'function') { try { fn(); } catch (e) {} }
+    /* Nothing registered to reload this view (a plain dialog): keep the flags
+       for the view that can reload them. */
+    if (!loading && typeof fn !== 'function') return false;
+    hit.forEach(function (t) { delete staleTables[t]; });
+    if (!loading) { try { fn(); } catch (e) {} }
     return true;
   }
 
   /**
    * The page says which view is on screen: 'list', 'form', 'detail', 'print',
    * 'report' or 'tab:<id>'. opts.refresh is that view's quiet reload; opts.key
-   * and opts.table name the record a form has open (Phase 5).
+   * and opts.table name the record a form has open (Phase 5). opts.loading:
+   * the caller is fetching this view now — returns true when some of its
+   * tables were stale, so the caller can drop what it cached for it.
    */
   function setView(name, opts) {
     var o = opts || {};
@@ -8196,7 +8206,7 @@ UIC.Live = (function () {
     viewOpts[name] = { key: o.key !== undefined ? String(o.key) : '', table: o.table ? String(o.table) : '' };
     /* The user just asked for this view: refreshing it now is expected, not
        an interruption. */
-    refreshIfStale(name);
+    return refreshIfStale(name, !!o.loading);
   }
 
   /* UIC.openModal / UIC.closeModal report here, so a dialog over a view counts
@@ -8328,7 +8338,9 @@ UIC.Live = (function () {
     /* [live-notice] A view the page registered reloads itself; the list
        refresh the page passes here is for the list. */
     if (viewAdopted && currentView !== 'list' && typeof viewRefresh[currentView] === 'function') refresh = viewRefresh[currentView];
-    if (userIsBusy()) { freshRefresh = refresh; showFreshChip(); return; }
+    /* A form on screen is never redrawn under the user — re-opening it would
+       drop what they typed — so a change to it always asks first. */
+    if (userIsBusy() || (viewAdopted && currentView === 'form')) { freshRefresh = refresh; showFreshChip(); return; }
     hideFreshChip();
     freshRefresh = null;
     pendingNotice = null;

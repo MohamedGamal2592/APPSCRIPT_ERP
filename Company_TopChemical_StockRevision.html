@@ -449,6 +449,8 @@
     page: 'tc_stock_revision',
     onChange: function () { UIC.Live.arrive(function () { fetchStock(); }); }
   });
+  /* [live-notice] the view on screen */
+  UIC.Live.setView('list', { refresh: function () { fetchStock(); } });
 
 
   load();

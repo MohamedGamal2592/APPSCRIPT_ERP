@@ -287,6 +287,17 @@ async function main() {
     check(log.listRefresh === n + 1, 'returning to the list refreshes it once', log.listRefresh - n);
   }
   {
+    const { sb, srv, log, poll } = await setup();
+    sb.UIC.Live.setView('form', { refresh: function () { log.formRefresh++; } });
+    sb.UIC.Live.setView('list', { refresh: function () { log.listRefresh++; } });
+    srv.write(STOCK, 'rid-other-00000000014', 'ahmed@x', 'أحمد');
+    await poll();
+    const was = sb.UIC.Live.setView('form', { refresh: function () { log.formRefresh++; }, loading: true });
+    check(was === true && log.formRefresh === 0 && sb.UIC.Live.staleTables().length === 0,
+      'setView(…, {loading:true}) reports the stale view without running its refresh twice', { was, formRefresh: log.formRefresh });
+    check(sb.UIC.Live.setView('list', { refresh: function () {}, loading: true }) === false, '  and reports false when nothing was stale');
+  }
+  {
     /* The request guard is what feeds markOwnRequest in production. */
     const sb = freshSandbox();
     const mem = () => { const m = {}; return { getItem: k => (k in m ? m[k] : null), setItem: (k, v) => { m[k] = String(v); }, removeItem: k => { delete m[k]; }, key: i => Object.keys(m)[i] || null, get length() { return Object.keys(m).length; } }; };
@@ -307,8 +318,171 @@ async function main() {
     check(!payloadGet.data.__request_id, 'reads are not stamped (get_ actions are not writes)');
   }
 
+  await realPages();
+
   console.log(failed ? '\nlive_notice_client: FAIL (' + failed + ')' : '\nlive_notice_client: OK');
   process.exit(failed ? 1 : 0);
+}
+
+/* ── P3.4 — one real page per company, driven list → form → list ─────── */
+const path = require('path');
+const fs = require('fs');
+const { bootPage } = require('./pageharness');
+const INV = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'liveviews', 'inventory.json'), 'utf8'));
+
+/** A server for a real page: its declared views, labels, and scripted writes. */
+function pageServer(company, page) {
+  const views = INV.companies[company].pageViews[page];
+  const labels = {};
+  const tables = [];
+  Object.keys(views).forEach(v => views[v].forEach(t => { if (tables.indexOf(t) === -1) tables.push(t); }));
+  tables.forEach(t => { const l = INV.labels[company][t]; if (l) labels[t] = l.label; });
+  let clock = 1759219200000;
+  const stamps = {};
+  tables.forEach(t => { stamps[t] = { t: clock - 1000, w: [] }; });
+  return {
+    views, tables,
+    write: (t, who) => { clock += 5; stamps[t] = { t: clock, w: [{ t: clock, r: 'rid-' + who + '-0000000000', u: who + '@x', n: who }].concat(stamps[t].w).slice(0, 5) }; },
+    reply: () => {
+      const versions = {}, meta = {};
+      tables.forEach(t => { versions[t] = JSON.stringify(stamps[t]); meta[t] = JSON.parse(versions[t]); });
+      return { status: 'success', page, tables, versions, meta, views, labels, now: String(clock) };
+    }
+  };
+}
+
+async function drive(sb) {
+  for (let i = 0; i < 2; i++) {
+    const due = sb.__timers.slice();
+    sb.__timers.length = 0;
+    due.forEach(t => { try { if (t && typeof t.fn === 'function') t.fn(); } catch (e) {} });
+    await settle();
+  }
+}
+
+function bootReal(file, company, page, extra) {
+  const srv = pageServer(company, page);
+  const calls = [];
+  const sb = bootPage(Object.assign({
+    page: file, isSuperAdmin: true,
+    containers: ['tl-content', 'vf-purchasing-content', 'content', 'app', 'ac-root'],
+    scriptlets: { CURRENT_ACTION: "'" + page + "'" },
+    call: (a) => {
+      calls.push(a);
+      if (a === 'get_page_versions') return srv.reply();
+      return { status: 'success', headers: [], rows: [], data: [], items: [], options: {}, employees: [], salaries: [], batches: [] };
+    }
+  }, extra || {}));
+  const count = a => calls.filter(x => x === a).length;
+  return { sb, srv, calls, count };
+}
+const onlyIn = (views, a, b) => views[a].filter(t => views[b].indexOf(t) === -1);
+
+async function realPages() {
+  /* Testing System + Top Light: a list that swaps to a full-screen form. */
+  for (const [company, file, page, optionsAction] of [
+    ['ErpTest', 'Company_ErpTest_Sales.html', 'et_sales', 'get_et_sales_options'],
+    ['TopLight', 'Company_TopLight_Sales.html', 'tl_sales', 'get_sales_options']]) {
+    console.log('\nP3 — ' + company + ': ' + file + ' (list → form → list)\n');
+    const { sb, srv, count } = bootReal(file, company, page);
+    await drive(sb);
+    check(sb.UIC.Live.currentView() === 'list', 'the page opens on the list view', sb.UIC.Live.currentView());
+    sb.openForm('');
+    await drive(sb);
+    check(sb.UIC.Live.currentView() === 'form', 'openForm switches to the form view');
+    srv.write(srv.views.form[0], 'ahmed');
+    await drive(sb);
+    const chip = sb.document.getElementById('uic-live-fresh');
+    check(chip && /بواسطة <b>ahmed<\/b>/.test(chip.innerHTML), 'a change to the open form asks first (never redrawn under the user)', chip && chip.innerHTML);
+    sb.UIC.Live.dismissFresh();
+    const listOnly = onlyIn(srv.views, 'list', 'form');
+    if (listOnly.length) {
+      srv.write(listOnly[0], 'sara');
+      await drive(sb);
+      check(sb.UIC.Live.staleTables().indexOf(listOnly[0]) !== -1, 'a list-only table (' + listOnly[0] + ') moving while the form is open is stale, silent');
+    }
+    const listAction = 'get_' + (company === 'ErpTest' ? 'et_' : '') + 'sales_headers';
+    const n0 = count(listAction);
+    sb.showList();
+    await drive(sb);
+    check(sb.UIC.Live.currentView() === 'list' && count(listAction) === n0 + 1 && sb.UIC.Live.staleTables().length === 0,
+      'back to the list: one list fetch, stale cleared', { view: sb.UIC.Live.currentView(), fetches: count(listAction) - n0, stale: sb.UIC.Live.staleTables() });
+    void optionsAction;
+  }
+
+  /* Top Chemical: tabs. */
+  {
+    console.log('\nP3 — TopChemical: Company_TopChemical_BudgetHR.html (tab → tab)\n');
+    const { sb, srv, count } = bootReal('Company_TopChemical_BudgetHR.html', 'TopChemical', 'tc_budget_hr');
+    await drive(sb);
+    check(sb.UIC.Live.currentView() === 'tab:employees', 'the page opens on tab:employees', sb.UIC.Live.currentView());
+    srv.write('legal_salaries', 'sara');
+    const n0 = count('get_legal_salaries');
+    await drive(sb);
+    check(sb.UIC.Live.staleTables().indexOf('legal_salaries') !== -1 && count('get_legal_salaries') === n0, 'salaries moved on the employees tab: stale, nothing reloads');
+    sb.switchTab('salaries');
+    await drive(sb);
+    check(sb.UIC.Live.currentView() === 'tab:salaries' && count('get_legal_salaries') >= n0 + 1 && sb.UIC.Live.staleTables().length === 0,
+      'switching to the salaries tab reloads it (stale cleared)', { view: sb.UIC.Live.currentView(), loads: count('get_legal_salaries') - n0 });
+  }
+
+  /* Valley Foods: list ↔ full-screen form. */
+  {
+    console.log('\nP3 — ValleyFoods: Company_ValleyFoods_Purchasing.html (list → form → list)\n');
+    const { sb, srv, count } = bootReal('Company_ValleyFoods_Purchasing.html', 'ValleyFoods', 'vf_purchasing',
+      { expose: ['openForm', 'showList'] });
+    await drive(sb);
+    const fn = n => (typeof sb[n] === 'function' ? sb[n] : sb.exported(n));
+    check(sb.UIC.Live.currentView() === 'list', 'the page opens on the list view', sb.UIC.Live.currentView());
+    fn('openForm')('');
+    await drive(sb);
+    check(sb.UIC.Live.currentView() === 'form', 'openForm switches to the form view');
+    const opt1 = count('get_valley_purchasing_options');
+    fn('showList')();
+    await drive(sb);
+    check(sb.UIC.Live.currentView() === 'list', 'back to the list view');
+    const listTable = srv.views.list[0];
+    srv.write(listTable, 'sara');
+    await drive(sb);
+    check(sb.UIC.Live.staleTables().length === 0, 'a list table moving while on the list is in view (not stale)');
+    void opt1;
+  }
+
+  /* Assessment: a list with dialogs. */
+  {
+    console.log('\nP3 — Assessment: Company_Assessment_Batches.html (list + dialog)\n');
+    const { sb, srv } = bootReal('Company_Assessment_Batches.html', 'Assessment', 'ac_batches');
+    await drive(sb);
+    check(sb.UIC.Live.currentView() === 'list', 'the page opens on the list view', sb.UIC.Live.currentView());
+    sb.UIC.openModal('ac-batch-modal', { title: 't', body: '' });
+    srv.write(srv.views.list[0], 'ahmed');
+    await drive(sb);
+    const chip = sb.document.getElementById('uic-live-fresh');
+    check(chip && /ahmed/.test(chip.innerHTML), 'a list table changing under an open dialog asks first, naming the writer', chip && chip.innerHTML);
+    sb.UIC.closeModal('ac-batch-modal');
+  }
+
+  /* Valley Foods: dialog-only tables (the invoice dialog shows live stock). */
+  {
+    console.log('\nP3 — ValleyFoods: Company_ValleyFoods_Sales.html (list + invoice dialog)\n');
+    const { sb, srv } = bootReal('Company_ValleyFoods_Sales.html', 'ValleyFoods', 'vf_sales');
+    /* This page starts its watch on DOMContentLoaded. */
+    sb.fireReady();
+    await drive(sb);
+    check(sb.UIC.Live.currentView() === 'list', 'the page opens on the list view', sb.UIC.Live.currentView());
+    const formOnly = onlyIn(srv.views, 'form', 'list');
+    check(formOnly.indexOf('valley_current_products') !== -1, '  (the dialog shows stock tables the list does not: ' + formOnly.join(', ') + ')');
+    srv.write('valley_current_products', 'sara');
+    await drive(sb);
+    check(sb.UIC.Live.staleTables().indexOf('valley_current_products') !== -1 && !sb.document.getElementById('uic-live-fresh'),
+      'with no dialog open, a stock change is stale and silent');
+    sb.UIC.openModal('vf-inv-modal', { title: 't', body: '' });
+    srv.write('valley_current_products', 'ahmed');
+    await drive(sb);
+    const chip = sb.document.getElementById('uic-live-fresh');
+    check(chip && /أرصدة المخزون/.test(chip.innerHTML) && /ahmed/.test(chip.innerHTML), 'with the invoice dialog open, the stock change is on screen: «تم تحديث أرصدة المخزون بواسطة ahmed …»', chip && chip.innerHTML);
+    sb.UIC.closeModal('vf-inv-modal');
+  }
 }
 
 main().catch(e => { console.error(e); process.exit(1); });

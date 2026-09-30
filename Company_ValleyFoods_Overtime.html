@@ -638,6 +638,8 @@
         page: 'vf_hr_overtime',
         onChange: function () { UIC.Live.arrive(function () { loadData(true); }); }
       });
+      /* [live-notice] the view on screen */
+      UIC.Live.setView('list', { refresh: function () { loadData(true); } });
     });
 
   })();

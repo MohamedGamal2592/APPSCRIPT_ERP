@@ -124,6 +124,8 @@
       // Called with no argument after a save/delete — keep whichever view the
       // user is currently in rather than silently dropping back to 20 rows.
       __loadedAll = arguments.length ? !!loadAll : __loadedAll;
+      /* [live-notice] the view on screen */
+      UIC.Live.setView('list', { refresh: function () { showList(true); }, loading: true });
       if (!quiet) UIC.readSkeleton('vf-purchasing-content');
       var payload = { from: __dateFrom, to: __dateTo };
       if (__loadedAll || __dateFrom || __dateTo) payload.loadAll = true;
@@ -259,6 +261,8 @@
       if (code) {
         record = __headers.find(function (h) { return String(h.Code) === String(code); }) || null;
       }
+      /* [live-notice] the view on screen */
+      if (UIC.Live.setView('form', { refresh: function () { openForm(__editingCode, __viewOnly); }, loading: true })) __optionsPromise = null;
       UIC.readSkeleton('vf-purchasing-content', { message: 'جاري استرجاع الأصناف والموردين...' });
       ensureOptions()
         .then(function () { renderForm(record); })

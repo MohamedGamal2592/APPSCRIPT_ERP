@@ -185,6 +185,8 @@
         page: 'vf_quality_ncr',
         onChange: function () { UIC.Live.arrive(function () { load(true); }); }
       });
+      /* [live-notice] the view on screen */
+      UIC.Live.setView('list', { refresh: function () { load(true); } });
     }
 
     function load(quiet) {

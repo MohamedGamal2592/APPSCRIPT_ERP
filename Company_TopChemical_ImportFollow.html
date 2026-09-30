@@ -425,6 +425,8 @@
     page: 'tc_import_follow',
     onChange: function () { UIC.Live.arrive(function () { fetchFollows(true); }); }
   });
+  /* [live-notice] the view on screen */
+  UIC.Live.setView('list', { refresh: function () { fetchFollows(true); } });
 
 
   load();

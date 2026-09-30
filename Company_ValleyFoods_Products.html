@@ -117,6 +117,8 @@
         page: 'vf_products',
         onChange: function () { UIC.Live.arrive(function () { load(true); }); }
       });
+      /* [live-notice] the view on screen */
+      UIC.Live.setView('list', { refresh: function () { load(true); } });
     }
 
     /* quiet: refresh in the background, no blocking overlay. Used after an

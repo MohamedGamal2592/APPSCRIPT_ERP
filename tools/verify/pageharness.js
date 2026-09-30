@@ -169,6 +169,17 @@ function bootPage(opts) {
     pageSrc = pageSrc.slice(0, marker) + line + pageSrc.slice(marker);
   }
 
+  /* DOMContentLoaded listeners are recorded (the stub document drops every
+     listener) so a test can run a page's load-time wiring with fireReady().
+     Nothing fires them unless a test asks. */
+  const readyFns = [];
+  const docAdd = sandbox.document.addEventListener;
+  sandbox.document.addEventListener = function (type, fn) {
+    if (type === 'DOMContentLoaded' && typeof fn === 'function') readyFns.push(fn);
+    return docAdd.apply(this, arguments);
+  };
+  sandbox.fireReady = () => { readyFns.splice(0).forEach(fn => { try { fn({ type: 'DOMContentLoaded' }); } catch (e) {} }); };
+
   vm.runInContext(pageSrc, sandbox, { filename: o.page });
   sandbox.exported = name => {
     const fns = sandbox.__EXPORTS || {};

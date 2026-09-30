@@ -186,6 +186,8 @@
     page: 'tc_employee_status',
     onChange: function () { UIC.Live.arrive(function () { fetchStatus(true); }); }
   });
+  /* [live-notice] the view on screen */
+  UIC.Live.setView('list', { refresh: function () { fetchStatus(true); } });
 
   load();
 </script>

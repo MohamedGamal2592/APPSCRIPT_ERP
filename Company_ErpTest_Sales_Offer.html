@@ -57,6 +57,8 @@
   function toggleLoadAll() { LOADED_ALL = !LOADED_ALL; renderList(); }
 
   function renderList(quiet) {
+    /* [live-notice] the view on screen */
+    UIC.Live.setView('list', { refresh: function () { renderList(true); }, loading: true });
     if (!quiet) UIC.readSkeleton('tl-content', { message: [
       'جاري تحميل عروض الأسعار...',
       'جاري استرجاع العملاء والأصناف...',
@@ -146,6 +148,8 @@
          the Add form. */
       if (!record) { UIC.toast('السجل غير موجود — تم تحديث القائمة', 'error'); showList(); return; }
     }
+    /* [live-notice] the view on screen */
+    UIC.Live.setView('form', { refresh: function () { openForm(__editingUid); }, loading: true });
     renderForm(record);
   }
 

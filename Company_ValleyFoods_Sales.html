@@ -1184,6 +1184,8 @@
         page: 'vf_sales',
         onChange: function () { UIC.Live.arrive(function () { load(true); }); }
       });
+      /* [live-notice] the view on screen */
+      UIC.Live.setView('list', { refresh: function () { load(true); } });
     });
 
     /* Phase B2: the shared refresh control for THIS list only. The loader

@@ -150,6 +150,8 @@
     page: 'tc_budget_parties',
     onChange: function () { UIC.Live.arrive(function () { fetchParties(true); }); }
   });
+  /* [live-notice] the view on screen */
+  UIC.Live.setView('list', { refresh: function () { fetchParties(true); } });
 
   load();
 </script>

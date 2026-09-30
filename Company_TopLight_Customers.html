@@ -231,6 +231,8 @@
     page: 'tl_customers',
     onChange: function () { UIC.Live.arrive(function () { fetchParties(); }); }
   });
+  /* [live-notice] the view on screen */
+  UIC.Live.setView('list', { refresh: function () { fetchParties(); } });
 
 </script>
 </body>

@@ -259,6 +259,8 @@
     page: 'tc_debts',
     onChange: function () { UIC.Live.arrive(function () { fetchDebts(true); }); }
   });
+  /* [live-notice] the view on screen */
+  UIC.Live.setView('list', { refresh: function () { fetchDebts(true); } });
 
   load();
 </script>

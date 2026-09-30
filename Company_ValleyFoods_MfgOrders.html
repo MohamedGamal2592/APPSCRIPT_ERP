@@ -1300,6 +1300,8 @@
       page: 'vf_mfg_orders',
       onChange: function () { UIC.Live.arrive(function () { load(true); }); }
     });
+    /* [live-notice] the view on screen */
+    UIC.Live.setView('list', { refresh: function () { load(true); } });
 
   })();
   </script>

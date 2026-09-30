@@ -496,6 +496,8 @@
         page: 'vf_sales',
         onChange: function () { UIC.Live.arrive(function () { load(true); }); }
       });
+      /* [live-notice] the view on screen */
+      UIC.Live.setView('list', { refresh: function () { load(true); } });
     });
 
     document.addEventListener('DOMContentLoaded', renderApp);

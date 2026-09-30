@@ -312,6 +312,8 @@
     page: 'tc_emp_permits',
     onChange: function () { UIC.Live.arrive(function () { fetchPermits(true); }); }
   });
+  /* [live-notice] the view on screen */
+  UIC.Live.setView('list', { refresh: function () { fetchPermits(true); } });
 
   load();
 </script>

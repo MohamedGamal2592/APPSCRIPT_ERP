@@ -714,6 +714,8 @@
     page: 'tc_emp_salaries',
     onChange: function () { UIC.Live.arrive(function () { fetchSalaries(FILTER_MONTH, FILTER_YEAR, true); }); }
   });
+  /* [live-notice] the view on screen */
+  UIC.Live.setView('list', { refresh: function () { fetchSalaries(FILTER_MONTH, FILTER_YEAR, true); } });
 
   load();
 </script>

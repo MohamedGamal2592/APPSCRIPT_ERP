@@ -480,6 +480,8 @@
         page: 'vf_hr_deductions',
         onChange: function () { UIC.Live.arrive(function () { fetchDeductions(true); }); }
       });
+      /* [live-notice] the view on screen */
+      UIC.Live.setView('list', { refresh: function () { fetchDeductions(true); } });
     });
 
     document.addEventListener('DOMContentLoaded', load);
