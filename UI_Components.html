@@ -7893,14 +7893,14 @@ UIC.Live = (function () {
   function renderChip() {
     var s = splitQueue();
     var el = document.getElementById('uic-live-retry');
-    var quiet = document.getElementById('uic-live-elsewhere');
+    var elsewhereEl = document.getElementById('uic-live-elsewhere');
     var mineN = s.mine.length;
     var deadMineN = s.deadMine.length;
     var otherN = s.elsewhere.length + s.deadOther.length;
 
     /* ── This page owns a stranded write: the alarm, as loud as it ever was. */
     if (mineN || deadMineN) {
-      if (quiet && quiet.remove) quiet.remove();
+      if (elsewhereEl && elsewhereEl.remove) elsewhereEl.remove();
       if (!el) {
         el = document.createElement('div');
         el.id = 'uic-live-retry';
@@ -7940,13 +7940,13 @@ UIC.Live = (function () {
      * a record from the page that owns it. The drain keeps running regardless,
      * so a chip nobody clicks still clears itself when the network returns. */
     if (el && el.remove) el.remove();
-    if (!otherN) { if (quiet && quiet.remove) quiet.remove(); return; }
-    if (!quiet) {
-      quiet = document.createElement('div');
-      quiet.id = 'uic-live-elsewhere';
-      quiet.className = 'uic-live-elsewhere';
-      quiet.setAttribute('role', 'status');
-      document.body.appendChild(quiet);
+    if (!otherN) { if (elsewhereEl && elsewhereEl.remove) elsewhereEl.remove(); return; }
+    if (!elsewhereEl) {
+      elsewhereEl = document.createElement('div');
+      elsewhereEl.id = 'uic-live-elsewhere';
+      elsewhereEl.className = 'uic-live-elsewhere';
+      elsewhereEl.setAttribute('role', 'status');
+      document.body.appendChild(elsewhereEl);
     }
     var stranded = s.elsewhere.concat(s.deadOther);
     var page = onePageOf(stranded);
@@ -7954,11 +7954,11 @@ UIC.Live = (function () {
     var go = '<button type="button" class="uic-live-elsewhere-go" ' +
              'onclick="UIC.Live.goToStranded()">انتقل إليها</button>';
     if (page && label) {
-      quiet.innerHTML = '<span>تغيير لم يُحفظ في صفحة ' + esc(label) + '</span>' + go;
+      elsewhereEl.innerHTML = '<span>تغيير لم يُحفظ في صفحة ' + esc(label) + '</span>' + go;
     } else if (page) {
-      quiet.innerHTML = '<span>تغيير لم يُحفظ في صفحة أخرى</span>' + go;
+      elsewhereEl.innerHTML = '<span>تغيير لم يُحفظ في صفحة أخرى</span>' + go;
     } else {
-      quiet.innerHTML = '<span>' + stranded.length + ' تغييرات لم تُحفظ في صفحات أخرى</span>';
+      elsewhereEl.innerHTML = '<span>' + stranded.length + ' تغييرات لم تُحفظ في صفحات أخرى</span>';
     }
   }
 
@@ -8078,8 +8078,20 @@ UIC.Live = (function () {
    * saves, so arrive() defers the refresh while anything is unconfirmed. */
   function pendingCount() { return inFlight + queue.length; }
 
+  /* [§P4] What is unsaved ON THIS PAGE.
+   *
+   * `inFlight` is always this page's: a request on the wire belongs to the
+   * document that started it. Queued entries are filtered by owner, because
+   * since [RT-4b] a queued entry is rebuilt from `target_system` and drains in
+   * a LATER session — so leaving a different page cannot lose it, and warning
+   * there is noise that teaches users to click through the warning that does
+   * matter. On the owning page the wording and the behaviour are unchanged.
+   *
+   * pendingCount() stays as it is, and stays exported: it is the honest total. */
+  function pendingHere() { return inFlight + splitQueue().mine.length; }
+
   function guardMessage() {
-    var n = pendingCount();
+    var n = pendingHere();
     if (!n) return null;
     return n === 1
       ? 'هناك تغيير لم يُحفظ بعد. الخروج الآن سيفقده.'
@@ -8326,7 +8338,7 @@ UIC.Live = (function () {
       /* [§I8] A pending save is the busiest state there is: a quiet refresh
          redraws from the server, which does not have the row yet, so the
          optimistic row would disappear while the chip insists it is pending. */
-      if (pendingCount() > 0) return true;
+      if (pendingHere() > 0) return true;
       /* A modal is open — almost always a form. */
       if (document.querySelector && document.querySelector('.modal-backdrop, .uic-modal, [data-modal-open="true"]')) return true;
       /* [live-notice] ...and a UIC.openModal dialog, which is a .modal-overlay
@@ -9165,6 +9177,7 @@ UIC.Live = (function () {
      * The navigation guard and UIC.navTo both read it: leaving a page while an
      * optimistic row is unsaved loses it with the page that drew it. */
     pending: pendingCount,
+    pendingHere: pendingHere,
     guardMessage: guardMessage,
     /* [RT-6] A page's watch calls arrive() instead of refreshing directly, so
      * the decision "may the list move right now?" is made in ONE place rather
