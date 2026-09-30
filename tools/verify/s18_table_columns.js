@@ -125,6 +125,19 @@ check(UIC.classifyColumns([{ label: 'س' }], null)[0] === 'atom',
   'null rows does not throw — the label is then the only evidence');
 check(UIC.classifyColumns([null], [{ c: 1 }])[0] === 'actions',
   'a null header does not throw');
+/* Surplus width: one share per flexible column. Prose when there is any,
+   otherwise text; a single prose column keeps the stylesheet's 100%. */
+check(JSON.stringify(UIC._colShares(['atom', 'text', 'text', 'actions'])) === '["","50%","50%",""]',
+  'no prose column: the text columns split the surplus, the id column does not take it');
+check(JSON.stringify(UIC._colShares(['atom', 'prose', 'prose', 'text'])) === '["","50%","50%",""]',
+  'two prose columns share the surplus instead of the first one taking it all');
+check(JSON.stringify(UIC._colShares(['atom', 'prose', 'num'])) === '["","100%",""]',
+  'one prose column keeps 100%, exactly as the stylesheet already said');
+check(JSON.stringify(UIC._colShares(['atom', 'num', 'actions'])) === '["","",""]',
+  'a table with no text at all declares no share');
+const UIC_SRC_ = require('fs').readFileSync(require('path').join(__dirname, '..', '..', 'UI_Components.html'), 'utf8');
+check(/\.table td \{ display: table-cell; width: auto; \}/.test(UIC_SRC_),
+  'from tablet-p up the phone card width:100% on td is undone (else the first column takes the row)');
 check(UIC._colMin('30ch') === '30ch' && UIC._colMin('') === '' &&
   UIC._colMin('30ch;color:red') === '' && UIC._colMin('javascript:x') === '',
   'min: accepts a bare CSS length and DROPS anything else, rather than escaping it');
@@ -264,7 +277,7 @@ async function bootChecks() {
   check(/class="col-num"/.test(cashThead), 'the emitted thead carries class="col-num"');
   check(/class="col-atom"/.test(cashThead), 'the emitted thead carries class="col-atom"');
   check(/class="col-actions"/.test(cashThead), 'the emitted thead carries class="col-actions"');
-  check(/style="min-width:30ch"/.test(cashThead),
+  check(/style="min-width:30ch[;"]/.test(cashThead),
     'the declared min: 30ch reached the markup as a style attribute');
   const proseTh = (cashThead.match(/<th(?=[\s>])[^>]*class="col-prose"[^>]*>[\s\S]*?<\/th>/) || [''])[0];
   check(proseTh.indexOf('البيان') !== -1,

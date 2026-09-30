@@ -1029,6 +1029,34 @@ UIC.classifyColumns = function (headers, rows) {
   });
 };
 
+/* Who takes the surplus width, and how much of it each gets.
+ *
+ * The stylesheet gives prose `width: 100%` and every other role a floor or 1%.
+ * That leaves two tables with nobody sensible to hand the surplus to:
+ *
+ *   - NO prose column (a short list: id, name, English name, actions). In
+ *     Chromium a column whose header carries min-width counts as constrained,
+ *     so the surplus skips the text columns and lands on the 1% columns —
+ *     the id column ends up 1,100px wide while the names wrap onto two lines.
+ *   - TWO OR MORE prose columns. Percentages over 100% are clamped in header
+ *     order, so the first prose column takes everything and the second gets
+ *     its floor.
+ *
+ * The answer is one percentage per flexible column, split evenly: prose
+ * columns when there are any, otherwise text columns. The floors still hold,
+ * so nothing gets narrower than it was allowed to be; the only change is WHERE
+ * the leftover width goes. A table with exactly one prose column gets 100% on
+ * it, which is what the stylesheet already said — its layout is unchanged.
+ * Returns an array parallel to `roles`: '' or a CSS percentage. */
+UIC._colShares = function (roles) {
+  var rs = roles || [];
+  var flex = rs.indexOf('prose') !== -1 ? 'prose' : (rs.indexOf('text') !== -1 ? 'text' : '');
+  if (!flex) return rs.map(function () { return ''; });
+  var n = rs.filter(function (r) { return r === flex; }).length;
+  var share = (Math.floor(10000 / n) / 100) + '%';
+  return rs.map(function (r) { return r === flex ? share : ''; });
+};
+
 /* A per-column floor a page declared with { min: '30ch' }, validated before it
  * reaches a style attribute. Anything that is not a bare CSS length is dropped
  * rather than escaped: a width is never a reason to accept arbitrary text into
@@ -1111,10 +1139,12 @@ UIC.autoColumns = function (idOrEl) {
   }
 
   var roles = UIC.classifyColumns(headers, rows);
+  var shares = UIC._colShares(roles);
   for (var k = 0; k < ths.length; k++) {
     var t = ths[k];
     var role = roles[k];
     if (!role) continue;
+    if (t.style) t.style.width = shares[k] || '';
     /* Only the five roles this function itself can emit are stripped, so a
        page's own class that happens to start with "col-" survives. */
     var kept = String(t.className || '').split(/\s+/).filter(function (n) {
@@ -1183,14 +1213,18 @@ UIC._dtHeadRow = function (st) {
     ? '<th class="dt-sel"><input type="checkbox" class="dt-sel-all" aria-label="تحديد الكل" ' +
       'onclick="UIC._dtToggleAll(\'' + st.id + '\', this)"></th>'
     : '';
-  return '<tr>' + selTh + cols.map(function (h) {
+  /* Shares are worked out over the VISIBLE columns, so hiding one hands its
+     part of the surplus to the columns that remain. */
+  var shares = UIC._colShares(cols.map(function (h) { return roles[h.key || h.label]; }));
+  return '<tr>' + selTh + cols.map(function (h, i) {
     var key = h.key || h.label;
     var sortable = h.sortable !== false && key !== 'actions';
     var role = roles[key];
     var min = UIC._colMin(h.min);
+    var style = (min ? 'min-width:' + min + ';' : '') + (shares[i] ? 'width:' + shares[i] + ';' : '');
     return '<th scope="col" data-key="' + key + '"' +
       (role ? ' class="col-' + role + '"' : '') +
-      (min ? ' style="min-width:' + min + '"' : '') +
+      (style ? ' style="' + style + '"' : '') +
       (sortable ? ' data-sortable="true" aria-sort="none"' : '') + '>' +
       '<span class="th-label">' + h.label + '</span>' +
       (sortable ? '<span class="th-sort" aria-hidden="true"></span>' : '') +
@@ -6449,9 +6483,14 @@ document.addEventListener('keydown', function (e) {
     .table-wrap { max-height: 70dvh; }
     .table { display: table; }
     .table thead { display: table-header-group; }
-    .table tbody { display: table-row-group; }
-    .table tr { display: table-row; }
-    .table td { display: table-cell; }
+    /* width: auto undoes the phone block's "width: 100%" on tbody/tr/td,
+       exactly as the .card-table/.inv-table reset below does. Left in place,
+       every body cell asked for 100% of the table, percentages over 100% are
+       clamped in column order, and the FIRST column — usually a one-digit id —
+       took the whole row while the names beside it wrapped. */
+    .table tbody { display: table-row-group; width: auto; }
+    .table tr { display: table-row; width: auto; }
+    .table td { display: table-cell; width: auto; }
     .table tbody tr { border: 0; border-radius: 0; margin: 0; padding: 0; background: transparent; }
     .table tbody td {
       display: table-cell; border: 0; border-bottom: 1px solid var(--border-color);

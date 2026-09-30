@@ -61,11 +61,16 @@
   function renderCategories(list) {
     window.__categories = list;
     var rows = list.map(function (c) {
+      /* Tier A, as on the Cash page: a __pending row is the form's own JSON
+         drawn before the server answers. Its id is a client-side __tmp_ key
+         the server has never seen, so it shows «—» and offers no actions
+         until the saved record (with its real id) replaces it. */
+      var pending = !!c.__pending;
       return {
-        id: c.id,
+        id: pending ? '—' : c.id,
         name_ar: c.name_ar || '-',
         name_eng: c.name_eng || '-',
-        actions: UIC.actionBtns(UIC.canFull_() ? [{ label: 'تعديل', onclick: "openCategoryModal('" + FMT.escape(c.id) + "')" }] : [])
+        actions: pending ? '…' : UIC.actionBtns(UIC.canFull_() ? [{ label: 'تعديل', onclick: "openCategoryModal('" + FMT.escape(c.id) + "')" }] : [])
       };
     });
     var headers = [
