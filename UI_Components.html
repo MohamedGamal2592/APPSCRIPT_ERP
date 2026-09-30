@@ -7653,6 +7653,8 @@ UIC.Live = (function () {
    *   onSuccess function(resp)
    *   onError   function(err)
    *   reload    function()                              used when a patch is impossible
+   *   page      string    the owning page's action key; defaults to CURRENT_ACTION
+   *   recordLabel string  Arabic name of the record, shown on the retry chip
    * @return {Promise}
    */
   /* ── [RT-4] The retry queue, and why it is not a toast ────────────────────
@@ -7687,7 +7689,11 @@ UIC.Live = (function () {
   var LEAD_KEY = 'erp_live_lead';
   var LEAD_TTL = 12000;
   var RETRY_MAX = 5;
-  var queue = [];                 // [{v, target_system, action, data, message, tries, at}]
+  /* [§P6] Past this, an entry stops being "a retry". A day-old chip that still
+     says «بانتظار التأكيد» is how a warning that must be believed stops being
+     believed, so it is retired to the dead letter instead. */
+  var ENTRY_MAX_AGE = 24 * 60 * 60 * 1000;
+  var queue = [];                 // [{v, target_system, page, label, row, action, data, message, tries, at}]
   var dead = [];                  // exhausted/refused replays, awaiting a human ack (§I6)
   var liveBindings = Object.create(null); // same-session row adapters for queued confirmations
   var retryTimer = null;
@@ -7904,7 +7910,15 @@ UIC.Live = (function () {
            * persistent, and dismissed only by an explicit ack. */
           queue.shift();
           persistQueue();
-          dead.push({ a: entry.action, m: (err && err.transport) ? 'تعذر تأكيد نتيجة الطلب — راجع السجل قبل إنشاء طلب جديد' : ((err && err.message) || 'تعذر الحفظ') });
+          dead.push({
+            a: entry.action,
+            /* [§P1] A dead letter is scoped the same way a queued entry is: it
+               is shown to the page whose record it was. */
+            p: entry.page || '',
+            c: entry.target_system || '',
+            l: entry.label || '',
+            m: (err && err.transport) ? 'تعذر تأكيد نتيجة الطلب — راجع السجل قبل إنشاء طلب جديد' : ((err && err.message) || 'تعذر الحفظ')
+          });
           persistDead();
           renderChip();
         }
@@ -8068,8 +8082,18 @@ UIC.Live = (function () {
              can be REBUILT after a reload instead of rotting. */
           queue._call = o.call;
           enqueue({
-            v: 1,
+            v: 2,
             target_system: target,
+            /* [§P1] WHO OWNS THIS FAILURE. Without it the chip has nothing to
+               filter on and must shout on every page in the app — which is the
+               bug this phase exists to make fixable. `page` is the action key
+               of the page that made the save; `label` names the record for the
+               chip; `row` is the draft's key so a future revision can point at
+               the row itself. All three are additive and default from the
+               page's own globals, so no company page needs editing. */
+            page: o.page || String(window.CURRENT_ACTION || ''),
+            label: o.recordLabel || '',
+            row: (canPatch && draft && key) ? String(draft[key] || '') : '',
             action: o.action,
             data: o.data,
             request_id: liveRequestId,
