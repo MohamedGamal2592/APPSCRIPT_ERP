@@ -3948,6 +3948,8 @@ UIC.openModal = function (modalId, opts) {
     '</div>';
   document.body.appendChild(div);
   document.body.classList.add('modal-open');
+  /* [live-notice] a dialog over a view shows the page's form tables too */
+  try { if (UIC.Live && UIC.Live._modalOpened) UIC.Live._modalOpened(modalId); } catch (eLive) {}
   try { UIC._initSheetSwipe(div, modalId); } catch (e) {}
   try { UIC._trapFocus(div, modalId); } catch (e) {}
   /* [Phase D] A dialog is its own journey: fresh id, its own editable/options/
@@ -4060,6 +4062,7 @@ UIC.closeModal = function (modalId, force) {
   const el = document.getElementById(modalId);
   if (el && el._uicDismissible === false && force !== true) return false;
   if (el) el.remove();
+  try { if (UIC.Live && UIC.Live._modalClosed) UIC.Live._modalClosed(modalId); } catch (eLive) {}
   /* Only drop the body class when no dialog remains: a confirm opened ON TOP of
      a form dialog must not unlock the page behind both when it closes. */
   if (!document.querySelector('.modal-overlay')) {
@@ -5732,6 +5735,16 @@ document.addEventListener('keydown', function (e) {
   .uic-live-fresh {
     position: fixed; inset-inline-start: 50%; transform: translateX(-50%);
     inset-block-start: var(--space-4); z-index: 9002;
+    display: flex; align-items: center; gap: var(--space-1);
+    max-width: calc(100vw - 32px);
+  }
+  /* [live-notice] × hides the notice; the refresh stays pending. */
+  .uic-live-fresh-x {
+    flex: none; width: 28px; height: 28px; padding: 0;
+    background: var(--brand-primary); color: #fff;
+    border: 0; border-radius: 50%;
+    font: inherit; font-size: var(--text-sm); line-height: 1;
+    box-shadow: 0 2px 10px rgba(0,0,0,.2); cursor: pointer;
   }
   .uic-live-fresh-go {
     padding: var(--space-2) var(--space-4);
@@ -8079,7 +8092,197 @@ UIC.Live = (function () {
     return false;
   }
 
+  /* ── [live-notice D3/D4] whose change, which view, what to say ───────────
+   *
+   * Three things the poll could not tell before:
+   *   - MINE or someone else's: every write's request id is remembered here
+   *     (markOwnRequest, fed by the request guard), and the stamp now names the
+   *     request that wrote it. A move made only by my own requests is silent.
+   *   - ON SCREEN or not: the page says which view is open (setView) and the
+   *     server says which tables each view shows. A change off-screen marks
+   *     those tables stale and the view refreshes when it is opened.
+   *   - WHAT and WHO: the notice names the table, the writer and how long ago,
+   *     from the server's clock.
+   * A page that never calls setView, or a server reply without meta/views,
+   * keeps today's behaviour exactly (all tables in view, generic wording). */
+  var OWN_TTL_MS = 10 * 60 * 1000;
+  var OWN_MAX = 200;
+  var myRequests = {};            // rid -> time remembered
+  var myRequestOrder = [];
+  var currentView = 'list';
+  var viewAdopted = false;        // true once the page has called setView
+  var viewRefresh = {};           // view -> its quiet reload
+  var viewOpts = {};              // view -> {key, table} (Phase 5)
+  var staleTables = {};           // table -> true: moved while off-screen
+  var liveInfo = { views: null, labels: {}, meta: {}, now: 0 };
+  var openModals = {};            // modal ids opened through UIC.openModal
+  var pendingNotice = null;       // {tables: {t: {writes: [...]}}, generic, now}
+  var noticeHidden = false;       // dismissed with × until the next change
+
+  /** Remember a write's request id, so its stamp is recognised as mine. */
+  function markOwnRequest(rid) {
+    rid = String(rid || '');
+    if (!rid) return;
+    var now = Date.now();
+    if (!myRequests[rid]) myRequestOrder.push(rid);
+    myRequests[rid] = now;
+    while (myRequestOrder.length > OWN_MAX ||
+           (myRequestOrder.length && now - (myRequests[myRequestOrder[0]] || 0) > OWN_TTL_MS)) {
+      delete myRequests[myRequestOrder.shift()];
+    }
+  }
+  function isMine(rid) {
+    var at = rid ? myRequests[String(rid)] : 0;
+    return !!at && (Date.now() - at) <= OWN_TTL_MS;
+  }
+
+  function stampT(raw) {
+    if (raw === undefined || raw === null) return 0;
+    var s = String(raw);
+    if (/^\d+$/.test(s)) return Number(s);
+    try { var o = JSON.parse(s); return Number(o && o.t) || 0; } catch (e) { return 0; }
+  }
+
+  function anyModalOpen() {
+    var any = false;
+    Object.keys(openModals).forEach(function (id) {
+      if (document.getElementById(id)) any = true; else delete openModals[id];
+    });
+    return any;
+  }
+
+  /** The tables of a view, or null when unknown (= every table, today's rule). */
+  function tablesOfView(name) {
+    var v = liveInfo.views;
+    if (!v || !viewAdopted || !v[name]) return null;
+    return v[name];
+  }
+
+  /** What is on screen now. A dialog over a view shows both. */
+  function visibleTables() {
+    var base = tablesOfView(currentView);
+    if (!base) return null;
+    var out = base.slice();
+    if (anyModalOpen() && currentView !== 'form') {
+      var form = tablesOfView('form');
+      if (form) form.forEach(function (t) { if (out.indexOf(t) === -1) out.push(t); });
+    }
+    return out;
+  }
+
+  /** Run a view's refresh if any of its tables went stale while it was closed. */
+  function refreshIfStale(name) {
+    var tables = tablesOfView(name);
+    if (!tables) return false;
+    var hit = tables.filter(function (t) { return staleTables[t]; });
+    if (!hit.length) return false;
+    hit.forEach(function (t) { delete staleTables[t]; });
+    var fn = viewRefresh[name];
+    if (typeof fn === 'function') { try { fn(); } catch (e) {} }
+    return true;
+  }
+
+  /**
+   * The page says which view is on screen: 'list', 'form', 'detail', 'print',
+   * 'report' or 'tab:<id>'. opts.refresh is that view's quiet reload; opts.key
+   * and opts.table name the record a form has open (Phase 5).
+   */
+  function setView(name, opts) {
+    var o = opts || {};
+    name = String(name || 'list');
+    viewAdopted = true;
+    currentView = name;
+    if (typeof o.refresh === 'function') viewRefresh[name] = o.refresh;
+    viewOpts[name] = { key: o.key !== undefined ? String(o.key) : '', table: o.table ? String(o.table) : '' };
+    /* The user just asked for this view: refreshing it now is expected, not
+       an interruption. */
+    refreshIfStale(name);
+  }
+
+  /* UIC.openModal / UIC.closeModal report here, so a dialog over a view counts
+     its form tables as visible without every call site saying so. */
+  function modalOpened(id) {
+    if (!id) return;
+    openModals[id] = true;
+    if (viewAdopted && currentView !== 'form') refreshIfStale('form');
+  }
+  function modalClosed(id) {
+    if (id) delete openModals[id];
+    if (viewAdopted && !anyModalOpen()) refreshIfStale(currentView);
+  }
+
+  /* ── the notice text (D4) ── */
+  function esc(s) {
+    try { if (window.FMT && FMT.escape) return FMT.escape(String(s)); } catch (e) {}
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function writerName(w) {
+    var n = String((w && w.n) || '').trim();
+    if (n) return n;
+    var u = String((w && w.u) || '');
+    return u.indexOf('@') > 0 ? u.slice(0, u.indexOf('@')) : u;
+  }
+  function agoText(ms) {
+    var m = Math.floor(Math.max(0, ms) / 60000);
+    if (m < 1) return 'لحظات';
+    if (m === 1) return 'دقيقة';
+    if (m === 2) return 'دقيقتين';
+    if (m < 11) return m + ' دقائق';
+    if (m < 60) return m + ' دقيقة';
+    var h = Math.floor(m / 60);
+    if (h === 1) return 'ساعة';
+    if (h === 2) return 'ساعتين';
+    return h < 11 ? (h + ' ساعات') : (h + ' ساعة');
+  }
+  var GENERIC_TEXT = 'هناك تغييرات جديدة · اضغط للتحديث';
+  function noticeHtml() {
+    var p = pendingNotice;
+    if (!p || p.generic) return esc(GENERIC_TEXT);
+    var names = Object.keys(p.tables);
+    if (!names.length) return esc(GENERIC_TEXT);
+    var labels = liveInfo.labels || {};
+    for (var i = 0; i < names.length; i++) if (!labels[names[i]]) return esc(GENERIC_TEXT);
+    var tail = ' · اضغط للتحديث';
+    if (names.length > 1) {
+      return 'تم تحديث: ' + names.map(function (t) { return '<b>' + esc(labels[t]) + '</b>'; }).join('، ') + tail;
+    }
+    var t = names[0];
+    var writes = p.tables[t].writes || [];
+    if (!writes.length) return esc(GENERIC_TEXT);
+    var who = {};
+    writes.forEach(function (w) { who[String(w.u || '') + '|' + String(w.n || '')] = w; });
+    var writers = Object.keys(who);
+    var label = '<b>' + esc(labels[t]) + '</b>';
+    if (writers.length > 1) return 'تم تحديث ' + label + ' (' + writes.length + ' تعديلات)' + tail;
+    var last = writes[0];
+    writes.forEach(function (w) { if ((Number(w.t) || 0) > (Number(last.t) || 0)) last = w; });
+    if (String(last.u || '') === 'system' || (!last.u && !last.n)) return 'تم تحديث ' + label + ' تلقائياً' + tail;
+    var name = writerName(last);
+    if (!name) return esc(GENERIC_TEXT);
+    var ago = (Number(p.now) && Number(last.t)) ? (' منذ <b>' + agoText(Number(p.now) - Number(last.t)) + '</b>') : '';
+    return 'تم تحديث ' + label + ' بواسطة <b>' + esc(name) + '</b>' + ago + tail;
+  }
+
+  /** Merge a poll's in-view changes into the notice that may be showing. */
+  function mergeNotice(tables, writesByTable, generic, serverNow) {
+    if (!pendingNotice) pendingNotice = { tables: {}, generic: false, now: 0 };
+    if (generic) pendingNotice.generic = true;
+    if (serverNow) pendingNotice.now = serverNow;
+    tables.forEach(function (t) {
+      var slot = pendingNotice.tables[t] || (pendingNotice.tables[t] = { writes: [] });
+      (writesByTable[t] || []).forEach(function (w) {
+        var dup = slot.writes.some(function (x) { return x.t === w.t && x.r === w.r; });
+        if (!dup) slot.writes.push(w);
+      });
+      if (!writesByTable[t] || !writesByTable[t].length) pendingNotice.generic = true;
+    });
+    noticeHidden = false;
+  }
+
   function showFreshChip() {
+    if (noticeHidden) return;
     var el = document.getElementById('uic-live-fresh');
     if (!el) {
       el = document.createElement('div');
@@ -8088,10 +8291,11 @@ UIC.Live = (function () {
       el.setAttribute('role', 'status');
       document.body.appendChild(el);
     }
-    /* Honest wording. The poll returns timestamps, not rows, so the number of
-     * new rows is not known here and is not claimed. */
+    /* Honest wording. The poll returns timestamps and writers, not rows, so
+     * the number of new rows is not known here and is not claimed. */
     el.innerHTML = '<button type="button" class="uic-live-fresh-go" onclick="UIC.Live.applyFresh()">' +
-      'هناك تغييرات جديدة · اضغط للتحديث</button>';
+      noticeHtml() + '</button>' +
+      '<button type="button" class="uic-live-fresh-x" onclick="UIC.Live.dismissFresh()" aria-label="إخفاء">×</button>';
   }
 
   function hideFreshChip() {
@@ -8099,10 +8303,18 @@ UIC.Live = (function () {
     if (el && el.remove) el.remove();
   }
 
+  /** × on the notice: hide it, keep the pending refresh and the stale flags. */
+  function dismissFresh() {
+    noticeHidden = true;
+    hideFreshChip();
+  }
+
   /** Refresh now, from the chip. */
   function applyFresh() {
     var fn = freshRefresh;
     freshRefresh = null;
+    pendingNotice = null;
+    noticeHidden = false;
     hideFreshChip();
     if (typeof fn === 'function') { try { fn(); } catch (e) {} }
   }
@@ -8113,9 +8325,14 @@ UIC.Live = (function () {
    */
   function arrive(refresh) {
     if (typeof refresh !== 'function') return;
+    /* [live-notice] A view the page registered reloads itself; the list
+       refresh the page passes here is for the list. */
+    if (viewAdopted && currentView !== 'list' && typeof viewRefresh[currentView] === 'function') refresh = viewRefresh[currentView];
     if (userIsBusy()) { freshRefresh = refresh; showFreshChip(); return; }
     hideFreshChip();
     freshRefresh = null;
+    pendingNotice = null;
+    noticeHidden = false;
     try { refresh(); } catch (e) {}
     /* A brief flash, so a silent swap is not mistaken for nothing happening. */
     try {
@@ -8125,6 +8342,51 @@ UIC.Live = (function () {
         setTimeout(function () { try { host.classList.remove('rt-arrived'); } catch (e) {} }, 900);
       }
     } catch (e) {}
+  }
+
+  /** Keep the latest views/labels/meta and the server clock from a poll. */
+  function noteLiveReply(resp) {
+    if (!resp || typeof resp !== 'object') return;
+    if (resp.views && typeof resp.views === 'object') liveInfo.views = resp.views;
+    if (resp.labels && typeof resp.labels === 'object') liveInfo.labels = resp.labels;
+    if (resp.meta && typeof resp.meta === 'object') liveInfo.meta = resp.meta;
+    if (resp.now) liveInfo.now = Number(resp.now) || 0;
+  }
+
+  /**
+   * Classify the tables that moved since `before`.
+   *   silent — moved only by my own requests, or to a seeded stamp (no info)
+   *   others — someone else wrote (or, without meta, anything that moved)
+   *   writes — per table, the other writers' entries newer than the baseline
+   */
+  function splitMoved(moved, before, resp) {
+    var meta = resp && resp.meta;
+    var out = { silent: [], mine: [], others: [], writes: {}, meta: !!(meta && typeof meta === 'object') };
+    if (!out.meta) { out.others = moved.slice(); return out; }
+    moved.forEach(function (t) {
+      var m = meta[t];
+      if (!m) { out.others.push(t); return; }
+      if (m.s) { out.silent.push(t); return; }
+      var base = stampT(before && before[t]);
+      var newer = (m.w || []).filter(function (w) { return (Number(w.t) || 0) > base; });
+      /* The writer list covers the window when it was not truncated (fewer
+         than five) or reaches back to the baseline. Otherwise some writers are
+         unknown, and unknown is never "mine". */
+      var all = m.w || [];
+      var covered = all.length < 5 || all.some(function (w) { return (Number(w.t) || 0) <= base; });
+      if (covered && newer.length && newer.every(function (w) { return w.r && isMine(w.r); })) {
+        out.silent.push(t); out.mine.push(t); return;
+      }
+      out.others.push(t);
+      out.writes[t] = newer.filter(function (w) { return !(w.r && isMine(w.r)); });
+    });
+    return out;
+  }
+
+  /** Drop client-cached replies that depend on these tables. */
+  function bustTables(tables, split) {
+    void tables; void split;
+    UIC.Cache.bust();
   }
 
   /* ── change polling ──────────────────────────────────────────────────── */
@@ -8203,6 +8465,7 @@ UIC.Live = (function () {
           if (stopped || gen !== gens.watch) return;   /* [Phase F] stale poll reply discarded */
           failures = 0;
           var now = (resp && resp.versions) || {};
+          noteLiveReply(resp);
           if (seen === null) { seen = now; schedule(interval); return; }
           var moved = [];
           Object.keys(now).forEach(function (t) {
@@ -8211,8 +8474,30 @@ UIC.Live = (function () {
             if (seen[t] !== undefined && seen[t] !== now[t]) moved.push(t);
             else if (seen[t] === undefined) seen[t] = now[t];
           });
+          var before = seen;
           seen = now;
+          /* [live-notice] Split what moved: mine, no-information (a seeded
+             stamp after an eviction), and someone else's — on screen or off. */
+          var split = splitMoved(moved, before, resp);
+          if (split.silent.length && !split.others.length) {
+            try { bustTables(split.silent, split); } catch (e) {}
+          }
+          moved = split.others;
           if (moved.length) {
+            if (split.meta) {
+              var vis = visibleTables();
+              var inView = vis ? moved.filter(function (t) { return vis.indexOf(t) !== -1; }) : moved.slice();
+              var offView = moved.filter(function (t) { return inView.indexOf(t) === -1; });
+              offView.forEach(function (t) { staleTables[t] = true; });
+              try { bustTables(moved.concat(split.silent), split); } catch (e) {}
+              if (!inView.length) { schedule(interval); return; }
+              mergeNotice(inView, split.writes, false, Number(resp && resp.now) || 0);
+              try { o.onChange(inView); } catch (e) {}
+              schedule(interval);
+              return;
+            }
+            /* An old server reply (no meta): today's behaviour, generic text. */
+            mergeNotice(moved, {}, true, 0);
             /* [RT-7] A table moved, so anything this device has cached for it
              * is now known-wrong rather than merely old. The whole cache is
              * dropped rather than the entries for those tables specifically:
@@ -8337,6 +8622,14 @@ UIC.Live = (function () {
      * than seventy. */
     arrive: arrive,
     applyFresh: applyFresh,
+    /* [live-notice] views, own requests, the dismissible notice */
+    setView: setView,
+    markOwnRequest: markOwnRequest,
+    dismissFresh: dismissFresh,
+    currentView: function () { return currentView; },
+    staleTables: function () { return Object.keys(staleTables); },
+    _modalOpened: modalOpened,
+    _modalClosed: modalClosed,
     retryNow: retryNow,
     discardQueue: discardQueue,
     ackDead: ackDead,
