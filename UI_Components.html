@@ -9102,7 +9102,14 @@ UIC.Live = (function () {
     });
   } catch (e) {}
 
-  /** Retry now, from the chip or from the network coming back. */
+  /** Retry now, from the chip or from the network coming back.
+   *
+   * [§P3] This one is deliberately NOT page-scoped. The drain walks the queue
+   * in array order because a queue that reorders writes corrupts a sequence of
+   * edits (§I9), so a button that claimed to retry only this page's entries
+   * would be describing something the drain does not do. It forces an immediate
+   * pass over the whole queue, exactly as before, which is also what the
+   * `online` event does. */
   function retryNow() {
     if (retryTimer) { try { clearTimeout(retryTimer); } catch (e) {} retryTimer = null; }
     drainQueue();
@@ -9115,8 +9122,8 @@ UIC.Live = (function () {
    * available to every user. The stated default is implemented unchanged — it
    * stays available to anyone — and is recorded as an open question. */
   function discardQueue() {
-    if (!queue.length) return;
-    var n = queue.length;
+    var n = splitQueue().mine.length;
+    if (!n) return;
     var ok = true;
     try {
       ok = window.confirm(n === 1
@@ -9124,7 +9131,14 @@ UIC.Live = (function () {
         : ('سيتم تجاهل ' + n + ' تغييرات لم تُحفظ. متابعة؟'));
     } catch (e) {}
     if (!ok) return;
-    queue.length = 0;
+    /* [§P3] Only this page's entries, and spliced IN PLACE rather than
+       reassigned: `queue._call` is hung on the array as a property (see
+       [RT-4b]), and `queue = queue.filter(...)` would silently drop it and
+       with it the same-session drain for any entry that has no target_system.
+       The count in the confirm is the count that is actually discarded. */
+    for (var i = queue.length - 1; i >= 0; i--) {
+      if (ownsPage(queue[i])) queue.splice(i, 1);
+    }
     persistQueue();
     renderChip();
   }
@@ -9132,7 +9146,11 @@ UIC.Live = (function () {
   /** Acknowledge the dead letters. See the §I6 note on persistDead: the click
    * is the acknowledgement, so unlike discardQueue this asks nothing. */
   function ackDead() {
-    dead.length = 0;
+    /* [§P3] Acknowledging on behalf of a page you are not looking at is not an
+       acknowledgement. Spliced in place, for the same reason as discardQueue. */
+    for (var i = dead.length - 1; i >= 0; i--) {
+      if (ownsPage(dead[i])) dead.splice(i, 1);
+    }
     persistDead();
     renderChip();
   }
