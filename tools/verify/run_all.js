@@ -113,6 +113,7 @@ const STEPS = [
   ['rt5_budget.js', 'RT5 — the minified bundle is smaller and provably equivalent'],
   ['rt6_router.js', 'RT6 — soft nav: the same gate, a hard fallback, nothing left running'],
   ['rt10_telemetry.js', 'RT10 — telemetry costs one cache write and names nobody'],
+  ['rt11_retry_scope.js', 'RT11 — the retry chip belongs to the page that owns the record'],
   ['rt9_history_queue.js', 'RT9 — the audit queue: nothing lost, nothing duplicated'],
   ['rt8_search_scope.js', 'RT8 — no search box over a truncated list stays silent about it'],
   ['customs_office_path_repair.js', 'Customs-office path repair: مكتب الجمارك prefix preview contract'],
