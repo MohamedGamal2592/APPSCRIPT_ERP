@@ -139,6 +139,59 @@ replaceExactCount('getAllRecords_(', 'etRecords_(', 2);
 
 // ---------- 3.5.3 id-column arguments ----------
 replaceOnce('getNextIdUnderLock_(dbId, table)', "getNextIdUnderLock_(dbId, table, etCol_(table, 'id'))");
+
+// ---------- [et_instant P3] P2A + P2B, applied on the way into erp_test ----------
+// CRLF is explicit: Company_TopLight_Actions.js is CRLF and a template literal
+// would normalise CRLF to LF, matching nothing (see the failures above).
+const ET_NL = "\r\n";
+replaceOnce(
+  [
+    "    return executeWithLock_(function () {",
+    "      if (idIdx !== -1 && String(row[idIdx]).trim() === '') row[idIdx] = getNextIdUnderLock_(dbId, table, etCol_(table, 'id'));",
+    "      tlDbDeriveRow_(dbId, table, row, headers, {});",
+    "      const rowNumber = tlDbAppendRow_(sheet, row);",
+    "      noteRecordChange_(dbId, table, row[keyIdx]);   // [live-notice D5]",
+    "      const record = tlDbRowRecord_(headers, row);",
+    "      return { status: 'success', rowNumber: rowNumber, record: record, assignedId: row[keyIdx] };",
+    "    });",
+  ].join(ET_NL),
+  [
+    "    /* [et_instant P2A] Only the id allocation and the append need the global",
+    "       script lock. The change stamp is a CacheService write and the record is a",
+    "       plain object build — holding the lock across them charged every other",
+    "       company for work that cannot race. */",
+    "    /* [et_instant P2B] Warm the reference caches OUTSIDE the lock. On a cold",
+    "       tlRefs_ cache tlDeriveCash_ reads the entire chart-of-accounts sheet",
+    "       (tlChartPositionalLookup_ -> etRecords_(CHART_SHEET)) while holding the",
+    "       global script lock. Warming here is a no-op when the cache is warm and",
+    "       moves a full sheet read out of the critical section when it is not.",
+    "       Derive itself is NOT moved: tlDeriveCash_ computes box_balance as a",
+    "       running balance over prior rows, which is only correct under the lock. */",
+    "    if (ET_FAST_INSERT_ === true) {",
+    "      try {",
+    "        const warmSchema = tlSchema_(table);",
+    "        if (warmSchema.derived === 'cash') {",
+    "          /* A non-empty sentinel is REQUIRED: tlChartPositionalLookup_ returns",
+    "             early on a blank code (`if (!wanted) return ...`), so passing '' would",
+    "             warm nothing. Any non-empty value populates the tlRefs_ map and then",
+    "             misses harmlessly. */",
+    "          tlChartPositionalLookup_(dbId, '__warm__');",
+    "          partyRefs_(dbId);",
+    "        }",
+    "      } catch (eWarm) { /* a warm-up that fails just leaves the old cost */ }",
+    "    }",
+    "    const lockedRowNumber = executeWithLock_(function () {",
+    "      if (idIdx !== -1 && String(row[idIdx]).trim() === '') {",
+    "        row[idIdx] = getNextIdUnderLock_(dbId, table, etCol_(table, 'id'), { fastCounter: ET_FAST_INSERT_ === true });",
+    "      }",
+    "      tlDbDeriveRow_(dbId, table, row, headers, {});",
+    "      return tlDbAppendRow_(sheet, row);",
+    "    });",
+    "    noteRecordChange_(dbId, table, row[keyIdx]);   // [live-notice D5]",
+    "    const record = tlDbRowRecord_(headers, row);",
+    "    return { status: 'success', rowNumber: lockedRowNumber, record: record, assignedId: row[keyIdx] };",
+  ].join(ET_NL)
+);
 replaceOnce("getNextIdBatch_(dbId, PURCHASING_LINES_SHEET, lines.length, 'id')", "getNextIdBatch_(dbId, PURCHASING_LINES_SHEET, lines.length, etCol_(PURCHASING_LINES_SHEET, 'id'))");
 replaceOnce("getNextIdBatch_(dbId, SALES_LINES_SHEET, lines.length, 'id')", "getNextIdBatch_(dbId, SALES_LINES_SHEET, lines.length, etCol_(SALES_LINES_SHEET, 'id'))");
 replaceOnce("getNextIdBatch_(dbId, OFFER_LINES_SHEET, lines.length, 'id')", "getNextIdBatch_(dbId, OFFER_LINES_SHEET, lines.length, etCol_(OFFER_LINES_SHEET, 'id'))");
