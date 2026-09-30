@@ -6,9 +6,8 @@
  * plain strings are placeholders (toast "قيد الإنشاء").
  */
 window.TOPCHEMICAL_MENU = [
-  { label: 'المتابعة التنفيذية', items: [
-    { label: 'المتابعة اليومية التنفيذية', action: 'tc_executive_followup' }
-  ] },
+  /* المتابعة اليومية التنفيذية (tc_executive_followup) is a top-level link from
+     its registry entry (no nav:false), so it is not repeated in a group here. */
   { label: 'الحسابات', items: [
     { label: 'عملاء وموردين', action: 'tc_clients_vendors' },
     { label: 'مديونيات', action: 'tc_debts' },
