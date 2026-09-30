@@ -6,8 +6,11 @@
  * plain strings are placeholders (toast "قيد الإنشاء").
  */
 window.TOPCHEMICAL_MENU = [
-  /* المتابعة اليومية التنفيذية (tc_executive_followup) is a top-level link from
-     its registry entry (no nav:false), so it is not repeated in a group here. */
+  /* The registry marks both pages nav:false, so each appears here only. */
+  { label: 'المتابعة التنفيذية', items: [
+    { label: 'المتابعة اليومية التنفيذية', action: 'tc_executive_followup' },
+    { label: 'تحليلات النسب المالية', action: 'tc_financial_ratios' }
+  ] },
   { label: 'الحسابات', items: [
     { label: 'عملاء وموردين', action: 'tc_clients_vendors' },
     { label: 'مديونيات', action: 'tc_debts' },
@@ -39,8 +42,7 @@ window.TOPCHEMICAL_MENU = [
     { label: 'أوامر التصنيع', action: 'tc_manufacture_orders' },
     { label: 'تحليلات القدرات الانتاجية', action: 'tc_production_capability' },
     { label: 'تحليل القدرة الانتاجية للمبيعات', action: 'tc_sales_capacity' },
-    { label: 'اصناف النظام الرئيسي', action: 'tc_products_live' },
-    { label: 'تحليلات النسب المالية', action: 'tc_financial_ratios' }
+    { label: 'اصناف النظام الرئيسي', action: 'tc_products_live' }
   ] },
   { label: 'شئون العاملين', items: [
     { label: 'تسجيل الموظفين', action: 'tc_employee_reg' },

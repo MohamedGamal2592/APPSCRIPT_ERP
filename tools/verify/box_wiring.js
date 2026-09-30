@@ -159,7 +159,7 @@ const group = NAV.match(groupRe);
 ok(!!group, 'the تحليلات النظام الرئيسي nav group is present');
 if (group) {
   const items = (group[1].match(/action: '(\w+)'/g) || []).map(function (s) { return s.slice(9, -1); });
-ok(items.length === 8, 'the group has eight items after removing the executive sales page', items.join(', '));
+ok(items.length === 7, 'the group has seven items (tc_financial_ratios moved to المتابعة التنفيذية)', items.join(', '));
   ok(items.indexOf('tc_main_review') !== -1, 'the existing item is still there');
   ok(items.indexOf(PAGE) !== -1, 'the new item is beside it');
 }
