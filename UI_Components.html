@@ -8668,8 +8668,13 @@ UIC.Live = (function () {
         return Promise.resolve(call(action, payload)).then(function (reply) {
           storeView(key, reply, tag, resp, view);
           var fn = viewRefresh[view];
-          if (typeof fn === 'function') { freshReplies[key] = reply; try { fn(); } catch (e) { setInert(false); } }
-          else setInert(false);
+          if (typeof fn === 'function') {
+            freshReplies[key] = reply;
+            try { fn(); } catch (e) { setInert(false); }
+            /* A refresh that asks for a different payload never collects the
+               reply; the page must not stay unclickable because of it. */
+            setTimeout(function () { if (freshReplies[key] === reply) { delete freshReplies[key]; setInert(false); } }, 10000);
+          } else setInert(false);
         });
       }).catch(function () { setInert(false); });
       return Promise.resolve(rec.d);

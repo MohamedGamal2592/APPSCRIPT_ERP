@@ -88,7 +88,10 @@ async function drive(sb, n) {
     await settle();
     const due = sb.__timers.slice();
     sb.__timers.length = 0;
-    due.forEach(t => { try { if (t && typeof t.fn === 'function' && t.ms !== undefined && t.ms < 1000) t.fn(); } catch (e) {} });
+    due.forEach(t => {
+      if (t && t.ms !== undefined && t.ms >= 1000) { sb.__timers.push(t); return; }   // long timers stay queued
+      try { if (t && typeof t.fn === 'function') t.fn(); } catch (e) {}
+    });
     await settle();
   }
 }
@@ -256,6 +259,21 @@ async function limits() {
     await sb.companyCall('get_products');
     check(srv.calls.join() === 'get_products' && sb.UIC.Live.isInert() === false,
       '   UIC.Live.VIEW_CACHE = false: the list goes straight to the server, nothing painted from the device', srv.calls);
+  }
+  {
+    /* A refresh that never collects the fresh reply must not leave the page inert. */
+    const storage = memStorage();
+    const srv = makeServer(c.company, c.page);
+    let sb = visit(c.file, srv, storage, 'a@x', () => ({ status: 'success', products: [] }));
+    await drive(sb);
+    srv.write(srv.views.list[0], '', 'sara');
+    sb = visit(c.file, srv, storage, 'a@x', () => ({ status: 'success', products: [] }));
+    sb.UIC.Live.setView('list', { refresh: function () {} });   // collects nothing
+    await drive(sb);
+    const late = sb.__timers.filter(t => t.ms === 10000);
+    check(sb.UIC.Live.isInert() === true && late.length === 1, '   (a refresh that ignores the fresh reply: still inert, a 10 s safety timer queued)');
+    late.forEach(t => t.fn());
+    check(sb.UIC.Live.isInert() === false, '   the safety timer makes the page usable again');
   }
   {
     /* loadView, the render-callback form, on its own */
