@@ -516,14 +516,40 @@ const ErpTest = (function () {
     const idIdx = tlHeaderIndex_(headers, 'id');
     const keyIdx = tlHeaderIndex_(headers, schema.key);
     if (keyIdx === -1) throw new Error('Missing key column "' + schema.key + '" in ' + table);
-    return executeWithLock_(function () {
-      if (idIdx !== -1 && String(row[idIdx]).trim() === '') row[idIdx] = getNextIdUnderLock_(dbId, table, etCol_(table, 'id'));
+    /* [et_instant P2A] Only the id allocation and the append need the global
+       script lock. The change stamp is a CacheService write and the record is a
+       plain object build — holding the lock across them charged every other
+       company for work that cannot race. */
+    /* [et_instant P2B] Warm the reference caches OUTSIDE the lock. On a cold
+       tlRefs_ cache tlDeriveCash_ reads the entire chart-of-accounts sheet
+       (tlChartPositionalLookup_ -> etRecords_(CHART_SHEET)) while holding the
+       global script lock. Warming here is a no-op when the cache is warm and
+       moves a full sheet read out of the critical section when it is not.
+       Derive itself is NOT moved: tlDeriveCash_ computes box_balance as a
+       running balance over prior rows, which is only correct under the lock. */
+    if (ET_FAST_INSERT_ === true) {
+      try {
+        const warmSchema = tlSchema_(table);
+        if (warmSchema.derived === 'cash') {
+          /* A non-empty sentinel is REQUIRED: tlChartPositionalLookup_ returns
+             early on a blank code (`if (!wanted) return ...`), so passing '' would
+             warm nothing. Any non-empty value populates the tlRefs_ map and then
+             misses harmlessly. */
+          tlChartPositionalLookup_(dbId, '__warm__');
+          partyRefs_(dbId);
+        }
+      } catch (eWarm) { /* a warm-up that fails just leaves the old cost */ }
+    }
+    const lockedRowNumber = executeWithLock_(function () {
+      if (idIdx !== -1 && String(row[idIdx]).trim() === '') {
+        row[idIdx] = getNextIdUnderLock_(dbId, table, etCol_(table, 'id'), { fastCounter: ET_FAST_INSERT_ === true });
+      }
       tlDbDeriveRow_(dbId, table, row, headers, {});
-      const rowNumber = tlDbAppendRow_(sheet, row);
-      noteRecordChange_(dbId, table, row[keyIdx]);   // [live-notice D5]
-      const record = tlDbRowRecord_(headers, row);
-      return { status: 'success', rowNumber: rowNumber, record: record, assignedId: row[keyIdx] };
+      return tlDbAppendRow_(sheet, row);
     });
+    noteRecordChange_(dbId, table, row[keyIdx]);   // [live-notice D5]
+    const record = tlDbRowRecord_(headers, row);
+    return { status: 'success', rowNumber: lockedRowNumber, record: record, assignedId: row[keyIdx] };
   }
 
   function tlDbAppendValues_(dbId, table, rowValues, opts) {
