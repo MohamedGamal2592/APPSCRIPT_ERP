@@ -59,7 +59,7 @@
 
   function renderList(quiet) {
     /* [live-notice] the view on screen */
-    UIC.Live.setView('list', { refresh: function () { renderList(true); }, loading: true });
+    if (UIC.Live.setView) UIC.Live.setView('list', { refresh: function () { renderList(true); }, loading: true });
     if (!quiet) UIC.readSkeleton('tl-content', { message: [
       'جاري تحميل عروض الأسعار...',
       'جاري استرجاع العملاء والأصناف...',
@@ -150,7 +150,7 @@
       if (!record) { UIC.toast('السجل غير موجود — تم تحديث القائمة', 'error'); showList(); return; }
     }
     /* [live-notice] the view on screen */
-    UIC.Live.setView('form', { refresh: function () { openForm(__editingUid); }, loading: true, key: __editingUid, table: 'top_light_sales_offer' });
+    if (UIC.Live.setView) UIC.Live.setView('form', { refresh: function () { openForm(__editingUid); }, loading: true, key: __editingUid, table: 'top_light_sales_offer' });
     renderForm(record);
   }
 

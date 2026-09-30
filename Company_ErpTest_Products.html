@@ -211,7 +211,7 @@
     onChange: function () { UIC.Live.arrive(function () { fetchProducts(); }); }
   });
   /* [live-notice] the view on screen */
-  UIC.Live.setView('list', { refresh: function () { fetchProducts(); } });
+  if (UIC.Live.setView) UIC.Live.setView('list', { refresh: function () { fetchProducts(); } });
 
 </script>
 </body>

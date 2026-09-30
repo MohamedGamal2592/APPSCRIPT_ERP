@@ -420,7 +420,7 @@
     onChange: function () { UIC.Live.arrive(function () { fetchSizes(true); }); }
   });
   /* [live-notice] the view on screen */
-  UIC.Live.setView('list', { refresh: function () { fetchSizes(true); } });
+  if (UIC.Live.setView) UIC.Live.setView('list', { refresh: function () { fetchSizes(true); } });
 
   /* Phase B2: the shared refresh control for this list only. Re-fetches the
      current view (newest-10 or the full list) and re-renders this table; the

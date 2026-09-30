@@ -196,7 +196,7 @@
     function switchTab(t) {
       TAB = t;
       /* [live-notice] the view on screen */
-      UIC.Live.setView('tab:' + TAB, { refresh: function () { fetchAll(true); } });
+      if (UIC.Live.setView) UIC.Live.setView('tab:' + TAB, { refresh: function () { fetchAll(true); } });
       render();
     }
 
@@ -459,7 +459,7 @@
         });
       });
     /* [live-notice] the view on screen */
-    UIC.Live.setView('tab:' + TAB, { refresh: function () { fetchAll(true); } });
+    if (UIC.Live.setView) UIC.Live.setView('tab:' + TAB, { refresh: function () { fetchAll(true); } });
 
   </script>
 </body>

@@ -1769,7 +1769,7 @@
         }
       });
       /* [live-notice] the view on screen */
-      UIC.Live.setView('list', { refresh: function () { /* the day list is the page's spine; the two queues hang off it */
+      if (UIC.Live.setView) UIC.Live.setView('list', { refresh: function () { /* the day list is the page's spine; the two queues hang off it */
             loadSessions();
             try { loadExceptions(true); } catch (e) {} } });
     });

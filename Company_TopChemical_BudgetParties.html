@@ -153,7 +153,7 @@
     onChange: function () { UIC.Live.arrive(function () { fetchParties(true); }); }
   });
   /* [live-notice] the view on screen */
-  UIC.Live.setView('list', { refresh: function () { fetchParties(true); } });
+  if (UIC.Live.setView) UIC.Live.setView('list', { refresh: function () { fetchParties(true); } });
 
   load();
 </script>

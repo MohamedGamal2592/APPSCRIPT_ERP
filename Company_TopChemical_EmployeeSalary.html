@@ -191,7 +191,7 @@
     onChange: function () { UIC.Live.arrive(function () { fetchSalaries(true); }); }
   });
   /* [live-notice] the view on screen */
-  UIC.Live.setView('list', { refresh: function () { fetchSalaries(true); } });
+  if (UIC.Live.setView) UIC.Live.setView('list', { refresh: function () { fetchSalaries(true); } });
 
   load();
 </script>

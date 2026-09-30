@@ -236,7 +236,7 @@
     onChange: function () { UIC.Live.arrive(function () { fetchParties(); }); }
   });
   /* [live-notice] the view on screen */
-  UIC.Live.setView('list', { refresh: function () { fetchParties(); } });
+  if (UIC.Live.setView) UIC.Live.setView('list', { refresh: function () { fetchParties(); } });
 
 </script>
 </body>

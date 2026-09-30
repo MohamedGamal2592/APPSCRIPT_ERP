@@ -111,7 +111,7 @@
 
   function switchTab(t) {
     /* [live-notice] the view on screen */
-    UIC.Live.setView('tab:' + t, { refresh: refreshQuiet });
+    if (UIC.Live.setView) UIC.Live.setView('tab:' + t, { refresh: refreshQuiet });
     TAB = t;
     if (t === 'salaries') fetchSalaries();
     else render();
@@ -693,7 +693,7 @@
     onChange: function () { UIC.Live.arrive(refreshQuiet); }
   });
   /* [live-notice] the view on screen */
-  UIC.Live.setView('tab:' + TAB, { refresh: refreshQuiet });
+  if (UIC.Live.setView) UIC.Live.setView('tab:' + TAB, { refresh: refreshQuiet });
 
   load();
 </script>

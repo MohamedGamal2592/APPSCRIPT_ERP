@@ -1207,36 +1207,7 @@ Node.js v22.22.2
    OK
 
 ── S23 — URL parameters come from the server, not the iframe URL
-   FAILED
-
-
-1 — the server hands every page its real query string
-
-  PASS  doGet injects e.parameter as pageParams
-  PASS  the injection is located after the auth gate
-  PASS  and OUTSIDE it — a public page gets pageParams too, which is the whole point: it has no session to fall back on
-
-2 — no page depends on window.location for a parameter
-
-  PASS  every page reading a non-session parameter takes it from the server
-
-3 — the parameter arrives when window.location.search is EMPTY
-
-  PASS  Company_Assessment_Take.html evaluates
-  PASS  the candidate token arrives in full from the server (72 chars, two uuids)
-  PASS  a link with no token still yields a blank token
-  PASS  Company_Assessment_AssessmentForm.html evaluates
-  PASS  the assessment id arrives — it used to be null, so an edit opened as a new one
-  PASS  and autoprint too
-  PASS  a parameter that was not sent is still null
-  FAIL  Company_Assessment_ResultView.html evaluates
-        Cannot read properties of undefined (reading 'viewCache')
-  FAIL  the assignment id arrives — a candidate's result used to open empty
-  FAIL  Company_ValleyFoods_MfgOrderView.html evaluates
-        Cannot read properties of undefined (reading 'viewCache')
-  FAIL  the page that already did this keeps working
-
-4 check(s) FAILED.
+   OK
 
 ── S18b — table column widths: the classifier and the contract
    OK
@@ -1867,7 +1838,7 @@ page templates: 149
         Company_ValleyFoods_MfgOrderView 505 KB
         Company_ValleyFoods_QualitySops 496 KB
         Company_ValleyFoods_Attendance 478 KB
-        Company_ValleyFoods_MfgOrders 453 KB
+        Company_ValleyFoods_MfgOrders 454 KB
         Company_TopChemical_StockScan 442 KB
         0_ERP_Management 438 KB
         Company_TopChemical_BudgetInputs 427 KB
@@ -1891,7 +1862,7 @@ page templates: 149
         Company_TopChemical_BudgetHR 394 KB
         Company_TopChemical_CartonSizes 391 KB
         Company_ErpTest_Sales_Offer 390 KB
-        Company_ValleyFoods_Overtime 389 KB
+        Company_ValleyFoods_Overtime 390 KB
         Company_ValleyFoods_QualityAudits 389 KB
         Company_TopChemical_BudgetManufacture 388 KB
         Company_TopChemical_EmpOvertime 387 KB
@@ -1910,8 +1881,8 @@ page templates: 149
         Company_ValleyFoods_Vacations 383 KB
         Company_ValleyFoods_HR_Emp 382 KB
         Company_ValleyFoods_PurchasingReport 382 KB
-        Company_TopChemical_ClientBalanceSheets 382 KB
         Company_ValleyFoods_CashBoxBalances 382 KB
+        Company_TopChemical_ClientBalanceSheets 382 KB
         Company_TopChemical_ExecutiveFollowUp 381 KB
         Company_ValleyFoods_HR_Settings 381 KB
         Company_ValleyFoods_WarehouseMovement 380 KB
@@ -1969,18 +1940,18 @@ page templates: 149
         Company_ErpTest_Sales_Costing_Print 366 KB
         Company_TopLight_Sales_Costing_Print 366 KB
         Company_TopChemical_Clients 366 KB
+        Company_TopChemical_BudgetParties 366 KB
         Company_TopChemical_BudgetIncome 366 KB
         Company_ErpTest_Sales_Returns 366 KB
         Company_TopLight_Sales_Returns 366 KB
-        Company_TopChemical_BudgetParties 366 KB
         Company_ErpTest_Sales_Print 366 KB
         Company_TopLight_Sales_Print 366 KB
         Company_ValleyFoods_SalesPrint 365 KB
         Company_ErpTest_Sales_Costing_Analysis 365 KB
         Company_TopLight_Sales_Costing_Analysis 365 KB
         Company_Assessment_Results 364 KB
-        Company_TopChemical_EmpSalariesClose 364 KB
         Company_Assessment_Assessments 364 KB
+        Company_TopChemical_EmpSalariesClose 364 KB
         Company_ErpTest_Cash_Report 364 KB
         Company_TopLight_Cash_Report 364 KB
         Company_ErpTest_KPI 364 KB
@@ -2399,4 +2370,4 @@ Node.js v22.22.2
 ── QUALITY-E2E — one shared state through the full SOP → Ack → NCR → CAPA → close → dashboard journey over the real handlers
    OK
 
-34 of 126 checks FAILED.
+33 of 126 checks FAILED.

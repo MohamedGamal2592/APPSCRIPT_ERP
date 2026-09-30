@@ -2130,7 +2130,7 @@
         onChange: function () { UIC.Live.arrive(function () { load(true); }); }
       });
       /* [live-notice] the view on screen */
-      UIC.Live.setView('detail', { refresh: function () { load(true); } });
+      if (UIC.Live.setView) UIC.Live.setView('detail', { refresh: function () { load(true); } });
 
     })();
   </script>

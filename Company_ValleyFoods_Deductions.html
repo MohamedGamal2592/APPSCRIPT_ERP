@@ -483,7 +483,7 @@
         onChange: function () { UIC.Live.arrive(function () { fetchDeductions(true); }); }
       });
       /* [live-notice] the view on screen */
-      UIC.Live.setView('list', { refresh: function () { fetchDeductions(true); } });
+      if (UIC.Live.setView) UIC.Live.setView('list', { refresh: function () { fetchDeductions(true); } });
     });
 
     document.addEventListener('DOMContentLoaded', load);
