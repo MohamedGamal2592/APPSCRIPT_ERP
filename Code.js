@@ -1167,6 +1167,66 @@ function idHighWaterKey_(dbId, tableName, idColumnName) {
          String(idColumnName || 'id').trim().toLowerCase();
 }
 
+/* ── [et_instant P1] The erp_test insert fast path ─────────────────────────
+ *
+ * WHY. getNextIdUnderLock_ reads the whole id column on every insert, inside
+ * the global script lock, so the cost of one insert grows with the table and
+ * every other company waits for it (maxIdOf_, Code.js:1040).
+ *
+ * WHAT. A Script-Properties high-water counter, seeded ONCE from the sheet max
+ * and incremented thereafter. Still called under the lock — Properties is not
+ * transactional, so the lock is what makes "read, +1, write" atomic.
+ *
+ * CONTRACT. Opt-in per call site via the opts argument. With ET_FAST_INSERT_
+ * false, or opts absent, getNextIdUnderLock_ behaves exactly as before for all
+ * five companies.
+ *
+ * DRIFT. The counter is authoritative only because every insert goes through
+ * it. A row added or deleted by hand in the sheet can leave it below the sheet
+ * max, which would re-issue an id. etReseedInsertIds_ is the repair, and manual
+ * row surgery on an erp_test_* sheet REQUIRES running it afterwards.
+ */
+var ET_FAST_INSERT_ = false;
+
+function etFastIdKey_(dbId, tableName, idColumnName) {
+  return 'etid_' + idHighWaterKey_(dbId, tableName, idColumnName);
+}
+
+/* MUST be called while already holding the script lock. */
+function etNextIdFromProperties_(dbId, tableName, idColumnName) {
+  var props = PropertiesService.getScriptProperties();
+  var key = etFastIdKey_(dbId, tableName, idColumnName);
+  var stored = Number(props.getProperty(key));
+  var next;
+  if (Number.isInteger(stored) && stored > 0) {
+    next = stored + 1;
+  } else {
+    /* Cold seed: the one and only full column read for this table, ever. */
+    var sheet = getSpreadsheet_(dbId).getSheetByName(tableName);
+    next = maxIdOf_(sheet, idColumnName) + 1;
+  }
+  props.setProperty(key, String(next));
+  return next;
+}
+
+/* Owner-run repair. Re-floors every counter at the table's real max, so a
+ * counter that drifted low can never re-issue an id. Safe to run any time; it
+ * only ever raises a counter. */
+function etReseedInsertIds_(dbId, tableNames, idColumnName) {
+  var props = PropertiesService.getScriptProperties();
+  var out = [];
+  (tableNames || []).forEach(function (t) {
+    var key = etFastIdKey_(dbId, t, idColumnName);
+    var stored = Number(props.getProperty(key)) || 0;
+    var sheetMax = 0;
+    try { sheetMax = maxIdOf_(getSpreadsheet_(dbId).getSheetByName(t), idColumnName); } catch (e) {}
+    var next = Math.max(stored, sheetMax);
+    props.setProperty(key, String(next));
+    out.push({ table: t, was: stored, sheetMax: sheetMax, now: next });
+  });
+  return out;
+}
+
 /**
  * Internal id logic — MUST be called while already holding the script lock
  * (i.e. from getNextId_ or addRecord_, never standalone).
@@ -1182,7 +1242,7 @@ function idHighWaterKey_(dbId, tableName, idColumnName) {
  * does not justify. `max(id) + 1` cannot drift, because it is measured from the
  * only thing that matters.
  */
-function getNextIdUnderLock_(dbId, tableName, idColumnName = 'id') {
+function getNextIdUnderLock_(dbId, tableName, idColumnName = 'id', opts) {
   if (typeof isSystemTableBackend_ === 'function' && isSystemTableBackend_(dbId, tableName)) {
     const key = idHighWaterKey_(dbId, tableName, idColumnName);
     const live = systemNextNumericId_(tableName, idColumnName);
@@ -1191,6 +1251,18 @@ function getNextIdUnderLock_(dbId, tableName, idColumnName = 'id') {
     _idHighWater_[key] = next;
     return next;
   }
+  /* [et_instant P1] Opt-in O(1) counter. Falls through to the column scan
+     whenever the flag or the opt-in is absent, so the other four companies and
+     every non-opted call site keep today's behaviour exactly. */
+  if (ET_FAST_INSERT_ === true && opts && opts.fastCounter === true) {
+    const fastKey = idHighWaterKey_(dbId, tableName, idColumnName);
+    const fastNext = etNextIdFromProperties_(dbId, tableName, idColumnName);
+    const fastSeen = Number(_idHighWater_[fastKey]) || 0;
+    const fastOut = fastNext > fastSeen ? fastNext : fastSeen + 1;
+    _idHighWater_[fastKey] = fastOut;
+    return fastOut;
+  }
+
   const ss = getSpreadsheet_(dbId);
   /* One column, not the whole sheet — see maxIdOf_. This runs under the global
      script lock, so its size is every other user's queue time. */
