@@ -55,7 +55,7 @@
   var CURRENT_ACTION = '<?!= currentAction ?>';
 
   /* [live-notice D6] list replies from the device cache, trusted by the stamps */
-  companyCall = UIC.Live.viewCache(companyCall, { company: '9940659bd83035d7', page: 'vf_cash', view: 'report', lists: ['get_valley_cash_box_balance_report'] });
+  if (window.UIC && UIC.Live && UIC.Live.viewCache) companyCall = UIC.Live.viewCache(companyCall, { company: '9940659bd83035d7', page: 'vf_cash', view: 'report', lists: ['get_valley_cash_box_balance_report'] });
   function companyCall(moduleAction, data) {
     return API.call('company_action', {
       target_system: '9940659bd83035d7',

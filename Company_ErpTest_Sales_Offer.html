@@ -30,7 +30,7 @@
   var __canEdit = false;
 
   /* [live-notice D6] list replies from the device cache, trusted by the stamps */
-  companyCall = UIC.Live.viewCache(companyCall, { company: '37fc50edf1424abd', page: 'et_sales_offer', view: 'list', lists: ['get_et_sales_offer_headers'] });
+  if (window.UIC && UIC.Live && UIC.Live.viewCache) companyCall = UIC.Live.viewCache(companyCall, { company: '37fc50edf1424abd', page: 'et_sales_offer', view: 'list', lists: ['get_et_sales_offer_headers'] });
   function companyCall(moduleAction, data) {
     return API.call('company_action', {
       target_system: '37fc50edf1424abd',

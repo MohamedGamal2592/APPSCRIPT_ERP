@@ -34,7 +34,7 @@
   var SELECTED_ACCOUNT = '';
 
   /* [live-notice D6] list replies from the device cache, trusted by the stamps */
-  companyCall = UIC.Live.viewCache(companyCall, { company: '3fe1b5cb67b7223e', page: 'tc_trust', view: 'list', lists: ['get_trust_accounts', 'get_trust_movements'] });
+  if (window.UIC && UIC.Live && UIC.Live.viewCache) companyCall = UIC.Live.viewCache(companyCall, { company: '3fe1b5cb67b7223e', page: 'tc_trust', view: 'list', lists: ['get_trust_accounts', 'get_trust_movements'] });
   function companyCall(moduleAction, data) {
     return API.call('company_action', {
       target_system: '3fe1b5cb67b7223e',

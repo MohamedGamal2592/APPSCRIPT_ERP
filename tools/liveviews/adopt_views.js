@@ -91,7 +91,7 @@ pages.forEach(p => {
   const indent = /^[ \t]*/.exec(s.slice(at))[0];
   const uid = (/target_system:\s*'([0-9a-f]{16})'/.exec(s.slice(at)) || [])[1];
   if (!uid) throw new Error(f + ': company uid not found in companyCall');
-  const line = indent + TAG + '\n' + indent + "companyCall = UIC.Live.viewCache(companyCall, { company: '" + uid + "', page: '" + page + "', view: '" + view +
+  const line = indent + TAG + '\n' + indent + "if (window.UIC && UIC.Live && UIC.Live.viewCache) companyCall = UIC.Live.viewCache(companyCall, { company: '" + uid + "', page: '" + page + "', view: '" + view +
     "', lists: [" + lists.map(a => "'" + a + "'").join(', ') + '] });\n';
   s = s.slice(0, at) + line + s.slice(at);
   fs.writeFileSync(fp, s, 'utf8');
