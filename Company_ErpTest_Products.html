@@ -3,7 +3,6 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <?!= include('Page_Boot'); ?>
   <title>Testing System — المنتجات</title>
   <?!= include('CSS_Tokens'); ?>
   <?!= include('UI_Components'); ?>
@@ -27,19 +26,9 @@
   var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
   var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
 
-  /* [page-boot] How this load gets its first data — decided on the server
-     from the real query string (S23), one of three fixed words:
-       embed   (default) the table and the stamps come inside this HTML; the
-               stock follows in one background call.
-       fetch   ?embed=0 — the same split reads, fetched after the page loads.
-       legacy  ?embed=0&split=0 — one get_et_products with the stock in it,
-               which is how this page loaded before. Kept for the speed panel. */
-  var BOOT_MODE = '<?!= JSON.parse(pageParams || "{}").embed === "0" ? (JSON.parse(pageParams || "{}").split === "0" ? "legacy" : "fetch") : "embed" ?>';
-  /* get_page_versions FIRST (stamps never newer than the data). The second
-     read's data must match what fetchProducts sends on first load. */
-  var BOOT = <?!= JSON.parse(pageParams || "{}").embed === "0" ? "null" : pageBootJson_(user, '37fc50edf1424abd', '[{"action":"get_page_versions","data":{"page":"et_products"}},{"action":"get_et_products","data":{"skipStock":true}}]') ?>;
-  /* INSIDE the device cache, so its stamp check is answered from BOOT too. */
-  if (window.PageBoot) companyCall = PageBoot.wrap(companyCall, BOOT);
+  /* [page-boot] This page's first reads — the stamps, then get_et_products
+     { skipStock: true } — arrive inside its HTML (declared in
+     Page_Boot_Reads.js, answered by API.call). Nothing below depends on it. */
 
   /* [live-notice D6] list replies from the device cache, trusted by the stamps */
   if (window.UIC && UIC.Live && UIC.Live.viewCache) companyCall = UIC.Live.viewCache(companyCall, { company: '37fc50edf1424abd', page: 'et_products', view: 'list', lists: ['get_et_products'] });
@@ -73,31 +62,20 @@
   var stockPromise = null;
 
   function fetchProducts() {
-    var legacy = BOOT_MODE === 'legacy';
     UIC.readSkeleton('products-content', { message: [
       'جاري تحميل قائمة المنتجات...',
       'لحظة، جاري عرض الجدول...'
     ] });
-    (legacy ? companyCall('get_et_products') : companyCall('get_et_products', { skipStock: true }))
+    companyCall('get_et_products', { skipStock: true })
       .then(function (r) {
         window.__categoryOptions = r.category_options || [];
         window.__assetCodeOptions = r.asset_code_options || [];
         window.__unitOptions = r.unit_options || [];
         try{ schedulePrefetch(); }catch(e){}
-        if (legacy) STOCK = null;
         renderProducts(r.products || []);
-        /* The stock lands later on the split modes, so a measured series waits
-           for it; on legacy it arrived with the table. */
-        if (window.PageBoot) {
-          PageBoot.contentShown('et_products', { mode: BOOT_MODE, boot: BOOT, waitFor: legacy ? '' : 'stock' });
-          if (legacy) PageBoot.mark('stock');
-        }
-        if (!legacy) fetchStock();
+        fetchStock();
       })
-      .catch(function (e) {
-        showError(e);
-        if (window.PageBoot) PageBoot.contentShown('et_products', { mode: BOOT_MODE, boot: BOOT, failed: true });
-      })
+      .catch(function (e) { showError(e); })
       .finally(function () { UI.hideSpinner(); });
   }
 
@@ -269,17 +247,6 @@
 
   if (window.ET_PACKS) companyCall = ET_PACKS.wrapCall(companyCall, { page: 'et_products', list: 'get_et_products', refresh: function () { fetchProducts(); } });
   load();
-
-  /* [page-boot] The speed panel — super admin only, drawn over the page. */
-  if (window.PageBoot) PageBoot.panel({
-    show: IS_SUPER_ADMIN, page: 'et_products', title: 'المنتجات', token: SESSION_TOKEN,
-    secondary: { mark: 'stock', label: 'المخزون' },
-    modes: [
-      { mode: 'legacy', label: 'القديمة', q: '&embed=0&split=0', hint: 'بعد تحميل الصفحة: طلب التحديثات، وبعده طلب واحد فيه الجدول والمخزون (٨ شيتات).' },
-      { mode: 'fetch', label: 'طلب بعد التحميل', q: '&embed=0', hint: 'بعد تحميل الصفحة: الجدول لوحده (٣ شيتات)، والمخزون بعده في الخلفية.' },
-      { mode: 'embed', label: 'جوه الصفحة', q: '', hint: 'الجدول جوه الصفحة نفسها، والمخزون بعده في الخلفية. دي الطريقة الافتراضية.' }
-    ]
-  });
 
   /* [RT-6] Another device's change to this page arrives on its own. The poll
      reads timestamps from cache, never a spreadsheet, and stands down while the

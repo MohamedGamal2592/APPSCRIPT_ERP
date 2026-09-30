@@ -429,7 +429,20 @@ API._notifyCapabilityPickers = function (reason) {
     }
   } catch (e) {}
 };
+/* [page-boot] A read this page already received inside its HTML (Page_Boot,
+   injected by doGet) is answered here once, locally. Every other call — and
+   every later one — goes on exactly as before, through API._callInner; the
+   runtime only watches the declared ones to time the page. */
 API.call = function (action, payload, sessionToken, opts) {
+  if (window.PageBoot && PageBoot.answer) {
+    var booted = PageBoot.answer(action, payload);
+    if (booted) return booted;
+  }
+  var p = API._callInner(action, payload, sessionToken, opts);
+  if (window.PageBoot && PageBoot.observe) PageBoot.observe(action, payload, p);
+  return p;
+};
+API._callInner = function (action, payload, sessionToken, opts) {
   if (API._mysqlReads) {
     API._mysqlReads.scope(sessionToken, payload && payload.target_system);
     if (API._mysqlReads.accepts(action, payload)) return API._mysqlReads.call(action, payload, sessionToken, opts);

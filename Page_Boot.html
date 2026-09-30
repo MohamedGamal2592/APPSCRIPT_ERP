@@ -1,53 +1,40 @@
 <script>
-/* ── Page boot — the client side of pageBootJson_ (Code.js) ─────────────────
+/* ── Page boot — the client runtime ─────────────────────────────────────────
  *
- * A page's first reads come INSIDE its HTML, so it shows its data without a
- * google.script.run round trip. Each round trip costs ~6 s of platform time
- * before the first line of this project runs (measured on et_customers);
- * the table appeared after 9.6 s embedded against 21.0 s fetched.
+ * Delivered by doGet (Code.js pageBootInject_) as the FIRST thing in <head>,
+ * right after window.__PAGE_BOOT__ = { page, company, mode, reads, … }. A page
+ * never includes this file and never calls it: which pages get it, and with
+ * which reads, is PAGE_BOOT_READS (Page_Boot_Reads.js).
  *
- * A page opts in with three lines. They are written here with a backslash
- * after the «<» so this file is never evaluated as a template itself; in a
- * page the backslash is not there.
+ * API.call (Client_Helpers) asks PageBoot.answer(action, payload) first:
+ *   - a company read whose action AND data (key order ignored) match an
+ *     embedded read is answered from it, locally;
+ *   - an embedded data reply is used ONCE, and only within DATA_MAX_AGE_MS of
+ *     the page starting — a first call that late is not a page load any more;
+ *   - the embedded stamps (get_page_versions) answer every stamps call for
+ *     STAMPS_REUSE_MS, because the device cache asks for stamps before EVERY
+ *     list call it misses; kept under the live watch's 10 s floor, so its
+ *     polls always reach the server. Older stamps can only cause an extra
+ *     refresh, never hide a change.
+ * Everything else goes to the server exactly as before.
  *
- *   <\?!= include('Page_Boot'); ?>                      first thing in <head>
- *   var BOOT = <\?!= pageBootJson_(user, '<company>',
- *     '[{"action":"get_page_versions","data":{"page":"<page>"}},
- *       {"action":"<list action>","data":{ ...exactly what the page sends... }}]') ?>;
- *   companyCall = PageBoot.wrap(companyCall, BOOT);    BEFORE UIC.Live.viewCache
- *
- * wrap answers each embedded read ONCE, for the same action with the same data
- * (compared regardless of key order), and sends everything else to the server
- * exactly as before. It sits INSIDE the device cache, so the cache's stamp
- * check and the live watch's baseline are answered from the embedded stamps
- * too — get_page_versions is read first on the server, so those stamps are
- * never newer than the data and the watch errs toward an extra refresh.
- *
- * An embedded data reply is used ONCE, and only within DATA_MAX_AGE_MS of the
- * page starting: a first call that late is not a page load any more.
- * get_page_versions is different: the device cache asks for stamps before
- * EVERY list call it misses, so the balances call right after the table would
- * otherwise pay a second round trip just for stamps. The embedded stamps
- * therefore answer every stamps call for STAMPS_REUSE_MS — kept under the live
- * watch's 10 s floor, so its polls always reach the server — and the first
- * one after that too, whenever it comes (older stamps can only cause an extra
- * refresh, never hide a change).
- *
- * A read the server could not embed is simply absent, and the page fetches it.
- * Nothing about a page's behaviour changes except where its first answers
- * come from.
- *
- * Also here: the page-open measurement. A page calls PageBoot.contentShown
- * once its data is on screen and PageBoot.mark(name) when a later part lands,
- * and PageBoot.panel(cfg) gives a super admin a floating «⏱ السرعة» panel
- * that shows this load and runs a measured series across the page's modes.
+ * It also times the page, for the super admin's «⏱ السرعة» panel:
+ *   «الجدول ظهر» = every declared read has been handed to the page (answered
+ *   here, or come back from the server) and the page has drawn it.
+ * A page MAY call PageBoot.mark(name) when a part lands later (balances,
+ * stock). That is the only page-side call, and it is optional.
  */
 (function () {
   if (window.PageBoot) return;
-  var T0 = Date.now();   // the include is the first thing in <head>
+  var T0 = Date.now();
+  var CFG = window.__PAGE_BOOT__ || null;
   var DATA_MAX_AGE_MS = 120000;
   var STAMPS_REUSE_MS = 8000;
   var NAV_KEY = 'erp_navprobe_v1';
+  var MODES = [
+    { mode: 'off', label: 'من غير (زي الأول)', q: '&embed=0', hint: 'الصفحة بتوصل، وبعدين تطلب بياناتها من السيرفر.' },
+    { mode: 'embed', label: 'جوه الصفحة', q: '', hint: 'البيانات جاية جوه الصفحة نفسها. دي الطريقة الافتراضية.' }
+  ];
   var stats = { embedded: 0, served: [] };
 
   /* JSON with object keys sorted, so { a, b } and { b, a } are the same read. */
@@ -58,42 +45,77 @@
     return '{' + Object.keys(v).sort().filter(function (k) { return v[k] !== undefined; })
       .map(function (k) { return JSON.stringify(k) + ':' + canon(v[k]); }).join(',') + '}';
   }
+  function keyOf(company, action, data) { return String(company || '') + '|' + String(action || '') + '|' + canon(data || {}); }
+  function copy(v) { try { return JSON.parse(JSON.stringify(v)); } catch (e) { return v; } }
 
-  function wrap(call, boot) {
-    if (typeof call !== 'function') return call;
-    var left = ((boot && boot.reads) || [])
-      .filter(function (r) { return r && r.ok && r.reply; })
-      .map(function (r) { return { action: String(r.action), key: canon(r.data || {}), reply: r.reply }; });
-    stats.embedded = left.length;
-    if (!left.length) return call;
-    return function (action, data) {
-      var key = canon(data || {});
-      for (var i = 0; i < left.length; i++) {
-        var e = left[i];
-        if (e.action !== action || e.key !== key) continue;
-        var age = Date.now() - T0;
-        var stamps = action === 'get_page_versions';
-        if (stamps && e.used && age > STAMPS_REUSE_MS) { left.splice(i, 1); break; }
-        if (stamps && age <= STAMPS_REUSE_MS) e.used = true;
-        else left.splice(i, 1);
-        if (!stamps && age > DATA_MAX_AGE_MS) break;
-        stats.served.push(action);
-        return Promise.resolve(e.reply);
+  var entries = [];      // embedded replies still available
+  var declared = {};     // key -> false until handed to the page (data reads only)
+  var declaredCount = 0;
+  if (CFG && CFG.reads) {
+    CFG.reads.forEach(function (r) {
+      var key = keyOf(CFG.company, r.action, r.data);
+      var stamps = r.action === 'get_page_versions';
+      if (!stamps && declared[key] === undefined) { declared[key] = false; declaredCount++; }
+      if (CFG.mode === 'embed' && r.ok && r.reply) entries.push({ key: key, action: r.action, stamps: stamps, reply: r.reply, used: false });
+    });
+    stats.embedded = entries.length;
+  }
+
+  function handed(key) {
+    if (declared[key] !== false) return;
+    /* After the page's own then() has run and drawn. */
+    setTimeout(function () {
+      if (declared[key] !== false) return;
+      declared[key] = true;
+      var all = Object.keys(declared).every(function (k) { return declared[k]; });
+      if (all) contentShown(CFG.page, { mode: CFG.mode, boot: CFG, waitFor: CFG.waitFor });
+    }, 0);
+  }
+
+  function answer(route, payload) {
+    if (!CFG || route !== 'company_action' || !payload || !entries.length) return null;
+    if (String(payload.target_system || '') !== String(CFG.company)) return null;
+    var key = keyOf(payload.target_system, payload.module_action, payload.data);
+    var age = Date.now() - T0;
+    for (var i = 0; i < entries.length; i++) {
+      var e = entries[i];
+      if (e.key !== key) continue;
+      if (e.stamps) {
+        if (e.used && age > STAMPS_REUSE_MS) { entries.splice(i, 1); return null; }
+        if (age > STAMPS_REUSE_MS) entries.splice(i, 1); else e.used = true;
+        stats.served.push(e.action);
+        return Promise.resolve(copy(e.reply));
       }
-      return call.apply(this, arguments);
-    };
+      entries.splice(i, 1);
+      if (age > DATA_MAX_AGE_MS) return null;
+      stats.served.push(e.action);
+      handed(key);
+      return Promise.resolve(e.reply);
+    }
+    return null;
+  }
+
+  /* A declared read that went to the server (off mode, or a failed embed):
+     time it the same way. */
+  function observe(route, payload, promise) {
+    if (!CFG || route !== 'company_action' || !payload || !promise || typeof promise.then !== 'function') return;
+    var key = keyOf(payload.target_system, payload.module_action, payload.data);
+    if (declared[key] !== false) return;
+    promise.then(function () { handed(key); }, function () {
+      if (declared[key] !== false) return;
+      declared[key] = true;
+      thisLoad.failed = true;
+      refreshPanel();
+    });
   }
 
   /* ── The page-open measurement ─────────────────────────────────────────────
-   *
-   * The perf page stamps the click and navigates; the page opened calls
-   * contentShown(page, info) when its data is on screen, which records
-   * click→page and click→content, then continues the series or returns.
-   * Top-frame navigation from the Apps Script sandbox needs a user gesture, so
-   * when the browser refuses one a small «التالي» button appears instead.
+   * The panel stamps the click in localStorage and navigates; the page opened
+   * records click→page and click→table, waits for CFG.waitFor if the page has
+   * a later part, then continues the series. Top-frame navigation from the
+   * Apps Script sandbox needs a user gesture, so a refused one shows «التالي».
    * localStorage is this device only; without it nothing is measured and
-   * nothing else is affected.
-   */
+   * nothing else is affected. */
   function navState() {
     try {
       var st = JSON.parse(localStorage.getItem(NAV_KEY) || 'null');
@@ -103,7 +125,7 @@
     } catch (e) { return null; }
   }
   function navSave(st) { try { localStorage.setItem(NAV_KEY, JSON.stringify(st)); return true; } catch (e) { return false; } }
-
+  function topNav(url) { try { window.top.location.href = url; } catch (e) {} }
   function floatButton(label, onclick) {
     try {
       var old = document.getElementById('pageboot-next');
@@ -119,113 +141,84 @@
       (document.body || document.documentElement).appendChild(b);
     } catch (e) {}
   }
-
-  function topNav(url) { try { window.top.location.href = url; } catch (e) {} }
-
   /* item: { page, mode, url, label, cold }. The stamp is taken at THIS moment,
      so time spent before a «التالي» click is never counted. */
-  function go(item, back) {
+  function go(item) {
     var st = navState();
     if (!st) return false;
-    st.pending = { page: item.page, mode: item.mode, t: Date.now(), back: back || '' };
+    st.pending = { page: item.page, mode: item.mode, t: Date.now() };
     if (!navSave(st)) return false;
     if (item.cold) { try { if (window.UIC && UIC.Cache && UIC.Cache.clearPrefix) UIC.Cache.clearPrefix(); } catch (e) {} }
     topNav(item.url);
     setTimeout(function () {
-      floatButton('التالي: ' + (item.label || item.mode) + (st.queue.length ? ' (فاضل ' + st.queue.length + ')' : ''),
-        function () { go(item, back); });
+      var left = (navState() || { queue: [] }).queue.length;
+      floatButton('التالي: ' + (item.label || item.mode) + (left ? ' (فاضل ' + left + ')' : ''), function () { go(item); });
     }, 2500);
     return true;
   }
-
-  function navStart(items, back) {
+  function navStart(items) {
     var st = navState();
     if (!st || !items || !items.length) return false;
     st.queue = items.slice(1);
     if (!navSave(st)) return false;
-    return go(items[0], back);
+    return go(items[0]);
   }
 
-  function navClear() {
-    var st = navState();
-    if (st) { st.samples = []; st.queue = []; st.pending = null; navSave(st); }
-  }
-
-  /* ── This load ─────────────────────────────────────────────────────────────
-   *
-   * Whatever else happens, the panel can say how THIS load got its data and
-   * when each part landed, counted from the first line of the page (T0). When
-   * the load is part of a measured series it also records a sample counted
-   * from the click that opened it.
-   */
-  var thisLoad = { page: '', mode: '', boot: null, content: null, failed: false, marks: {}, sampleAt: '', clickT: 0, seriesDone: false };
+  var thisLoad = { mode: CFG ? CFG.mode : '', content: null, failed: false, marks: {}, sampleAt: '', clickT: 0, seriesDone: false };
   var shown = {};
-  var afterWait = null;   // the series step held back until info.waitFor lands
+  var afterWait = null;
 
-  function stepSeries(st, pend) {
+  function stepSeries(st) {
     var next = st.queue.length ? st.queue.shift() : null;
     navSave(st);
-    if (next) { setTimeout(function () { go(next, pend.back); }, 400); return; }
-    if (pend.back) {
-      setTimeout(function () {
-        topNav(pend.back);
-        setTimeout(function () { floatButton('رجوع لصفحة القياس', function () { topNav(pend.back); }); }, 2500);
-      }, 400);
-      return;
-    }
+    if (next) { setTimeout(function () { go(next); }, 400); return; }
     thisLoad.seriesDone = true;
     openPanel();
   }
 
-  /* info: { mode, boot, failed, waitFor }. Call once the page's data is on
-     screen; later calls on the same load are ignored. waitFor names a mark
-     (see mark) the series should wait for before moving to the next load, so
-     a part that arrives after the table is measured too. */
+  /* Called automatically when every declared read is on screen. A page may
+     call it itself too; the first call on a load wins. */
   function contentShown(page, info) {
-    if (shown[page]) return;
+    if (!page || shown[page]) return;
     shown[page] = true;
     info = info || {};
     var now = Date.now();
-    thisLoad.page = page;
-    thisLoad.mode = info.mode || '';
-    thisLoad.boot = info.boot || null;
-    try { thisLoad.bootBytes = info.boot ? JSON.stringify(info.boot).length : null; } catch (e) { thisLoad.bootBytes = null; }
     thisLoad.content = now - T0;
-    thisLoad.failed = !!info.failed;
+    if (info.failed) thisLoad.failed = true;
     var st = navState();
-    /* Only the load a series was waiting for consumes it. Any other load —
-       a hand reload, a different mode — leaves the series as it was, so the
-       panel can offer to continue it. */
     var pend = st && st.pending;
+    /* Only the load a series was waiting for consumes it; any other load
+       leaves the series as it was, so the panel can offer to continue it. */
     if (pend && pend.page === page && pend.mode === info.mode && T0 >= pend.t && (T0 - pend.t) < 120000) {
       st.pending = null;
-      var boot = info.boot || null;
-      if (!info.failed) {
+      if (!thisLoad.failed) {
         thisLoad.sampleAt = new Date().toISOString() + ':' + Math.random().toString(36).slice(2, 8);
         thisLoad.clickT = pend.t;
+        var boot = CFG;
+        var bytes = null;
+        try { bytes = boot ? JSON.stringify(boot).length : null; } catch (eB) {}
         st.samples.push({
           page: page, mode: info.mode, page_ms: T0 - pend.t, content_ms: now - pend.t, marks: {},
-          boot_server_ms: boot ? boot.server_ms : null,
-          boot_bytes: thisLoad.bootBytes,
-          boot_ok: !!(boot && boot.reads && boot.reads.length && boot.reads.every(function (r) { return r.ok; })),
-          boot_error: boot && boot.reads ? boot.reads.filter(function (r) { return !r.ok; }).map(function (r) { return r.action + ': ' + (r.error || 'failed'); }).join('; ') : '',
+          boot_server_ms: boot && boot.mode === 'embed' ? boot.server_ms : null,
+          boot_bytes: boot && boot.mode === 'embed' ? bytes : null,
+          boot_ok: !!(boot && boot.reads && boot.reads.every(function (r) { return boot.mode !== 'embed' || r.ok; })),
+          boot_error: boot && boot.mode === 'embed' ? boot.reads.filter(function (r) { return !r.ok; }).map(function (r) { return r.action + ': ' + (r.error || 'failed'); }).join('; ') : '',
           at: thisLoad.sampleAt
         });
-        if (st.samples.length > 90) st.samples = st.samples.slice(-90);
+        if (st.samples.length > 120) st.samples = st.samples.slice(-120);
       }
-      if (info.waitFor && !info.failed && thisLoad.marks[info.waitFor] === undefined) {
+      if (info.waitFor && !thisLoad.failed && thisLoad.marks[info.waitFor] === undefined) {
         navSave(st);
         var name = info.waitFor, done = false;
-        afterWait = { name: name, run: function () { if (done) return; done = true; afterWait = null; var cur = navState(); if (cur) stepSeries(cur, pend); } };
+        afterWait = { name: name, run: function () { if (done) return; done = true; afterWait = null; var cur = navState(); if (cur) stepSeries(cur); } };
         setTimeout(function () { if (afterWait && afterWait.name === name) afterWait.run(); }, 60000);
-      } else stepSeries(st, pend);
+      } else stepSeries(st);
     }
     refreshPanel();
   }
 
-  /* A part of the page that lands after the table (balances, stock…). The
-     first call per name counts; recorded on this load and, when this load is
-     a measured sample, on that sample counted from the click. */
+  /* A part of the page that lands after the table (balances, stock…): first
+     call per name counts, on this load and on its measured sample. */
   function mark(name) {
     if (!name || thisLoad.marks[name] !== undefined) return;
     var now = Date.now();
@@ -246,200 +239,179 @@
     refreshPanel();
   }
 
-  /* ── The speed panel ───────────────────────────────────────────────────────
-   *
-   * A floating «⏱ السرعة» button, shown only when cfg.show (super admin), that
-   * opens a panel OVER the page — the page's own markup and table are never
-   * touched. cfg: {
-   *   show, page, title, token,
-   *   modes: [{ mode, label, q, hint }]   first = the old way, last = the new
-   *   secondary: { mark, label }          optional: the part that lands later
-   * }
-   */
-  var cfgP = null;
+  /* ── The speed panel (super admin only) ───────────────────────────────── */
   function esc(v) {
     return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
     });
   }
   function ms(n) { return (n == null || isNaN(n)) ? '—' : (Math.round(n) + ' ms'); }
+  function kb(n) { return (n == null || isNaN(n)) ? '—' : (n < 1024 ? n + ' B' : (n / 1024).toFixed(1) + ' KB'); }
   function median(a) {
     a = (a || []).filter(function (v) { return v != null && !isNaN(v); });
     if (!a.length) return null;
     var x = a.slice().sort(function (p, q) { return p - q; }), m = Math.floor(x.length / 2);
     return x.length % 2 ? x[m] : (x[m - 1] + x[m]) / 2;
   }
-  function kb(n) { return (n == null || isNaN(n)) ? '—' : (n < 1024 ? n + ' B' : (n / 1024).toFixed(1) + ' KB'); }
   function minOf(a) { a = (a || []).filter(function (v) { return v != null; }); return a.length ? Math.min.apply(null, a) : null; }
   function maxOf(a) { a = (a || []).filter(function (v) { return v != null; }); return a.length ? Math.max.apply(null, a) : null; }
-  function modeOf(m) { return ((cfgP && cfgP.modes) || []).filter(function (x) { return x.mode === m; })[0] || { mode: m, label: m }; }
-
-  function el(tag, id, style) {
-    var e = document.createElement(tag);
-    if (id) e.id = id;
-    if (style) e.setAttribute('style', style);
-    return e;
+  function modeOf(m) { return MODES.filter(function (x) { return x.mode === m; })[0] || { mode: m, label: m }; }
+  function token() {
+    try { if (window.UIC && UIC.token) { var t = UIC.token(); if (t) return t; } } catch (e) {}
+    try { return new URLSearchParams(window.location.search).get('sessionToken') || ''; } catch (e2) { return ''; }
   }
-
-  function panel(cfg) {
-    if (!cfg || !cfg.show || !cfg.page) return;
-    cfgP = cfg;
-    try {
-      var b = el('button', 'pageboot-toggle', 'position:fixed;bottom:16px;left:16px;z-index:99998;padding:9px 14px;' +
-        'font:700 13px system-ui,sans-serif;border:1px solid var(--border-color,#d0d5dd);border-radius:999px;' +
-        'background:var(--bg-surface,#fff);color:var(--text-primary,#101418);box-shadow:0 2px 10px rgba(0,0,0,.15);cursor:pointer;');
-      b.type = 'button';
-      b.textContent = '⏱ السرعة';
-      b.onclick = function () { var p = document.getElementById('pageboot-panel'); if (p && p.style.display !== 'none') closePanel(); else openPanel(); };
-      var p = el('div', 'pageboot-panel', 'display:none;position:fixed;bottom:64px;left:16px;z-index:99998;' +
-        'width:min(560px,calc(100vw - 32px));max-height:72vh;overflow:auto;padding:12px 14px;direction:rtl;text-align:right;' +
-        'font:13px/1.7 system-ui,"Segoe UI",sans-serif;background:var(--bg-surface,#fff);color:var(--text-primary,#101418);' +
-        'border:1px solid var(--border-color,#d0d5dd);border-radius:10px;box-shadow:0 8px 28px rgba(0,0,0,.22);');
-      (document.body || document.documentElement).appendChild(b);
-      (document.body || document.documentElement).appendChild(p);
-    } catch (e) {}
-    refreshPanel();
-  }
-  function openPanel() { var p = document.getElementById('pageboot-panel'); if (p) { p.style.display = 'block'; refreshPanel(); } }
-  function closePanel() { var p = document.getElementById('pageboot-panel'); if (p) p.style.display = 'none'; }
-
   function itemFor(mode) {
     var m = modeOf(mode);
-    var base = (window.UIC && UIC.baseUrl) ? UIC.baseUrl() : '';
-    return { page: cfgP.page, mode: m.mode, label: m.label, cold: true,
-      url: base + '?action=' + encodeURIComponent(cfgP.page) + '&sessionToken=' + encodeURIComponent(cfgP.token || '') + (m.q || '') };
+    var base = (window.UIC && UIC.baseUrl) ? UIC.baseUrl() : (window.scriptUrl || '');
+    var q = CFG.query ? CFG.query.split('&').filter(function (x) { return x.indexOf('action=') !== 0; }).join('&') : '';
+    return { page: CFG.page, mode: m.mode, label: m.label, cold: true,
+      url: base + '?action=' + encodeURIComponent(CFG.page) + (q ? '&' + q : '') + '&sessionToken=' + encodeURIComponent(token()) + (m.q || '') };
   }
-
   function startSeries(n) {
-    if (!cfgP) return;
     var items = [];
-    for (var i = 0; i < n; i++) cfgP.modes.forEach(function (m) { items.push(itemFor(m.mode)); });
-    if (!navStart(items, '')) {
+    for (var i = 0; i < n; i++) MODES.forEach(function (m) { items.push(itemFor(m.mode)); });
+    if (!navStart(items)) {
       var p = document.getElementById('pageboot-panel');
       if (p) p.insertAdjacentHTML('afterbegin', '<div style="color:#b42318;">التخزين المحلي مش متاح في المتصفح ده، فمش هينفع نقيس.</div>');
     }
   }
-  function clearSeries() { navClear(); refreshPanel(); }
-
-  /* A series is interrupted when this load is not one of its samples but it
-     still has a load pending or queued — the browser refused a navigation and
-     «التالي» was not pressed, or the page was reloaded by hand. «كمّل» opens
-     the load it was waiting for (restamped now); «إلغاء» drops the rest and
-     keeps every sample already taken. */
+  function clearSeries() { var st = navState(); if (st) { st.samples = st.samples.filter(function (x) { return x.page !== CFG.page; }); st.queue = []; st.pending = null; navSave(st); } refreshPanel(); }
   function interrupted(st) {
-    if (!st || !cfgP || thisLoad.sampleAt) return false;
-    return !!((st.pending && st.pending.page === cfgP.page) || (st.queue.length && st.queue[0].page === cfgP.page));
+    if (!st || thisLoad.sampleAt) return false;
+    return !!((st.pending && st.pending.page === CFG.page) || (st.queue.length && st.queue[0].page === CFG.page));
   }
   function resumeSeries() {
     var st = navState();
     if (!interrupted(st)) return;
     var item;
-    if (st.pending && st.pending.page === cfgP.page) item = itemFor(st.pending.mode);
+    if (st.pending && st.pending.page === CFG.page) item = itemFor(st.pending.mode);
     else { item = st.queue.shift(); navSave(st); }
-    go(item, '');
+    go(item);
   }
-  function cancelSeries() {
-    var st = navState();
-    if (st) { st.queue = []; st.pending = null; navSave(st); }
-    refreshPanel();
-  }
+  function cancelSeries() { var st = navState(); if (st) { st.queue = []; st.pending = null; navSave(st); } refreshPanel(); }
+  function openPanel() { var p = document.getElementById('pageboot-panel'); if (p) { p.style.display = 'block'; refreshPanel(); } }
+  function closePanel() { var p = document.getElementById('pageboot-panel'); if (p) p.style.display = 'none'; }
 
   var TD = 'padding:4px 6px;border-bottom:1px solid var(--border-color,#e5e7eb);';
   var NUM = TD + 'font-variant-numeric:tabular-nums;direction:ltr;text-align:left;white-space:nowrap;';
+  function btn(label, onclick, primary) {
+    return '<button type="button" onclick="' + onclick + '" style="padding:5px 11px;border-radius:6px;cursor:pointer;font-weight:700;' +
+      (primary ? 'border:0;background:#1d4ed8;color:#fff;' : 'border:1px solid var(--border-color,#d0d5dd);background:none;color:inherit;') + '">' + label + '</button>';
+  }
 
   function refreshPanel() {
     var p = document.getElementById('pageboot-panel');
-    if (!p || !cfgP) return;
-    var sec = cfgP.secondary || null;
-    var m = modeOf(thisLoad.mode);
+    if (!p || !CFG) return;
+    var markNames = Object.keys(thisLoad.marks);
     var h = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">' +
-      '<b>قياس السرعة — ' + esc(cfgP.title || cfgP.page) + '</b>' +
+      '<b>قياس السرعة — <span dir="ltr">' + esc(CFG.page) + '</span></b>' +
       '<button type="button" onclick="PageBoot._closePanel()" style="border:0;background:none;font-size:18px;cursor:pointer;color:inherit;">×</button></div>';
-
-    // — this load
     h += '<div style="padding:8px 10px;border-radius:8px;background:var(--bg-muted,#f3f5f8);margin-bottom:10px;">' +
-      '<div><b>الفتحة دي:</b> ' + esc(m.label || thisLoad.mode || '—') + (thisLoad.failed ? ' <span style="color:#b42318;">— القراءة فشلت</span>' : '') + '</div>';
-    if (thisLoad.content != null) {
-      h += '<div>من أول الصفحة: الجدول ظهر بعد <b>' + ms(thisLoad.content) + '</b>' +
-        (sec ? ' · ' + esc(sec.label) + ' ' + (thisLoad.marks[sec.mark] != null ? 'كمل بعد <b>' + ms(thisLoad.marks[sec.mark]) + '</b>' : '<span style="opacity:.7;">لسه…</span>') : '') + '</div>';
-    } else h += '<div style="opacity:.7;">الجدول لسه ما ظهرش…</div>';
-    var boot = thisLoad.boot;
-    if (boot && boot.reads) {
-      h += '<div>قراءة السيرفر جوه الصفحة: <b>' + ms(boot.server_ms) + '</b> · حجمها <b>' + kb(thisLoad.bootBytes) + '</b> <span style="opacity:.75;">(' +
-        boot.reads.map(function (r) { return esc(r.action) + ' ' + ms(r.ms) + (r.ok ? '' : ' ✗ ' + esc(r.error || '')); }).join(' · ') + ')</span></div>';
+      '<div><b>الفتحة دي:</b> ' + esc(modeOf(CFG.mode).label) + (thisLoad.failed ? ' <span style="color:#b42318;">— قراءة فشلت</span>' : '') + '</div>';
+    h += '<div>من أول الصفحة: البيانات ظهرت بعد <b>' + ms(thisLoad.content) + '</b>' +
+      markNames.map(function (n) { return ' · ' + esc(n) + ' بعد <b>' + ms(thisLoad.marks[n]) + '</b>'; }).join('') + '</div>';
+    if (CFG.mode === 'embed') {
+      var bytes = null;
+      try { bytes = JSON.stringify(CFG).length; } catch (e) {}
+      h += '<div>قراءة السيرفر جوه الصفحة: <b>' + ms(CFG.server_ms) + '</b> · حجمها <b>' + kb(bytes) + '</b> <span style="opacity:.75;">(' +
+        CFG.reads.map(function (r) { return esc(r.action) + ' ' + ms(r.ms) + (r.ok ? '' : ' ✗ ' + esc(r.error || '')); }).join(' · ') + ')</span></div>';
       h += '<div>طلبات اتجاوبت من جوه الصفحة من غير سيرفر: <b>' + stats.served.length + '</b></div>';
     }
-    if (thisLoad.sampleAt) {
-      var stNow = navState();
-      var smp = stNow ? stNow.samples.filter(function (x) { return x.at === thisLoad.sampleAt; })[0] : null;
-      if (smp) h += '<div>من الضغطة: الصفحة وصلت <b>' + ms(smp.page_ms) + '</b> · الجدول ظهر <b>' + ms(smp.content_ms) + '</b>' +
-        (sec && smp.marks && smp.marks[sec.mark] != null ? ' · ' + esc(sec.label) + ' <b>' + ms(smp.marks[sec.mark]) + '</b>' : '') + '</div>';
+    var stNow = navState();
+    if (thisLoad.sampleAt && stNow) {
+      var smp = stNow.samples.filter(function (x) { return x.at === thisLoad.sampleAt; })[0];
+      if (smp) h += '<div>من الضغطة: الصفحة وصلت <b>' + ms(smp.page_ms) + '</b> · البيانات ظهرت <b>' + ms(smp.content_ms) + '</b></div>';
     }
     if (thisLoad.seriesDone) h += '<div style="color:#0a7d34;"><b>القياس خلص.</b> النتيجة تحت.</div>';
     h += '</div>';
 
-    // — the comparison
-    var st = navState();
-    var samples = ((st && st.samples) || []).filter(function (x) { return x.page === cfgP.page; });
-    h += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">' +
-      '<button type="button" onclick="PageBoot._startSeries(3)" style="padding:6px 12px;border:0;border-radius:6px;background:#1d4ed8;color:#fff;font-weight:700;cursor:pointer;">قياس ٣ مرات لكل طريقة</button>' +
-      '<button type="button" onclick="PageBoot._clearSeries()" style="padding:6px 12px;border:1px solid var(--border-color,#d0d5dd);border-radius:6px;background:none;color:inherit;cursor:pointer;">مسح</button>' +
-      (function () { var left = st && st.queue ? st.queue.filter(function (q) { return q.page === cfgP.page; }).length : 0; return left ? '<span style="opacity:.75;align-self:center;">فاضل ' + left + ' فتحة</span>' : ''; })() + '</div>';
+    var st = stNow;
+    var samples = ((st && st.samples) || []).filter(function (x) { return x.page === CFG.page; });
+    var left = st && st.queue ? st.queue.filter(function (q) { return q.page === CFG.page; }).length : 0;
+    h += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">' + btn('قياس ٣ مرات لكل طريقة', 'PageBoot._startSeries(3)', true) + btn('مسح', 'PageBoot._clearSeries()') +
+      (left ? '<span style="opacity:.75;align-self:center;">فاضل ' + left + ' فتحة</span>' : '') + '</div>';
     if (interrupted(st)) {
-      var nextMode = (st.pending && st.pending.page === cfgP.page) ? st.pending.mode : st.queue[0].mode;
-      h += '<div style="margin-bottom:8px;padding:8px 10px;border-radius:8px;background:#fff7ed;color:#7c2d12;">' +
-        'القياس اتقطع — الفتحة دي مش محسوبة. الجاية: «' + esc(modeOf(nextMode).label) + '». ' +
-        '<button type="button" onclick="PageBoot._resumeSeries()" style="padding:4px 10px;border:0;border-radius:6px;background:#1d4ed8;color:#fff;font-weight:700;cursor:pointer;">كمّل</button> ' +
-        '<button type="button" onclick="PageBoot._cancelSeries()" style="padding:4px 10px;border:1px solid #d0d5dd;border-radius:6px;background:none;color:inherit;cursor:pointer;">إلغاء</button></div>';
+      var nextMode = (st.pending && st.pending.page === CFG.page) ? st.pending.mode : st.queue[0].mode;
+      h += '<div style="margin-bottom:8px;padding:8px 10px;border-radius:8px;background:#fff7ed;color:#7c2d12;">القياس اتقطع — الفتحة دي مش محسوبة. الجاية: «' +
+        esc(modeOf(nextMode).label) + '». ' + btn('كمّل', 'PageBoot._resumeSeries()', true) + ' ' + btn('إلغاء', 'PageBoot._cancelSeries()') + '</div>';
     }
+    var allMarks = {};
+    samples.forEach(function (y) { Object.keys(y.marks || {}).forEach(function (n) { allMarks[n] = true; }); });
+    var markCols = Object.keys(allMarks);
     h += '<table style="border-collapse:collapse;width:100%;font-size:12px;"><thead><tr>' +
       '<th style="' + TD + '">الطريقة</th><th style="' + NUM + '">عدد</th><th style="' + NUM + '">الصفحة وصلت</th>' +
-      '<th style="' + NUM + '">الجدول ظهر</th><th style="' + NUM + '">الأدنى</th><th style="' + NUM + '">الأعلى</th>' +
-      (sec ? '<th style="' + NUM + '">' + esc(sec.label) + ' كمل</th>' : '') +
+      '<th style="' + NUM + '">البيانات ظهرت</th><th style="' + NUM + '">الأدنى</th><th style="' + NUM + '">الأعلى</th>' +
+      markCols.map(function (n) { return '<th style="' + NUM + '">' + esc(n) + '</th>'; }).join('') +
       '<th style="' + NUM + '">قراءة السيرفر</th><th style="' + NUM + '">الحجم</th></tr></thead><tbody>';
     var med = {};
-    cfgP.modes.forEach(function (x) {
+    MODES.forEach(function (x) {
       var list = samples.filter(function (y) { return y.mode === x.mode; });
       var c = list.map(function (y) { return y.content_ms; });
       med[x.mode] = median(c);
       h += '<tr><td style="' + TD + '"><b>' + esc(x.label) + '</b></td><td style="' + NUM + '">' + list.length + '</td>' +
         '<td style="' + NUM + '">' + ms(median(list.map(function (y) { return y.page_ms; }))) + '</td>' +
         '<td style="' + NUM + '"><b>' + ms(med[x.mode]) + '</b></td><td style="' + NUM + '">' + ms(minOf(c)) + '</td><td style="' + NUM + '">' + ms(maxOf(c)) + '</td>' +
-        (sec ? '<td style="' + NUM + '">' + ms(median(list.map(function (y) { return y.marks && y.marks[sec.mark]; }))) + '</td>' : '') +
+        markCols.map(function (n) { return '<td style="' + NUM + '">' + ms(median(list.map(function (y) { return y.marks && y.marks[n]; }))) + '</td>'; }).join('') +
         '<td style="' + NUM + '">' + ms(median(list.map(function (y) { return y.boot_server_ms; }))) + '</td>' +
         '<td style="' + NUM + '">' + kb(median(list.map(function (y) { return y.boot_bytes; }))) + '</td></tr>';
     });
     h += '</tbody></table>';
-    var oldM = cfgP.modes[0], newM = cfgP.modes[cfgP.modes.length - 1];
-    if (med[oldM.mode] != null && med[newM.mode] != null) {
-      var saved = med[oldM.mode] - med[newM.mode];
-      h += '<div style="margin-top:8px;padding:8px 10px;border-radius:8px;background:#f0f4ff;color:#101418;">من الضغطة لحد ما الجدول يظهر: <b>' + ms(med[newM.mode]) + '</b> «' + esc(newM.label) + '» بدل <b>' +
-        ms(med[oldM.mode]) + '</b> «' + esc(oldM.label) + '» — ' +
-        (saved > 0 ? '<b style="color:#0a7d34;">أسرع بـ ' + ms(saved) + ' (' + Math.round(saved / med[oldM.mode] * 100) + '%)</b>' : '<b style="color:#b45309;">مفيش مكسب</b>') + '.</div>';
+    if (med.off != null && med.embed != null) {
+      var saved = med.off - med.embed;
+      h += '<div style="margin-top:8px;padding:8px 10px;border-radius:8px;background:#f0f4ff;color:#101418;">من الضغطة لحد ما البيانات تظهر: <b>' + ms(med.embed) +
+        '</b> «جوه الصفحة» بدل <b>' + ms(med.off) + '</b> «من غير» — ' +
+        (saved > 0 ? '<b style="color:#0a7d34;">أسرع بـ ' + ms(saved) + ' (' + Math.round(saved / med.off * 100) + '%)</b>' : '<b style="color:#b45309;">مفيش مكسب</b>') + '.</div>';
     }
-    var bad = samples.filter(function (y) { return y.mode === newM.mode && y.boot_error; }).slice(-3);
+    var bad = samples.filter(function (y) { return y.mode === 'embed' && y.boot_error; }).slice(-3);
     if (bad.length) h += '<div style="color:#b42318;margin-top:6px;">القراءة جوه الصفحة فشلت في ' + bad.length + ' فتحة: ' + esc(bad[bad.length - 1].boot_error) + '</div>';
-    h += '<div style="opacity:.8;margin-top:8px;font-size:12px;">' + cfgP.modes.map(function (x) { return '«' + esc(x.label) + '»: ' + esc(x.hint || ''); }).join('<br>') +
-      '<br>قبل كل فتحة في القياس بيتمسح الكاش اللي على الجهاز، علشان الطرق تبدأ من نفس النقطة. «الجدول ظهر» = الصفوف على الشاشة.</div>';
+    h += '<div style="opacity:.8;margin-top:8px;font-size:12px;">' + MODES.map(function (x) { return '«' + esc(x.label) + '»: ' + esc(x.hint); }).join('<br>') +
+      '<br>قبل كل فتحة في القياس بيتمسح الكاش اللي على الجهاز، علشان الطريقتين يبدأوا من نفس النقطة.</div>';
     p.innerHTML = h;
   }
 
+  function mountPanel() {
+    if (!CFG || !CFG.admin || document.getElementById('pageboot-toggle')) return;
+    try {
+      var b = document.createElement('button');
+      b.id = 'pageboot-toggle';
+      b.type = 'button';
+      b.textContent = '⏱ السرعة';
+      b.setAttribute('style', 'position:fixed;bottom:16px;left:16px;z-index:99998;padding:9px 14px;' +
+        'font:700 13px system-ui,sans-serif;border:1px solid var(--border-color,#d0d5dd);border-radius:999px;' +
+        'background:var(--bg-surface,#fff);color:var(--text-primary,#101418);box-shadow:0 2px 10px rgba(0,0,0,.15);cursor:pointer;');
+      b.onclick = function () { var p = document.getElementById('pageboot-panel'); if (p && p.style.display !== 'none') closePanel(); else openPanel(); };
+      var p = document.createElement('div');
+      p.id = 'pageboot-panel';
+      p.setAttribute('style', 'display:none;position:fixed;bottom:64px;left:16px;z-index:99998;' +
+        'width:min(580px,calc(100vw - 32px));max-height:72vh;overflow:auto;padding:12px 14px;direction:rtl;text-align:right;' +
+        'font:13px/1.7 system-ui,"Segoe UI",sans-serif;background:var(--bg-surface,#fff);color:var(--text-primary,#101418);' +
+        'border:1px solid var(--border-color,#d0d5dd);border-radius:10px;box-shadow:0 8px 28px rgba(0,0,0,.22);');
+      document.body.appendChild(b);
+      document.body.appendChild(p);
+      refreshPanel();
+      if (thisLoad.seriesDone) openPanel();
+    } catch (e) {}
+  }
+  if (CFG && CFG.admin) {
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mountPanel);
+    else mountPanel();
+  }
+
   window.PageBoot = {
-    wrap: wrap,
+    answer: answer,
+    observe: observe,
+    mark: mark,
+    contentShown: contentShown,
     canon: canon,
     t0: T0,
     stats: stats,
-    navStart: navStart,
     navState: navState,
-    navClear: navClear,
-    contentShown: contentShown,
-    mark: mark,
-    panel: panel,
     _startSeries: startSeries,
     _clearSeries: clearSeries,
     _resumeSeries: resumeSeries,
     _cancelSeries: cancelSeries,
-    _closePanel: closePanel
+    _closePanel: closePanel,
+    _declared: function () { return declared; }
   };
 })();
 </script>
