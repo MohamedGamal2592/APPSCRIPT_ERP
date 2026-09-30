@@ -794,6 +794,11 @@
       if (F_READ_ONLY[col] || F_DISPLAY_ONLY[col] || F_HIDE_VIEW[col]) return;
       payload[col] = footVal(fid, col);
     });
+    if (Object.prototype.hasOwnProperty.call(payload, 'productQuantity')) {
+      var qtyRaw = String(payload.productQuantity || '').trim();
+      var qtyNum = Number(qtyRaw);
+      if (!qtyRaw || !isFinite(qtyNum) || qtyNum <= 0) { UIC.toast('أدخل الكمية (رقم أكبر من صفر)', 'error'); return; }
+    }
     var draft = Object.assign({}, was);
     Object.keys(payload).forEach(function (k) { draft[k] = payload[k]; });
     if (Object.prototype.hasOwnProperty.call(payload, 'product_id')) {
@@ -839,6 +844,9 @@
       payload[col] = footVal('new', col);
     });
     if (!String(payload.product_id || '').trim()) { UIC.toast('اختر الصنف أولاً', 'error'); return; }
+    var qtyRaw = String(payload.productQuantity || '').trim();
+    var qtyNum = Number(qtyRaw);
+    if (!qtyRaw || !isFinite(qtyNum) || qtyNum <= 0) { UIC.toast('أدخل الكمية (رقم أكبر من صفر)', 'error'); return; }
     /* warehouse stays at its default 1 — hidden from view, server fills it. */
     var tmpId = '__tmp_' + Math.random().toString(36).slice(2, 10);
     var newRow = { id: tmpId, manufacture_header_id: String(hid), __pending: true };
