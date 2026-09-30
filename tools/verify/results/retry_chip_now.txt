@@ -1,0 +1,2136 @@
+
+> verify
+> node tools/verify/run_all.js
+
+── MySQL named query layer, cache scope, cleanup, invalidation, lookup coordination
+   FAILED
+
+
+MySQL shared execution — fake JDBC
+  PASS  canonical filter sets bind in stable order on a cache miss
+  PASS  connection, statement and result set close after a successful read
+  PASS  equivalent filters reuse a successful result
+  PASS  permission scope changes isolate cache entries
+  PASS  authorization is checked before cache access or JDBC
+  PASS  corrupt cached entries fall back to a fresh read
+  PASS  cache-service failures fall back to a fresh read
+  PASS  connections and statements close after SQL errors
+  PASS  SQL parameter or driver details do not reach diagnostic errors
+  PASS  a successful application write bumps the shared cache epoch
+  PASS  diagnostics retain query shape without parameter values
+
+Browser MySQL read coordination
+node:internal/assert/utils:77
+    throw err;
+    ^
+
+AssertionError [ERR_ASSERTION]: browser coordinator source found
+    at Object.<anonymous> (D:\Work\Script\tools\verify\mysql_unification.js:133:1)
+    at Module._compile (node:internal/modules/cjs/loader:1872:14)
+    at Object..js (node:internal/modules/cjs/loader:2003:10)
+    at Module.load (node:internal/modules/cjs/loader:1594:32)
+    at Module._load (node:internal/modules/cjs/loader:1396:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+    at node:internal/main/run_main_module:33:47 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: false,
+  expected: true,
+  operator: '==',
+  diff: 'simple'
+}
+
+Node.js v24.19.0
+
+── Company two-file deployment and ownership boundary
+   FAILED
+
+node:assert:152
+  throw new AssertionError(obj);
+  ^
+
+AssertionError [ERR_ASSERTION]: root Company_*.js deployment set must contain exactly one Actions and one Registry per company
++ actual - expected
+
+  [
+    'Company_Assessment_Actions.js',
+    'Company_Assessment_Registry.js',
++   'Company_ErpTest_Actions.js',
++   'Company_ErpTest_Registry.js',
++   'Company_ErpTest_Schema.js',
+    'Company_TopChemical_Actions.js',
+    'Company_TopChemical_Registry.js',
+    'Company_TopLight_Actions.js',
+    'Company_TopLight_Registry.js',
+    'Company_ValleyFoods_Actions.js',
+
+    at Object.<anonymous> (D:\Work\Script\tools\verify\company_two_file_boundary.js:58:8)
+    at Module._compile (node:internal/modules/cjs/loader:1872:14)
+    at Object..js (node:internal/modules/cjs/loader:2003:10)
+    at Module.load (node:internal/modules/cjs/loader:1594:32)
+    at Module._load (node:internal/modules/cjs/loader:1396:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+    at node:internal/main/run_main_module:33:47 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: [
+    'Company_Assessment_Actions.js',
+    'Company_Assessment_Registry.js',
+    'Company_ErpTest_Actions.js',
+    'Company_ErpTest_Registry.js',
+    'Company_ErpTest_Schema.js',
+    'Company_TopChemical_Actions.js',
+    'Company_TopChemical_Registry.js',
+    'Company_TopLight_Actions.js',
+    'Company_TopLight_Registry.js',
+    'Company_ValleyFoods_Actions.js',
+    'Company_ValleyFoods_Registry.js'
+  ],
+  expected: [
+    'Company_Assessment_Actions.js',
+    'Company_Assessment_Registry.js',
+    'Company_TopChemical_Actions.js',
+    'Company_TopChemical_Registry.js',
+    'Company_TopLight_Actions.js',
+    'Company_TopLight_Registry.js',
+    'Company_ValleyFoods_Actions.js',
+    'Company_ValleyFoods_Registry.js'
+  ],
+  operator: 'deepStrictEqual',
+  diff: 'simple'
+}
+
+Node.js v24.19.0
+
+── Company registry bootstrap survives merged source load order
+   OK
+
+── Durable duplicate-request protection and lost-response recovery
+   OK
+
+── Registration upload idempotency: request-ID recovery, confirmed failures, physical folder
+   FAILED
+
+node:assert:152
+  throw new AssertionError(obj);
+  ^
+
+AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+'error' !== 'success'
+
+    at Object.<anonymous> (D:\Work\Script\tools\verify\tc_registration_upload_recovery.js:196:10)
+    at Module._compile (node:internal/modules/cjs/loader:1872:14)
+    at Object..js (node:internal/modules/cjs/loader:2003:10)
+    at Module.load (node:internal/modules/cjs/loader:1594:32)
+    at Module._load (node:internal/modules/cjs/loader:1396:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+    at node:internal/main/run_main_module:33:47 {
+  generatedMessage: true,
+  code: 'ERR_ASSERTION',
+  actual: 'error',
+  expected: 'success',
+  operator: 'strictEqual',
+  diff: 'simple'
+}
+
+Node.js v24.19.0
+
+── Valley Foods HR upload idempotency: request-ID recovery and Drive tagging
+   FAILED
+
+node:assert:152
+  throw new AssertionError(obj);
+  ^
+
+AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+'error' !== 'success'
+
+    at Object.<anonymous> (D:\Work\Script\tools\verify\vf_hr_upload_recovery.js:162:8)
+    at Module._compile (node:internal/modules/cjs/loader:1872:14)
+    at Object..js (node:internal/modules/cjs/loader:2003:10)
+    at Module.load (node:internal/modules/cjs/loader:1594:32)
+    at Module._load (node:internal/modules/cjs/loader:1396:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+    at node:internal/main/run_main_module:33:47 {
+  generatedMessage: true,
+  code: 'ERR_ASSERTION',
+  actual: 'error',
+  expected: 'success',
+  operator: 'strictEqual',
+  diff: 'simple'
+}
+
+Node.js v24.19.0
+
+── Attachment identity and migration contracts
+   FAILED
+
+canonical-attachment-runtime.js:167
+  if (missing.length) throw new Error('Company registries are not loaded yet: ' + missing.join(', '));
+                      ^
+
+Error: Company registries are not loaded yet: Testing System
+    at ensureCompaniesRegistered_ (canonical-attachment-runtime.js:167:29)
+    at evalmachine.<anonymous>:1:56
+    at Script.runInContext (node:vm:149:12)
+    at Object.runInContext (node:vm:301:6)
+    at Object.<anonymous> (D:\Work\Script\tools\verify\attachment_download.js:53:4)
+    at Module._compile (node:internal/modules/cjs/loader:1872:14)
+    at Object..js (node:internal/modules/cjs/loader:2003:10)
+    at Module.load (node:internal/modules/cjs/loader:1594:32)
+    at Module._load (node:internal/modules/cjs/loader:1396:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+
+Node.js v24.19.0
+
+── AppSheet paths across all attachment tables
+   FAILED
+
+canonical-attachment-runtime.js:167
+  if (missing.length) throw new Error('Company registries are not loaded yet: ' + missing.join(', '));
+                      ^
+
+Error: Company registries are not loaded yet: Testing System
+    at ensureCompaniesRegistered_ (canonical-attachment-runtime.js:167:29)
+    at evalmachine.<anonymous>:1:56
+    at Script.runInContext (node:vm:149:12)
+    at Object.runInContext (node:vm:301:6)
+    at Object.<anonymous> (D:\Work\Script\tools\verify\appsheet_attachments.js:97:4)
+    at Module._compile (node:internal/modules/cjs/loader:1872:14)
+    at Object..js (node:internal/modules/cjs/loader:2003:10)
+    at Module.load (node:internal/modules/cjs/loader:1594:32)
+    at Module._load (node:internal/modules/cjs/loader:1396:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+
+Node.js v24.19.0
+
+── Firestore configuration, preflight and router-safe secondary reporting
+   FAILED
+
+node:internal/assert/utils:77
+    throw err;
+    ^
+
+AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+
+  assert.ok(telemetry.includes('function perfRecordRequest_') && telemetry.includes('never the reason a request fails'))
+
+    at Object.<anonymous> (D:\Work\Script\tools\verify\firestore_configuration_contract.js:52:8)
+    at Module._compile (node:internal/modules/cjs/loader:1872:14)
+    at Object..js (node:internal/modules/cjs/loader:2003:10)
+    at Module.load (node:internal/modules/cjs/loader:1594:32)
+    at Module._load (node:internal/modules/cjs/loader:1396:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+    at node:internal/main/run_main_module:33:47 {
+  generatedMessage: true,
+  code: 'ERR_ASSERTION',
+  actual: false,
+  expected: true,
+  operator: '==',
+  diff: 'simple'
+}
+
+Node.js v24.19.0
+
+── Firestore storage adapter contract — typed REST, retries, pagination, preconditions
+   OK
+
+── inline <script> of every template touched
+   OK
+
+── Phase 2 — Top Light action metadata differential
+   OK
+
+── Phase 4 — bounded read-only snapshot lifecycle
+   OK
+
+── S0 — UIC.openModal size option is purely additive
+   OK
+
+── S1 — the save resolves cost_unit server-side
+   OK
+
+── S2 — work-centre costs reach the client
+   OK
+
+── MFG — per-work-centre scheduling conflicts: active + frame overlap
+   OK
+
+── S4 — valley_cost_view is grantable but unroutable
+   OK
+
+── S5 — cost stripping, differential
+   OK
+
+── S5c — sales audit (and U-48)
+   FAILED
+
+S5c — every sales read endpoint, audited for cost keys
+
+  PASS  getValleySalesBootstrap_ projects no cost key  [14206-14231]
+  PASS  getValleySalesList_ projects no cost key  [15334-15345]
+  PASS  getValleySalesPage_ projects no cost key  [15575-15615]
+  PASS  getValleyInvoiceLines_ projects no cost key  [14232-14264]
+  PASS  getValleyInvoiceFull_ projects no cost key  [15767-15775]
+  PASS  getValleyReturnsList_ projects no cost key  [15921-15966]
+  PASS  getValleyInvoiceForReturn_ projects no cost key  [15967-15975]
+
+S5c — the raw-row endpoints return sheets that have no cost column
+
+  PASS  valley_sales_invoices has no cost column
+  PASS  valley_sales_products has no cost column
+        invoice line columns: unique_id, id, valley_sales_header_id, product_id, product_details, product_tax, product_qty, product_price, product_net_value, product_tax_value, product_total_value, user, created_at
+  PASS  valley_sales_product_stock has no cost column
+        allocation columns: unique_id, id, valley_sales_products_id, product_unique_id, product_transaction_code, product_qty, user, created_at
+
+S5c — the one cost path into sales, and why it is safe
+
+  PASS  the sales page reads unit_cost from get_valley_product_batches (stripped in S5a)
+  PASS  and that is the ONLY line mentioning cost in the whole sales page — sales displays none
+  PASS  saveValleyInvoice_ resolves allocation cost server-side, ignoring the payload
+  PASS  so a stripped unit_cost in the payload cannot wipe anything — the sheet stores no cost
+
+S5c — U-48: the historical undeclared `outputs` assertion is obsolete
+
+  PASS  saveValleyInvoice_ has no undeclared `outputs` reference in the current source
+  FAIL  the sales-save stock/cost authority regression fixture passes
+          PASS  saveValleyPurchasingCosting_ flushes before it returns   PASS  deleteValleyMfgOrder_ flushes before it returns   PASS  saveValleyReturn_ flushes before it returns  S25 — dry run of the real readers, against stubbed sheet access    PASS  the MO balance guard can be located in the real source 
+
+S5c FAILED: 1
+
+── S6 — client gating, manufacturing
+   OK
+
+── S6b — client gating, list pages
+   FAILED
+
+S6b — purchasing list
+
+  PASS  both variants rendered
+  PASS  with the grant: إجمالي التكاليف column present
+  PASS  with the grant: the figure 12,480 is shown
+  PASS  without: the column is gone
+  PASS  without: the figure appears nowhere
+  PASS  without: the document code still listed
+  PASS  without: the supplier still listed
+  PASS  without: the receipt date still listed
+  PASS  without: the items description still listed
+
+S6b — purchasing: an unsaveable form is not offered
+
+  PASS  with the grant: the add button is there
+  PASS  without: no add button — the server would refuse the save
+  PASS  with the grant: the edit action is offered
+  PASS  without: no edit action
+  PASS  without: the read-only view IS still offered
+  PASS  without: approval still offered (it cannot wipe a figure)
+  PASS  without: printing still offered
+
+S6b — purchasing column counts
+
+  PASS  with the grant: 8 headers = 8 cells
+  PASS  without: 7 headers = 7 cells
+  PASS  exactly one column disappears
+
+S6b — manufacturing orders, by-products tab
+
+  FAIL  with the grant: التكلفة column present
+  FAIL  with the grant: the figure 88.25 is shown
+  PASS  without: the column and its form field are gone
+  PASS  without: the figure appears nowhere
+  FAIL  without: quantity and batch code stay
+  FAIL  exactly one column disappears
+  PASS  without: 3 headers = 3 cells
+
+S6b — sales needs no gate
+
+  PASS  the sales page has exactly one line mentioning cost, and it renders nothing
+  PASS  it only copies unit_cost into a payload the server ignores
+  PASS  so no gate was added to Company_ValleyFoods_Sales.html — there is nothing to hide
+
+S6b FAILED: 4
+
+── S7 — the FIFO batch modal
+   FAILED
+
+S7 — there is still only one FIFO
+
+  PASS  fifoFill_(batches, qty, null) matches the original autoAllocFifo_ on all 400 randomised cases
+  PASS  exactly one oldest-first allocation loop exists in the page
+
+S7 — the tolerance is the server's, exactly
+
+  PASS  client tolerance is 0.01
+  PASS  server compares Math.abs(paySum - payQty) > 0.01
+  PASS  server rounds the sum to 3 decimals before comparing
+  PASS  client rounds to 3 decimals the same way
+  PASS  client comparison mirrors it
+
+S7 — on open with nothing allocated: FIFO proposed, oldest first
+
+  PASS  the modal opened
+  PASS  it is UIC.openModal with size lg
+  PASS  rows are oldest-first
+  PASS  required quantity is 150
+  PASS  FIFO proposed exactly 150
+  PASS  so the modal opens matched
+  PASS  batch 1 proposed 100 (all of it)
+  PASS  batch 2 proposed 50 (the shortfall)
+  PASS  batch 3 proposed nothing
+  PASS  running total reads X من Y
+  PASS  matched total is drawn in the success colour (the tick glyph was retired)
+  PASS  confirm is enabled while matched
+
+S7 — on open with batches already allocated: they are kept
+
+  PASS  the hand-picked batch keeps its 40
+  PASS  the shortfall is filled oldest-first: 100 from batch 1
+  PASS  and 10 from batch 2
+  PASS  total is 150 and matched
+
+S7 — confirm is disabled until the total matches
+
+  PASS  short by 10 -> not matched
+  PASS  diff is -10
+  PASS  over by 10 -> not matched
+  PASS  exactly +0.01 over -> matched (server accepts it)
+  PASS  exactly -0.01 under -> matched
+  PASS  +0.011 -> not matched (server would reject)
+  PASS  -0.011 -> not matched
+
+S7 — over-allocation is flagged, and the server is named as the authority
+
+  PASS  the total still matches
+  PASS  row 0 is flagged as over its availability
+  PASS  the message says the shown availability is indicative and the server is the authority
+
+S7 — cancel leaves the existing allocation untouched
+
+  PASS  OUTPUT_FOOTERS is byte-identical after cancel
+  PASS  and the modal is closed
+
+S7 — confirm writes back and re-renders
+
+  PASS  two allocations written back
+  PASS  first is B-001 x 90
+  PASS  second is B-002 x 60
+  PASS  zero rows are not written
+  PASS  the material's own row was re-rendered with the new allocation
+
+S7 — a mismatched confirm cannot be forced through
+
+  PASS  confirming while mismatched changes nothing
+
+S7 — cost columns only with the grant
+
+  PASS  with the grant: unit cost column present
+  PASS  with the grant: the unit cost is shown
+  PASS  without: no unit cost column
+  PASS  without: no cost figure at all
+  PASS  without: lot, available and allocated all still there — allocation still works
+  PASS  and FIFO still proposes a matching allocation
+
+S7 — the quantity-change drift is fixed
+
+  FAIL  shortfall re-allocated: batches now total 0 for qty 120
+  FAIL  the hand-made allocation of 30 was KEPT
+  FAIL  and the rest was filled from other batches, oldest-first
+  PASS  reducing the quantity below what is allocated warns instead of staying silent
+  PASS  and does not silently discard the user's own allocation
+
+S7 — no second overlay, no hardcoded width
+
+  PASS  built on UIC.openModal
+  PASS  with size: 'lg'
+  PASS  no bespoke loading overlay is built on this page at all
+  PASS  showLoading delegates to the one shared loading service
+  PASS  hideLoading delegates to the one shared loading service
+  PASS  no hardcoded width on the modal
+  PASS  no second hardcoded-colour spinner was added
+
+S7 FAILED: 3
+
+── S8 — material entry ergonomics
+   OK
+
+── Purchasing form/lines UX + tl_sales pagination
+   OK
+
+── tl_sales row menu + مرتجعات opens the returns page
+   OK
+
+── S12 — حركة المخزن: 17 columns, both formulas, add-only
+   OK
+
+── S13 — forms readability (F1/A1/F2/F4a) + vf_products and vf_parties filters
+   OK
+
+── S14 — iPhone: openTab/closeOrBack fallbacks, .inv-table three states, >=600px unchanged
+   OK
+
+── S15 — iPhone: printDoc/openDownload fallbacks, .card-table, >=600px unchanged
+   OK
+
+── S16 — authority generation: kill switch, matrix and role are one-refresh
+   OK
+
+── S16b — الحضور: invariants, date inference, batch undo
+   OK
+
+── S17 — vf_purchasing save: batched lines, batched delete
+   FAILED
+
+
+1 — deleteRowsByCriteria_: batched runs remove exactly the same rows
+
+  PASS  one contiguous block in the middle — same rows removed, same count (15)
+  PASS    and it used deleteRows(), never one-at-a-time deleteRow()
+  PASS  the whole sheet matches — same rows removed, same count (25)
+  PASS    and it used deleteRows(), never one-at-a-time deleteRow()
+  PASS  nothing matches — same rows removed, same count (0)
+  PASS    and it used deleteRows(), never one-at-a-time deleteRow()
+  PASS  every other row — same rows removed, same count (15)
+  PASS    and it used deleteRows(), never one-at-a-time deleteRow()
+  PASS  first row only — same rows removed, same count (1)
+  PASS    and it used deleteRows(), never one-at-a-time deleteRow()
+  PASS  last row only — same rows removed, same count (1)
+  PASS    and it used deleteRows(), never one-at-a-time deleteRow()
+  PASS  first and last — same rows removed, same count (2)
+  PASS    and it used deleteRows(), never one-at-a-time deleteRow()
+  PASS  two separate blocks — same rows removed, same count (11)
+  PASS    and it used deleteRows(), never one-at-a-time deleteRow()
+  PASS  single row sheet, matching — same rows removed, same count (1)
+  PASS    and it used deleteRows(), never one-at-a-time deleteRow()
+  PASS  empty sheet (headers only) — same rows removed, same count (0)
+  PASS    and it used deleteRows(), never one-at-a-time deleteRow()
+  PASS  values needing trim — same rows removed, same count (7)
+  PASS    and it used deleteRows(), never one-at-a-time deleteRow()
+  PASS  200 randomised layouts agree with the one-at-a-time implementation
+        (worst case still only 18 deleteRows() calls)
+  PASS  a missing criteria column still returns 0 and deletes nothing
+  PASS    the sheet is untouched
+
+2 — saveValleyPurchasingCosting_: one batched write, not one per line
+
+  FAIL  a 10-line save succeeds
+        fastSaveOnFor_ is not defined
+  PASS  no line is appended one at a time
+  PASS  and no line is deleted one at a time
+  FAIL  all 10 lines arrive in ONE setValues
+        null
+D:\Work\Script\tools\verify\s17_purchasing_save.js:369
+  const ids = r.written.map(row => row[idIdx]);
+                        ^
+
+TypeError: Cannot read properties of null (reading 'map')
+    at Object.<anonymous> (D:\Work\Script\tools\verify\s17_purchasing_save.js:369:25)
+    at Module._compile (node:internal/modules/cjs/loader:1872:14)
+    at Object..js (node:internal/modules/cjs/loader:2003:10)
+    at Module.load (node:internal/modules/cjs/loader:1594:32)
+    at Module._load (node:internal/modules/cjs/loader:1396:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+    at node:internal/main/run_main_module:33:47
+
+Node.js v24.19.0
+
+── VF-GUARD — uncertain-result safeguard: confirmed failures, no duplicate execution, collision-free guards
+   FAILED
+
+  PASS  1a — pre-mutation refusal is a confirmed failure, never re-executed
+  PASS  1b — success dedupes; post-write failure stays uncertain and blocked
+  PASS  2 — shared pre-mutation guards carry the confirmed-failure marker
+  PASS  3a — guard names are collision-free and every probe uses the dedupe guard
+node:internal/assert/utils:77
+    throw err;
+    ^
+
+AssertionError [ERR_ASSERTION]: expected exactly the 8 post-write bare throws, found 9
+    at Object.<anonymous> (D:\Work\Script\tools\verify\vf_purchasing_guard.js:267:3)
+    at Module._compile (node:internal/modules/cjs/loader:1872:14)
+    at Object..js (node:internal/modules/cjs/loader:2003:10)
+    at Module.load (node:internal/modules/cjs/loader:1594:32)
+    at Module._load (node:internal/modules/cjs/loader:1396:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+    at node:internal/main/run_main_module:33:47 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: false,
+  expected: true,
+  operator: '==',
+  diff: 'simple'
+}
+
+Node.js v24.19.0
+
+── VF-RECOVERY — durable reconciliation: staged generations, markers, status route, reconcile utility
+   FAILED
+
+
+1 — deterministic failures are confirmed and write nothing
+
+  PASS  missing Code is REQUEST_NOT_APPLIED
+  PASS    and writes nothing
+  PASS  missing movement_type is REQUEST_NOT_APPLIED
+  PASS  totals mismatch is REQUEST_NOT_APPLIED
+  PASS    still nothing written
+  PASS  cost-view denial is REQUEST_NOT_APPLIED
+  PASS    permission denial writes nothing
+
+2 — one request ID, one header, one line generation
+
+  FAIL  create succeeds
+        fastSaveOnFor_ is not defined
+  PASS  user-entered Code keeps its case and leading zeros
+  FAIL  header stamped with request + complete
+  PASS  operation hash matches the payload
+  FAIL  active generation derives from the request
+  PASS  the purchasing line Code stays the user value, never the request ID
+  PASS  all lines carry the request marker + generation
+  FAIL  same-ID rerun succeeds
+  PASS    with zero new rows
+  FAIL  recovering retry returns the original as applied
+  PASS    still zero new rows
+
+3 — interruption between header and lines resumes safely
+
+  PASS  line-write crash stays uncertain (never a false failure)
+  PASS  header exists, no lines
+  PASS  interrupted header is marked in_progress
+  FAIL  recovering retry completes the document
+        fastSaveOnFor_ is not defined
+  PASS    exactly one header and one line set
+  FAIL    header flipped to complete on activation
+
+4 — staged generations resume without duplicating
+
+  FAIL  partial staged set resumes to success
+        fastSaveOnFor_ is not defined
+  PASS    exactly 3 lines, no duplicates
+  PASS    all in the request generation
+
+5 — activation is the commit point
+
+  FAIL  staged-but-inactive activates on retry
+        fastSaveOnFor_ is not defined
+  PASS    activation writes zero new line rows
+  FAIL    readers see the activated set
+
+6 — immutable user Code, locks, and duplicate protection
+
+  PASS  renaming the user-entered Code is refused
+  PASS    original header/line key remains unchanged
+  FAIL  a genuinely new Code can still be created
+  PASS  duplicate Code by another request is a confirmed refusal
+  PASS  approved purchase refuses edits as a confirmed failure
+
+7 — checkpoint flow converges once
+
+  PASS  header checkpoint succeeds
+  FAIL  lines checkpoint succeeds
+        fastSaveOnFor_ is not defined
+  FAIL  final commit fast-paths on matching checkpoints
+  PASS    one header, one line set total
+  FAIL  commit retry recovers
+
+8 — legacy purchases and inactive generations
+
+  PASS  legacy lines remain readable
+  PASS    with no internal IDs exposed
+  PASS    legacy lines stay in reports
+  PASS  inactive generations are invisible to readers
+  FAIL  legacy rewrite succeeds
+        fastSaveOnFor_ is not defined
+  FAIL    exactly one authoritative line afterwards
+        ["PL","GHOST"]
+
+9 — canonical operation hash
+
+  PASS  identical payloads hash identically
+  PASS    regardless of key order
+  PASS    different line content hashes differently
+  PASS    transport fields are excluded
+  PASS    16-hex format
+  PASS  generation IDs are deterministic
+
+10 — delete, admin reconcile, request status
+
+  FAIL  delete succeeds
+        fastSaveOnFor_ is not defined
+  FAIL    header and all generations removed
+  PASS  reconcile is admin-only
+  PASS  dry run succeeds
+  PASS    both receipts reviewed
+  FAIL    applied purchase provable; legacy stays manual
+  FAIL    legacy receipt untouched
+D:\Work\Script\tools\verify\vf_purchasing_recovery.js:531
+  check(apply.result && apply.result.marked_done[0].decision === 'done', 'apply marks the proven receipt done');
+                                                    ^
+
+TypeError: Cannot read properties of undefined (reading 'decision')
+    at Object.<anonymous> (D:\Work\Script\tools\verify\vf_purchasing_recovery.js:531:53)
+    at Module._compile (node:internal/modules/cjs/loader:1872:14)
+    at Object..js (node:internal/modules/cjs/loader:2003:10)
+    at Module.load (node:internal/modules/cjs/loader:1594:32)
+    at Module._load (node:internal/modules/cjs/loader:1396:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+    at node:internal/main/run_main_module:33:47
+
+Node.js v24.19.0
+
+── VF-MFG — uncertain manufacturing save: child identity, edit tokens, receipt checkpoints, deterministic IDs, recovery
+   FAILED
+
+  PASS  MFG_ORDER_HEADERS byte-identical membership/order
+  PASS  MFG_OUTPUT_HEADERS byte-identical membership/order
+  PASS  MFG_CONSUMPTION_HEADERS byte-identical membership/order
+  PASS  MFG_WORKOP_HEADERS byte-identical membership/order
+  PASS  MFG_BYPRODUCT_HEADERS byte-identical membership/order
+  PASS  no forbidden marker column last_request_id in manufacturing headers
+  PASS  no forbidden marker column operation_state in manufacturing headers
+  PASS  no forbidden marker column operation_stage in manufacturing headers
+  PASS  no forbidden marker column updated_by in manufacturing headers
+  PASS  no forbidden marker column line_generation in manufacturing headers
+  PASS  save_valley_mfg_order registered for request-id recovery
+  PASS  mfgEditToken_ helper exists
+  PASS  mfgDeterministicUid_ helper exists
+  PASS  mfgDesiredMatches_ comparator exists
+  PASS  mfgAssertMfgSchema_ read-only gate exists
+  PASS  header/products/footer/by-product inserts use the MO integer max+1 allocator
+  PASS  standalone by-product insert uses the MO integer max+1 allocator
+  PASS  save path performs no schema-mutating setup
+  FAIL  save holds one outer lock with no nested re-lock
+  PASS  request guard exposes checkpoint/priorRecovery/findOpenEntity
+  PASS  list-page save submits output UIDs
+  PASS  list-page save submits base_token
+  PASS  detail-page save submits base_token
+  PASS  detail batch modal preserves the existing footer UID by batch
+  PASS  both MO editors send explicit footer deletions
+  PASS  server deletes MO children only from explicit UID lists
+  PASS  load endpoints return edit_token
+  PASS  client performs at most one same-ID reconciliation replay
+  PASS  client status poll stays on a bounded budget
+  FAIL  create new MO succeeds
+        "mfgConflictDate_ is not defined"
+  FAIL  new MO UID is deterministic per request ID
+  FAIL  one row per section on create
+        {"header":0,"outputs":0,"cons":0,"wo":0,"bp":0}
+  FAIL  checkpoints advance through every stage
+        
+  FAIL  new output UID deterministic
+  FAIL  new footer UID deterministic
+  FAIL  first header/product/footer/by-product rows receive integer id 1
+        [null,null,null,null]
+  FAIL  order-full returns edit_token + save_scope
+  FAIL  returned token matches recomputed token
+D:\Work\Script\tools\verify\vf_mfg_request_recovery.js:391
+  check(detail.result && detail.result.outputs.every((o) => !Object.prototype.hasOwnProperty.call(o, 'batches')),
+                                               ^
+
+TypeError: Cannot read properties of undefined (reading 'every')
+    at D:\Work\Script\tools\verify\vf_mfg_request_recovery.js:391:48
+    at Object.<anonymous> (D:\Work\Script\tools\verify\vf_mfg_request_recovery.js:394:3)
+    at Module._compile (node:internal/modules/cjs/loader:1872:14)
+    at Object..js (node:internal/modules/cjs/loader:2003:10)
+    at Module.load (node:internal/modules/cjs/loader:1594:32)
+    at Module._load (node:internal/modules/cjs/loader:1396:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+    at node:internal/main/run_main_module:33:47
+
+Node.js v24.19.0
+
+── S18 — UIC.Live: optimistic saves, rollback, change polling
+   OK
+
+── S19 — the UIC.Live rollout, page by page
+   OK
+
+── S20 — quiet refresh: scope, watches, no blocking reload
+   OK
+
+── S21 — الورديات: overlap rule; المصروفات: report maths
+   FAILED
+
+
+1 — تحديد الورديات: the two rules the table is supposed to hold
+
+  PASS  the shift block can be located in the real source
+  PASS  the shift label is name - start - end - type, with the times formatted
+  PASS  and a shift with no times or type degrades to just its name
+  PASS  an end date EQUAL to the start is refused
+  PASS  an end date BEFORE the start is refused
+  PASS    and neither wrote a row
+  PASS  a missing end date is refused
+  PASS  a missing employee is refused
+  PASS  a missing shift is refused
+  PASS  refused — identical period (2026-03-10 → 2026-03-20)
+  PASS    and nothing was written
+  PASS  refused — strictly inside (2026-03-12 → 2026-03-15)
+  PASS    and nothing was written
+  PASS  refused — straddling the whole period (2026-03-01 → 2026-03-31)
+  PASS    and nothing was written
+  PASS  refused — overlapping the start (2026-03-05 → 2026-03-12)
+  PASS    and nothing was written
+  PASS  refused — overlapping the end (2026-03-18 → 2026-03-25)
+  PASS    and nothing was written
+  PASS  refused — touching on the first day (2026-03-01 → 2026-03-10)
+  PASS    and nothing was written
+  PASS  refused — touching on the last day (2026-03-20 → 2026-03-28)
+  PASS    and nothing was written
+  PASS  allowed — entirely before (2026-02-01 → 2026-03-09)
+  PASS    and it was written
+  PASS  allowed — entirely after (2026-03-21 → 2026-04-01)
+  PASS    and it was written
+  PASS  allowed — the day before it starts (2026-03-05 → 2026-03-09)
+  PASS    and it was written
+  PASS  allowed — the day after it ends (2026-03-21 → 2026-03-30)
+  PASS    and it was written
+  PASS  a DIFFERENT employee may hold the very same period
+  PASS    and it was written
+  PASS  shift_assignment_id is a 16-char id
+  PASS  emp_id is stored as a number
+  PASS  shift_id is the schedule key
+  PASS  notes are trimmed
+  PASS  user is the session email
+  PASS  created_at is a timestamp
+  PASS  both dates are stored as dates, not text
+<anonymous_script>:18
+    const employeeOptions = getAllEmployeeOptions_(dbId, hrJson && hrJson.employees);
+                            ^
+
+ReferenceError: getAllEmployeeOptions_ is not defined
+    at Object.getShiftAssignmentData_ [as get] (eval at runBlock (D:\Work\Script\tools\verify\s21_shifts_and_expenses.js:36:10), <anonymous>:18:29)
+    at Object.<anonymous> (D:\Work\Script\tools\verify\s21_shifts_and_expenses.js:207:19)
+    at Module._compile (node:internal/modules/cjs/loader:1872:14)
+    at Object..js (node:internal/modules/cjs/loader:2003:10)
+    at Module.load (node:internal/modules/cjs/loader:1594:32)
+    at Module._load (node:internal/modules/cjs/loader:1396:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+    at node:internal/main/run_main_module:33:47
+
+Node.js v24.19.0
+
+── S22 — a registered page with no HTML file fails as a page
+   FAILED
+
+
+1 — createTemplateFromFile is guarded
+
+  PASS  the call sits inside a try/catch
+  PASS  and the catch renders a page instead of rethrowing
+  PASS  that renderer exists
+  PASS  it does NOT reuse the access-denied wording — this is a deployment fault
+  FAIL  it says so plainly
+  FAIL  and names the missing file, for whoever deploys
+
+2 — the renderer runs against a stubbed HtmlService
+
+D:\Work\Script\tools\verify\s22_missing_template.js:74
+  const out = sandbox.renderMissingPagePage_(
+                      ^
+
+TypeError: sandbox.renderMissingPagePage_ is not a function
+    at Object.<anonymous> (D:\Work\Script\tools\verify\s22_missing_template.js:74:23)
+    at Module._compile (node:internal/modules/cjs/loader:1872:14)
+    at Object..js (node:internal/modules/cjs/loader:2003:10)
+    at Module.load (node:internal/modules/cjs/loader:1594:32)
+    at Module._load (node:internal/modules/cjs/loader:1396:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+    at node:internal/main/run_main_module:33:47
+
+Node.js v24.19.0
+
+── S23 — URL parameters come from the server, not the iframe URL
+   OK
+
+── S18b — table column widths: the classifier and the contract
+   OK
+
+── S24 — جرد دوري مخازن باركود + the USER_PAGES nav-visibility regression guard
+   FAILED
+
+
+1 — tc_stock_scan actions exist, gated independently from tc_stock_revision
+
+  PASS  get_stock_scan_options is gated to page 'tc_stock_scan' (read)
+  PASS  get_stock_scan_history is gated to page 'tc_stock_scan' (read)
+  PASS  get_stock_scan_qty is gated to page 'tc_stock_scan' (read)
+  PASS  add_stock_scan is gated to page 'tc_stock_scan' (write) — independent of tc_stock_revision
+  PASS  ACTION_TABLES maps add_stock_scan to STOCK_SHEET, same table as add_stock_revision
+  FAIL  get_stock_scan_options registered
+  FAIL  get_stock_scan_history registered
+  FAIL  get_stock_scan_qty registration is kept for compatibility (the scan page itself now uses the pair balance)
+  FAIL  get_stock_scan_warehouses registered
+  FAIL  get_stock_scan_balance registered
+  PASS  add_stock_scan uses the warehouse-validated pair-balance save (not the legacy hard-coded path)
+
+2 — addStockRevision_: five sheet formulas replaced by computed values
+
+  PASS  addStockRevision_ found
+  PASS  name_ar VLOOKUP formula string is gone
+  PASS  category INDEX/MATCH formula string is gone
+  PASS  unit INDEX/MATCH formula string is gone
+  PASS  difference/percentage ISBLANK formula strings are gone
+  PASS  name_ar/category/unit/difference/percentage are written as literal values in the same setValues call
+  PASS  both computed BEFORE the lock, so the response can carry them immediately
+  PASS  savedRecord.difference/.percentage are no longer hardcoded empty strings
+
+3 — stockRevisionDifference_/stockRevisionPercentage_, evaluated in isolation
+
+  PASS  both function bodies extracted from source
+  PASS  difference: blank avail -> ""
+  PASS  difference: exact match -> "مظبوط"
+  PASS  difference: avail>amount -> shortage "عجز"
+  PASS  difference: avail<amount -> surplus "زيادة"
+  PASS  percentage: blank avail -> ""
+  PASS  percentage: avail=0 -> "" (no divide-by-zero)
+  PASS  percentage: exact match -> 1
+  PASS  percentage: shortage -> 0.9
+
+4 — registration, nav group position, authority wiring
+
+  PASS  tc_stock_scan registered with template Company_TopChemical_StockScan
+  PASS  'المخازن' group exists in TOPCHEMICAL_MENU
+  PASS  'المخازن' is appended AFTER the existing groups, not first
+  PASS  the new group's item points at action 'tc_stock_scan'
+  PASS  Company_TopChemical_StockScan.html exists
+  PASS  the new page sets IS_SUPER_ADMIN/USER_PAGES from the start — the exact gap found on the Valley Foods dashboard (§5)
+  PASS  container type is the fixed five-option list (جونية added for the sack container), not free text
+  PASS  the page calls catalog, options (fallback), warehouses and product balances by name and adapts the save through UIC.Live
+  PASS  the scan page no longer uses the whole-product quantity map
+  PASS  both quantity fields use the shared calculator API and write back through its boundary events
+  PASS  the count timestamp is displayed as a non-editable local date and time
+  PASS  barcode resolution uses the 'TCP-' computed-id convention, matching the print route
+  PASS  print_product_barcode download route and handler exist
+  PASS  the print-every-product route is gone along with the button that was its only caller
+  PASS  the product print route reads the products sheet, not the production barcode table — a separate concept
+  PASS  one product prints as a repeated 3×6 label sheet, matching the production print
+  PASS  servePrintProductBarcode_ body located
+  PASS  the label prints no product name — only the barcode and its number
+  PASS  the generator's own caption is suppressed, so the only text on the label is the number below it
+  PASS  the human-readable line under the barcode is the bare id, digits only
+  PASS  the document title carries no name either, so print headers cannot leak it onto the sheet
+  PASS  the ENCODED value keeps the 'TCP-' namespace — a supplier's numeric barcode must not resolve as one of ours
+  PASS  the scanner takes both the namespaced code and a bare number, so printed and typed agree
+  PASS  the scan page no longer carries the print-all-labels button
+  PASS  tc_products carries the per-product barcode print
+  PASS  the print is a row action on the product, not a page-level button
+
+4b — تأكيد الكمية is the one commit; notes and revision datetime
+
+  PASS  the second save button (تأكيد الحفظ) is gone
+  FAIL  the valid explicit count action is the single guarded commit path
+  PASS  the next count can start while one immutable pending row is visible
+  PASS  notes records all four count fields, labelled, plus the total
+  PASS  the pair balance is displayed as a snapshot while the server re-reads its authoritative value
+  PASS  each submission has its own request identity and duplicate clicks cannot create another row
+  PASS  addStockRevision_ starts from the parsed picked date
+  PASS  a date-only value is stamped with the current time
+  PASS  a value that already carries a time is left alone
+
+5 — Valley Foods dashboard: IS_SUPER_ADMIN/USER_PAGES no longer missing
+
+  PASS  IS_SUPER_ADMIN is now set
+  PASS  USER_PAGES is now set
+
+6 — regression guard: no page with a menuGroups dropdown can silently lose USER_PAGES again
+
+  PASS  Company_TopChemical_*.html — at least one page file found (40)
+  NOTE  unrelated baseline permission assertion remains: Company_TopChemical_ProductionCapability.html, Company_TopChemical_SalesCapacity.html
+  PASS  Company_TopChemical_*.html — every page with a menuGroups dropdown (39) sets USER_PAGES
+  PASS  Company_TopLight_*.html — at least one page file found (22)
+  PASS  Company_TopLight_*.html — every page with a menuGroups dropdown (13) sets USER_PAGES
+  PASS  Company_ValleyFoods_*.html — at least one page file found (40)
+  PASS  Company_ValleyFoods_*.html — every page with a menuGroups dropdown (38) sets USER_PAGES
+
+7 — addEmpStatus_: recomputes every emp_id from getLatestStatusMap_
+
+  PASS  addEmpStatus_ found
+  PASS  calls getLatestStatusMap_(dbId) with no cached array — re-reads post-insert, so the new row is included
+  PASS  loops every employee row (not just the one on the submitted record)
+  PASS  no longer writes the just-submitted value directly — writes the recomputed value per employee instead
+  PASS  a sync failure is now logged, not silently swallowed
+
+8 — stock-scan loading, lookup and scanner behavior (stubbed browser/JDBC)
+
+  PASS  scan page inline script parses and starts in the browser harness
+  FAIL  manual barcode, picker and warehouse controls render while the backend requests are still pending
+  PASS  revision table is mounted below the picker and scheduled separately after controls render
+  FAIL  product picker starts collapsed and searches the server after a 250 ms debounce
+  FAIL  focusing the product field opens its in-field results dropdown
+  FAIL  dropdown closes and camera/photo actions are hidden for now
+  PASS  rapid distinct prefixes dispatch two latest-intent calls after bootstrap settles (no extra retry call)
+  PASS  bounded search results support pagination and discard an out-of-order response
+  PASS  a barcode resolves by exact ID even when that product is absent from loaded search results
+  PASS  exact lookup selects the product as a decimal string and retains per_unit prefill
+  PASS  history starts its own request and loading state without waiting for the product lookup
+  FAIL  revision rows use the shared searchable table with the revision columns and date filters
+  PASS  show-all history is fetched only on demand
+  PASS  name search defaults to 30 visible rows plus one server-side has_more probe
+  PASS  name-search pagination binds LIMIT and OFFSET as JDBC integers
+  PASS  server clamps name search to 50 results, binds pagination and deterministically excludes deleted rows
+  PASS  initial unfiltered picker query uses integer pagination bindings
+  PASS  exact lookup returns no deleted or missing product as a definitive empty result
+
+8b — index-friendly lookup modes, warehouses and pair balance (stubbed JDBC)
+
+  PASS  ID mode uses exact equality with no functions on the lookup column
+  PASS  code mode uses exact equality and returns every duplicate instead of picking one
+  PASS  name mode is prefix-only: the escaped prefix is followed by %, never preceded by it
+  PASS  literal LIKE wildcards in a name prefix are escaped
+  PASS  all lookup modes filter deleted rows and sort deterministically
+  PASS  a code sent as an ID is rejected instead of misinterpreted
+  PASS  an unknown search mode is rejected
+  PASS  IDs beyond float precision survive as decimal strings
+  PASS  warehouse labels come from warehouse_locations with no invented status columns
+  PASS  warehouse labels are bounded with an explicit truncation flag
+  PASS  an explicit zero balance is valid and ready
+  PASS  a negative balance stays negative
+  PASS  a missing pair row is missing, never zero
+  PASS  a NULL quantity is missing, never zero
+  PASS  duplicate pair rows raise an explicit data-integrity error
+  PASS  the balance query matches BOTH predicates with bound parameters
+  PASS  a balance request without both IDs is rejected
+  PASS  product lookup cache TTL is 60s (was 0)
+  PASS  warehouse labels cache separately for 300s
+  PASS  pair balances cache short-lived for 30s
+  PASS  get_stock_scan_warehouses is gated to page 'tc_stock_scan' (read)
+  PASS  get_stock_scan_balance is gated to page 'tc_stock_scan' (read)
+  PASS  audit tables identify the live MySQL relations
+  PASS  addStockScan_ found
+  PASS  the save re-reads the authoritative pair balance fresh, ignoring any cached value
+  PASS  the save never trusts the client available_amount
+  PASS  the save validates the warehouse ID against the database list
+  PASS  the save persists the warehouse ID to the existing stock sheet and returns its location label
+  PASS  the legacy hard-coded warehouse check still guards the tc_stock_revision path
+
+8c — scan-page workflow: modes, warehouses, pair balance, save discipline
+
+  FAIL  an explicit search-mode control offers name, code and ID
+  FAIL  Arabic helper text teaches prefix search instead of substring search
+  PASS  selected product IDs travel as decimal strings, never through Number()
+  PASS  warehouses load from the database with label mapping and a refresh/retry path
+  PASS  only the explicit confirm action can save — selection and lookup never do
+  PASS  the confirmed count is bound to a fixed product/warehouse pair
+  PASS  late balance responses are ignored unless both IDs and the generation still match
+  PASS  changing either selection clears the previous balance before requesting the new pair
+  PASS  missing pair balances block confirmation and trigger a retry
+  PASS  history resolves warehouse labels through one lookup with raw fallback for legacy values
+  PASS  page adapter paints one immutable pending row, blocks duplicate click, and gives an identical new count a new identity
+TypeError: Cannot read properties of undefined (reading 'length')
+    at verifyStockScanLookupBehavior (D:\Work\Script\tools\verify\s24_stock_scan.js:639:29)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+
+── TC-SCAN-CATALOG — instant products dropdown: one bootstrap catalog, local filtering, product-level balances
+   FAILED
+
+
+1 — catalog + plural balances: permissions, wiring, specs
+  PASS  get_stock_scan_catalog is gated to page 'tc_stock_scan' (read)
+  PASS  get_stock_scan_balances is gated to page 'tc_stock_scan' (read)
+  PASS  ACTION_TABLES maps the catalog to mysql:products
+  PASS  ACTION_TABLES maps plural balances to mysql:product_current_qty_warehouses
+  PASS  get_stock_scan_catalog registration removes private diagnostics for non-admin users
+  PASS  Sheets catalog is independently gated to tc_stock_scan read access
+  PASS  Sheets catalog is wired to the products sheet and registered with private diagnostics
+  PASS  get_stock_scan_balances registration removes private diagnostics for non-admin users
+  PASS  catalog cache TTL is 30s
+  PASS  plural balances cache short-lived for 30s
+  PASS  both new definitions are version 1
+
+2 — normalize + valid contracts
+  PASS  catalog normalize ignores search/limit so client filters never affect cache keys
+  PASS  catalog normalize defaults refresh false
+  PASS  balances normalize keeps the product predicate
+  PASS  balances normalize honors explicit refresh
+  PASS  normalize rejects invalid plural-balance input
+  PASS  a complete catalog validates
+  PASS  count/products mismatch is invalid
+  PASS  incomplete without overflow is invalid
+  PASS  overflow shape validates
+  PASS  non-string entry IDs are invalid
+  PASS  plural balances validate
+  PASS  non-numeric balance quantities are invalid
+
+3 — adapters against synthetic JDBC
+  PASS  shared catalog bounds are 2,000 pairs / 256 KiB
+  PASS  complete catalog shape
+  PASS  catalog is one bounded read with no per-term predicates
+  PASS  catalog closes result, statement, connection
+  PASS  catalog query is read only
+  PASS  row 2001 overflows instead of silently truncating
+  PASS  IDs outside the detail contract overflow explicitly
+  PASS  payloads beyond 256 KiB overflow instead of truncating names
+  PASS  an empty table is a valid empty catalog
+evalmachine.<anonymous>:125
+      throw err;
+      ^
+
+Error: استجابة أرصدة الصنف غير صالحة
+    at Object.dbStockScanBalances_ (evalmachine.<anonymous>:103:15)
+    at Object.<anonymous> (D:\Work\Script\tools\verify\tc_stock_scan_catalog.js:219:19)
+    at Module._compile (node:internal/modules/cjs/loader:1872:14)
+    at Object..js (node:internal/modules/cjs/loader:2003:10)
+    at Module.load (node:internal/modules/cjs/loader:1594:32)
+    at Module._load (node:internal/modules/cjs/loader:1396:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+    at node:internal/main/run_main_module:33:47
+
+Node.js v24.19.0
+
+── TC-SCAN-CALC — reusable LTR expression calculator and quantity-field adapters
+   OK
+
+── VF-MO-CALC — vf_mfg_order quantity calculators; الكمية الفعلية المنتجة shows the product’s carton
+   OK
+
+── VF-MO-BATCH — رقم التشغيلة offers the batch numbers already in use and stays free text
+   FAILED
+
+
+1 — a reference list, not a constraint
+
+  PASS  رقم التشغيلة points at the reference list
+  PASS  and is still a free-text input, so a new batch number can be typed
+  PASS  the list itself is rendered
+  PASS  the order’s own batch number is still what the field shows
+
+2 — the values, in the order the server sent them
+
+  PASS  every supplied value is offered
+  PASS  most-recently-used-first survives the trip to the markup
+  PASS  a value carrying a quote is escaped rather than left to break the attribute
+
+3 — placement and the empty case
+
+  FAIL  the list sits between the two field grids, so it is no grid child
+  PASS  a server that sends no list still renders the field and an empty list
+  PASS  and the field is unharmed by it
+
+4 — the server ships the list on both detail responses
+
+  PASS  a new order and an existing one both carry it — copying an existing number matters most on a new order
+  PASS  it is cached like every other reference set, under its own kind
+  PASS  the builder walks the appended rows backwards and stops at the cap — no sort, no unbounded list
+  PASS  the cap is a named constant
+  PASS  the column read is valley_manufacture_header.manufacture_batch
+  PASS  which is a real column of that sheet
+
+1 check(s) FAILED.
+
+── S25 — رصيد الدفعات: one stock authority — available = current_qty + held(this document)
+   FAILED
+
+S25 — no reader subtracts from current_qty
+
+  PASS  vfLiveSalesLines_ no longer exists
+  PASS  vfLiveMfgFooterOwners_ no longer exists
+  PASS  the MO guard's usedByBatch term is gone
+  PASS  the warehouse reader's used / restored / consumed / moved terms are gone
+  PASS  the sales save's existing-allocation baseline is gone
+  PASS  nothing decrements a balance in place (`-=` against a quantity)
+  PASS  no line adds to or subtracts from current_qty
+  PASS  the only two availability expressions in the module are `current_qty + held` and `current_qty`
+  PASS  valley_products_movement is never read, written or referenced
+
+S25 — one availability function
+
+  PASS  vfBatchBalance_(dbId, opts) exists
+  PASS  and the two held-by helpers
+  PASS  getValleyProductBatches_ delegates to it and computes nothing itself
+  PASS  getValleyProductBatches_ contains no CacheService read
+  PASS  invoice_uid is canonical and exclude_invoice_unique_id is still accepted as an alias
+  PASS  and mo_uid is accepted
+  PASS  the MO save guard reads its balance from the same function
+  PASS  and so does the sales save baseline
+  PASS  getValleyMfgOrderDetail_ leaves batch reads to the document-aware picker
+  FAIL  and so does getValleyProductBatchesMulti_
+
+S25 — the table is read live
+
+  PASS  valley_current_products is never reached through getAllRecords_
+  PASS  every reader routes through vfCurrentProducts_ (9 call sites)
+  PASS  vfCurrentProducts_ neither populates nor consults the per-request memo
+  PASS  it reads the range directly, on every call
+  PASS  and there is no CacheService entry for it either
+  PASS  Company_ValleyFoods_MfgOrderView.html routes no batch or MO-detail call through UIC.Cache.swr
+  PASS  Company_ValleyFoods_MfgOrders.html routes no batch or MO-detail call through UIC.Cache.swr
+  PASS  Company_ValleyFoods_Sales.html routes no batch or MO-detail call through UIC.Cache.swr
+  PASS  MfgOrderView sends mo_uid on the detail call and all three batch calls
+  PASS  and neither batch renderer prints a hard-coded «(متاح: 0)» any more
+  PASS  the sales page sends invoice_uid
+
+S25 — the balance is read at the right moment
+
+  PASS  the MO balance guard runs INSIDE executeWithLock_, not before it
+  PASS  and it still finishes before the first row is written — a violation aborts clean
+  PASS  vfFlush_ exists and calls SpreadsheetApp.flush()
+  PASS  saveValleyMfgOrder_ flushes before it returns
+  PASS  saveValleyInvoice_ flushes before it returns
+  PASS  saveValleyWarehouseMovement_ flushes before it returns
+  PASS  saveValleyPurchasingCosting_ flushes before it returns
+  PASS  deleteValleyMfgOrder_ flushes before it returns
+  PASS  saveValleyReturn_ flushes before it returns
+
+S25 — dry run of the real readers, against stubbed sheet access
+
+  PASS  the MO balance guard can be located in the real source
+<anonymous_script>:52
+    return vfBatchBalanceFromRows_(vfCurrentProducts_(dbId), o, held);
+    ^
+
+ReferenceError: vfBatchBalanceFromRows_ is not defined
+    at Object.vfBatchBalance_ [as balance] (eval at <anonymous> (D:\Work\Script\tools\verify\s25_stock_authority.js:301:11), <anonymous>:52:5)
+    at Object.<anonymous> (D:\Work\Script\tools\verify\s25_stock_authority.js:331:14)
+    at Module._compile (node:internal/modules/cjs/loader:1872:14)
+    at Object..js (node:internal/modules/cjs/loader:2003:10)
+    at Module.load (node:internal/modules/cjs/loader:1594:32)
+    at Module._load (node:internal/modules/cjs/loader:1396:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+    at node:internal/main/run_main_module:33:47
+
+Node.js v24.19.0
+
+── S26 — vf_parties كشف حساب: factory/agreements/packaging + balance-once
+   OK
+
+── S27 — vf_mfg_client_report: client manufacturing pivot, filters, cost gating
+   OK
+
+── Valley Foods IFRS income-statement financial acceptance groups
+   OK
+
+── UI-1.2 — popups escape the table clip box (U-01)
+   OK
+
+── UI-1.3 — tri-state sort, load order preserved (U-03)
+   OK
+
+── UI-1.4 — .num shared across all three companies (U-04)
+   OK
+
+── UI-1.5 — sticky table header and its scroll range (U-05)
+   OK
+
+── UI-2.4/2.5/2.6 — neutral canvas, brand topbar, per company
+   OK
+
+── UI-2.9b — the five-tier breakpoint scale (U-48)
+   FAILED
+
+  PASS  --bp-phone is 599px
+  PASS  --bp-tablet-p is 600px
+  PASS  --bp-tablet-l is 900px
+  PASS  --bp-desktop is 1280px
+  PASS  --bp-wide is 1920px
+  PASS  the tokens carry the note that a media query cannot read a custom property
+  PASS  width queries were found at all (66)
+  FAIL  all 66 width queries are min-width on one of the five tiers  — 0_ERP_Management.html: max-width:600 | Company_ErpTest_Financial_Position.html: max-width:600 | Company_ErpTest_Income_Statement.html: max-width:600 | Company_TopChemical_BudgetInputs.html: max-width:1100 | Company_TopChemical_BudgetInputs.html: max-width:760 | Company_TopChemical_BudgetInputs.html: max-width:599 | Company_TopChemical_BudgetInputs.html: max-width:420 | Company_TopChemical_EmpDeductions.html: max-width:700 | Company_TopChemical_EmpDeductions.html: max-width:520 | Company_TopChemical_EmpOvertime.html: max-width:700 | Company_TopChemical_EmpOvertime.html: max-width:520 | Company_TopChemical_EmpPermits.html: max-width:520 | Company_TopChemical_EmpSalaries.html: max-width:760 | Company_TopChemical_Employees.html: max-width:850 | Company_TopChemical_Employees.html: max-width:520 | Company_TopChemical_ExecutiveFollowUp.html: max-width:900 | Company_TopChemical_ExecutiveFollowUp.html: max-width:700 | Company_TopChemical_FinancialRatios.html: max-width:850 | Company_TopChemical_FinancialRatios.html: max-width:540 | Company_TopChemical_ProductionCapability.html: max-width:600 | Company_TopChemical_ProductionCapability.html: max-width:700 | Company_TopChemical_SalesCapacity.html: max-width:600 | Company_TopChemical_SalesCapacity.html: max-width:700 | Company_TopLight_Financial_Position.html: max-width:600 | Company_TopLight_Income_Statement.html: max-width:600 | Company_ValleyFoods_IncomeStatement.html: max-width:650 | Company_ValleyFoods_MfgOrders.html: max-width:760 | Company_ValleyFoods_Parties.html: max-width:599
+  PASS  a tablet-p (600px) block exists
+  PASS  a tablet-l (900px) block exists
+  PASS  a wide (1920px) block exists
+  PASS  the hamburger is hidden at tablet-l, NOT at 768 — so the drawer survives on a portrait iPad
+  PASS  the hamburger is NOT hidden at tablet-p
+  PASS  the topbar nav appears at tablet-l
+  PASS  the hamburger is shown by default (mobile-first base)
+  PASS  the topbar nav is hidden by default (mobile-first base)
+  PASS  dialogs stop being bottom sheets at tablet-p
+  PASS  the modal-sm width moved into the tablet-p tier with the rest
+  PASS  the modal-lg width moved into the tablet-p tier with the rest
+  PASS  the modal-xl width moved into the tablet-p tier with the rest
+  PASS  the off-scale 640px dialog query is gone
+  PASS  app-content unclamps from 1200px at the wide tier
+  PASS  the home FAB no longer uses a max-width:768 query that fought the shell switch
+  PASS  the FAB grows at tablet-p, mobile-first
+  PASS  pointer affordances are gated on (hover: none), not on width
+  PASS  the 48px / 44px tap-target tokens still exist
+  PASS  tier tablet-p does not shrink a tap target below 44px
+  PASS  tier tablet-l does not shrink a tap target below 44px
+  PASS  tier wide does not shrink a tap target below 44px
+  PASS  the page body still cannot scroll horizontally at any width (plan §0.4 rule 6)
+  PASS  wide tables scroll inside their own container instead
+
+1 assertion(s) FAILED
+
+── UI-2.8 — formatter consolidation, differential (D-4)
+   OK
+
+── UI-3.3 — the row action kebab (U-20)
+   OK
+
+── UI-3.4 — one loading overlay, UI.toast/UI.alert (U-24)
+   OK
+
+── UI-3.8 — the persistent home button (U-42)
+   OK
+
+── UI-4.1 — the control panel (U-13)
+   OK
+
+── UI-4.5/4.6/4.8 — columns, selection, phone cards
+   OK
+
+── UI-4.4/4.7 — group-by, aggregates, skeleton loads
+   OK
+
+── UI-4.9 — PagedTable row patching: a row action costs one round trip
+   OK
+
+── UI-5.1/5.2/5.3 — dirty guard, styled confirm, validation
+   OK
+
+── vf_cash/vf_sales/vf_purchasing — the من/إلى date range filter
+   FAILED
+
+
+1. UIC.dateRangeBar — the one strip all three pages render
+  PASS  UIC.dateRangeBar exists
+  PASS  UIC.dateRangeValues exists
+  PASS  renders a date input at <key>-from
+  PASS  renders a date input at <key>-to
+  PASS  both ends are labelled in Arabic
+  PASS  no clear button while the range is empty
+  PASS  the current range comes back as the input values
+  PASS  both inputs carry the change handler
+  PASS  a set range gets a clear button
+  PASS  the value is escaped into the attribute
+  PASS  UIC.dateRangeValues reads both inputs back
+  PASS  a bar that is not on the page reads as empty
+
+2. vf_cash — the range travels to get_valley_cash
+  PASS  the list renders the range bar
+  PASS  the nonzero box balance renders as one KPI card
+  PASS  the inputs are wired to the page
+  PASS  the movements table still renders alongside it
+  PASS  the first load asks for an unbounded list
+  PASS  applying the range refetches with from/to — the server bounds the full ledger
+  PASS  the range survives the redraw
+  PASS  from > to is refused without a round trip
+  PASS  and the user is told why
+  PASS  zero-valued box KPI cards are hidden while positive and negative balances remain visible
+  PASS  the KPI strip is omitted when every box balance is zero
+  PASS  clearing removes both bounds
+  PASS  a saved view restores the range and reloads bounded
+  PASS  حفظ العرض persists the range next to the box filter
+
+3. vf_sales — the range travels with every page of the paged table
+  PASS  the range bar renders above the invoice table
+  PASS  and it sits before the table, not inside it
+  PASS  the empty text is the invoice one
+  PASS  the first page is unbounded
+  PASS  the fetcher sends from/to — paging cannot outrun the filter
+  PASS  and it restarts at offset 0 with the page size intact
+  PASS  the bar redraws with the range it is now showing
+  PASS  clearing removes both bounds
+
+4. vf_purchasing — the range travels to get_valley_purchasing_costing
+  PASS  the range bar renders above the purchases table
+  PASS  the purchases table still renders
+  PASS  unfiltered, the list still asks for the newest rows only
+  PASS  applying the range refetches with from/to
+  PASS  a range implies "everything inside it", not the newest ten of it
+  PASS  from > to is refused without a round trip
+  PASS  clearing removes the bounds and the implied loadAll
+
+5. Company_ValleyFoods_Actions.js — the bounds, and where they apply
+  PASS  vfDateBound_ is defined
+  PASS  "from" is local midnight on its own day — not UTC midnight
+  PASS  "to" is the END of its day, so same-day rows are inside the range
+  PASS  an afternoon row on the last day is included
+  PASS  an early row on the first day is included
+  PASS  an empty bound is no bound
+  PASS  an unparseable bound is no bound
+  PASS  a full timestamp is used as given, not widened
+  FAIL  both vfBoundRows_ and vfPage_ use the helper at both ends
+  PASS  getValleyPurchasingCosting_ bounds by the receipt date
+  PASS  and it bounds BEFORE the newest-ten slice, so an old month is reachable
+  PASS  get_valley_cash already bounds the ledger by transaction_date
+  PASS  get_valley_sales_page already bounds the invoices by their date
+
+1 FAILED
+
+── deployment smoke — every page template boots
+   FAILED
+
+shared layer boots. UIC symbols: 216, FMT: 10, UI: 5
+
+page templates: 150
+  booted with no error : 144
+  no inline script     : 0
+  THREW                : 6
+
+  known (also fails at Phase 0)  0_ERP_Management.html  — Cannot set properties of null (setting 'innerHTML')
+  known (also fails at Phase 0)  Company_TopChemical_MainReview.html  — Cannot set properties of null (setting 'innerHTML')
+  known (also fails at Phase 0)  Company_TopChemical_RegistrationPapers.html  — Cannot set properties of null (setting 'innerHTML')
+  known (also fails at Phase 0)  DbLive_Viewer.html  — getQueryParam is not defined
+  REGRESSION  0_ERPsetup.html  block 0 (line 41)
+              Cannot read properties of null (reading 'value')
+  REGRESSION  Company_TopChemical_ProductsLive_DirectTest.html  block 0 (line 65)
+              Cannot read properties of null (reading 'addEventListener')
+
+2 page(s) newly throw while booting.
+
+── B1 — transaction_details parser, over the fixture corpus
+   OK
+
+── B2 — item matcher: stemming, blocking, scores, clusters
+   OK
+
+── B3 — the four account windows and the month-end clamp
+   OK
+
+── B3 — SQL discipline: additive, no DDL, closes, binds, credit
+   OK
+
+── Phase 6 — bounded operational scripts and SQL access path
+   FAILED
+
+
+1 — operational scripts remain bounded and dry-run by default
+
+  PASS  copy script requires explicit --write
+  PASS  copy script reports its dry-run state
+  PASS  copy writes in Firestore batches of at most 500
+  PASS  copy preserves deterministic source-row document identity
+  PASS  copy reports write counters from actual committed writes
+  PASS  date fixer requires explicit --write
+  PASS  date fixer reports its dry-run state
+  PASS  date fixer supports bounded resume and batch controls
+  PASS  date fixer commits only the requested batch
+  PASS  date fixer limits updates to the converted fields
+  PASS  history analysis requests spreadsheet read-only scope
+  PASS  history analysis contains no spreadsheet write endpoint
+
+2 — Box SQL access path remains bounded, parameterized, and DDL-free
+
+  PASS  connector has no schema-changing SQL
+  PASS  dbBoxList_ access path is present
+  PASS  dbBoxList_ clamps page size to 200
+  PASS  dbBoxList_ emits bounded LIMIT/OFFSET
+  FAIL  dbBoxList_ binds filter values through JDBC parameters
+  PASS  dbBoxList_ keeps count and page reads on the same predicate builder
+
+3 — deployment source inventory
+
+  PASS  explicit push order loads the consolidated Valley Foods business file
+  PASS  explicit push order starts with shared Code.js and then company Actions
+  FAIL  explicit push order contains exactly the nine canonical runtime files
+  PASS  empty duplicate DbLive_Routes.js is removed
+
+2 Phase 6 check(s) FAILED.
+
+── B4 — access gate, registration, nav, query budget
+   OK
+
+── B6 — edit path: allowlist, validators, named confirm, audit
+   OK
+
+── B7 — rules engine, run against fixtures both ways
+   OK
+
+── AC1 — registry, PAGE_ACCESS cross-ref, PUBLIC_ACTIONS/actions separation (D-14/T-2)
+   OK
+
+── AC2 — the §5.4 scoring engine, OptionsJSON parser, candidate projection
+   OK
+
+── AC3 — assessments list + full-page form, wire shapes, view-mode lockdown
+   OK
+
+── AC4 — acInsert_/acUpdate_ header-case contract (T-3/T-4) + batches (§5.2)
+   OK
+
+── AC5 — the public candidate page and its three PUBLIC_ACTIONS (T-1/T-2/T-5/T-9)
+   OK
+
+── AC6 — results list, grading, the trait chart, print
+   OK
+
+── AC7 — Phase 8 Tier B (D-2): B-1/B-2, with AND without the columns
+   OK
+
+── RT0 — one batched perf round trip per navigation, inert when off
+   FAILED
+
+  PASS  nav_server is derived from the navigation entry, not invented
+  PASS  nav_transfer is derived from the navigation entry, not invented
+  PASS  nav_parse is derived from the navigation entry, not invented
+  PASS  PERF.mark still exists for the metrics a page reports itself
+  PASS  first_data_render is actually marked — by the table renderer, not by nobody
+  PASS  it is marked when the body finishes rendering, not when the render starts
+  PASS  transferSize and decodedBodySize are reported, so the gzip ratio is measured
+  FAIL  there is a single flush that ships the queue
+  PASS  PERF.push queues and never sends on its own
+  FAIL  PERF.flush makes exactly one google.script.run call
+  FAIL  the queued marks travel together in one payload
+  PASS  the old PERF.send is kept as a queueing shim, so outside callers are batched too
+  PASS  the queue is flushed on the way out, not only on a timer
+  FAIL  every PERF entry point returns early unless PERF.enabled()
+        PERF.flush does not check PERF.enabled()
+  PASS  the listeners are registered only inside the enabled() gate
+  PASS  enabled() is strict — an undefined PERF_LOG is off, not truthy-off
+  PASS  logClientPerf_ accepts a batch of marks
+  PASS  it still accepts the single-metric shape a page cached before this deploy will send
+  PASS  the batch is written with one setValues, not one appendRow per mark
+  FAIL  the property is checked before the spreadsheet is even opened
+  FAIL  a runaway client cannot turn one request into an unbounded number of rows
+  PASS  ERP_Client_Perf keeps exactly the six columns it has today
+  PASS  the batch write is six columns wide — the same six
+
+6 check(s) FAILED.
+
+── RT1 — reads draw skeletons; the overlay is for writes only
+   OK
+
+── RT2a — every write action returns its record or declares why not
+   OK
+
+── RT2b — a refused save rolls back exactly; a dropped one is queued
+   OK
+
+── RT3 — every direct sheet write bumps the version a watcher reads
+   OK
+
+── RT4 — cache-first with revalidation; a hostile store degrades to a fetch
+   FAILED
+
+  PASS  the key names the company and the action
+  PASS  the same payload produces the same key
+  PASS  a different payload does not
+  PASS  and neither does a different company — one tenant cannot read another's cache
+  PASS  a stored value comes back intact
+  PASS  and is gone once removed
+  PASS  a matching version is served
+  PASS  a table stamp that moved invalidates what was cached against it
+  PASS  and the invalid entry is dropped, not just skipped
+  PASS  an entry past its age cap is not served
+  PASS  and that one is dropped too
+  PASS  the store stays inside its cap
+  PASS  which means it evicted rather than growing without bound
+  PASS  the most recent entry survives — eviction is least-recently-used, not first-in
+  PASS  a store that throws on every access does not throw out of the cache
+  PASS  and simply reports a miss
+  PASS  so swr falls straight through to a real fetch
+  PASS  a cold cache fetches
+  FAIL  a warm cache answers immediately, from what it already had
+  PASS  AND it revalidated behind — a cached value is never rendered without one
+  FAIL  and the caller is handed the fresh value when it differs from the cached one
+  PASS  the change watch busts the cache when a table it watches moves
+  PASS  and busts BEFORE the page refetches, so the refetch is not served the value that just went stale
+  PASS  every single localStorage access in the cache is inside a try/catch
+  PASS  the previous paint is drawn inert — its action buttons name record ids that may no longer be right
+  PASS  and it is both saved and read back
+  PASS  prefetch runs on intent — hover and touch — not on a fixed timer
+  PASS  and on genuine idle after first paint, where the browser says so
+  PASS  with a cap on how many can be in flight at once
+  PASS  and deduplication, so the same intent signalled ten times costs one request
+  PASS  a hidden tab prefetches nothing — it is not about to click anything
+  PASS  the old name still exists, so its forty call sites did not have to change
+  PASS  and the fixed two-second guess is gone
+
+2 check(s) FAILED.
+
+── RT5 — the minified bundle is smaller and provably equivalent
+   FAILED
+
+  PASS  minifyInclude_ is in Code.js, where include() can reach it
+  PASS  the minifier does not claim to rename anything
+  PASS  UI_Components.html: the minified file parses and runs
+  PASS  UI_Components.html: the same namespaces are defined
+  PASS  UI_Components.html: all 214 exported symbol(s) survive, byte for byte
+  PASS  UI_Components.html: every Arabic literal in code survives byte-identical
+  PASS  Client_Helpers.html: the minified file parses and runs
+  PASS  Client_Helpers.html: the same namespaces are defined
+  PASS  Client_Helpers.html: all 257 exported symbol(s) survive, byte for byte
+  PASS  Client_Helpers.html: every Arabic literal in code survives byte-identical
+  PASS  CSS_Tokens.html: the minified file parses and runs
+  PASS  CSS_Tokens.html: the same namespaces are defined
+  PASS  CSS_Tokens.html: all 257 exported symbol(s) survive, byte for byte
+  PASS  CSS_Tokens.html: every Arabic literal in code survives byte-identical
+  ..    minified: UI_Components 500K→303K (39%), Client_Helpers 98K→54K (45%), CSS_Tokens 13K→5K (60%)
+  ..    155 page(s); median 378 KB after minify, budget 180 KB
+  ..    heaviest: Company_ValleyFoods_MfgOrderView at 524 KB
+  ..    142 page(s) over budget — every one of them because
+        UI_Components is 303 KB on its own after minification. The four-way split is the
+        fix and is a separate run; see REALTIME_FEEL_RESULTS.md.
+  FAIL  the shared bundle is smaller on the wire than it is on disk
+  FAIL  the median page is smaller than the 317880 bytes recorded at R0
+        median is now 387488
+  FAIL  no page exceeds the 340 KB ceiling — the heaviest page today is 524 KB
+        Company_ValleyFoods_MfgOrderView 524 KB
+        Company_ValleyFoods_QualitySops 505 KB
+        Company_ValleyFoods_Attendance 488 KB
+        Company_ValleyFoods_MfgOrders 462 KB
+        Company_TopChemical_StockScan 451 KB
+        0_ERP_Management 446 KB
+        Company_TopChemical_BudgetInputs 435 KB
+        Company_ValleyFoods_Sales 434 KB
+        Company_ValleyFoods_QualityGeneral 429 KB
+        Company_TopChemical_FinancialRatios 428 KB
+        Company_TopChemical_BoxAnalysis 423 KB
+        Company_ValleyFoods_Purchasing 423 KB
+        Company_TopChemical_ManufactureOrders 416 KB
+        Company_ValleyFoods_QualityNcr 416 KB
+        Company_TopChemical_ProductsLive 413 KB
+        Company_ValleyFoods_Parties 413 KB
+        Company_TopChemical_ProductionCapability 406 KB
+        Company_TopChemical_SalesCapacity 406 KB
+        Company_ErpTest_Purchasing 405 KB
+        Company_TopChemical_EmpSalaries 404 KB
+        Company_TopChemical_BudgetStockBalance 403 KB
+        Company_TopChemical_BudgetInvoices 403 KB
+        Company_ValleyFoods_Cash 403 KB
+        Company_ErpTest_Sales 403 KB
+        Company_TopChemical_BudgetHR 401 KB
+        Company_TopChemical_CartonSizes 398 KB
+        Company_ErpTest_Sales_Offer 398 KB
+        Company_ValleyFoods_Overtime 397 KB
+        Company_ValleyFoods_QualityAudits 396 KB
+        Company_TopChemical_BudgetManufacture 395 KB
+        Company_TopChemical_EmpOvertime 395 KB
+        Company_TopChemical_EmpDeductions 395 KB
+        Company_ErpTest_Manufacture 394 KB
+        Company_TopLight_Purchasing 394 KB
+        Company_ValleyFoods_MfgClientReport 394 KB
+        Company_ErpTest_Cash 394 KB
+        Company_TopLight_Cash 393 KB
+        Company_ErpTest_Products 393 KB
+        Company_ValleyFoods_Products 392 KB
+        Company_TopLight_Sales 392 KB
+        Company_ValleyFoods_Deductions 392 KB
+        Company_ValleyFoods_SalesReport 392 KB
+        Company_TopChemical_RegistrationPapers 391 KB
+        Company_ValleyFoods_Vacations 390 KB
+        Company_ValleyFoods_MonthlySalaries 390 KB
+        Company_ValleyFoods_HR_Emp 389 KB
+        Company_TopChemical_ClientBalanceSheets 389 KB
+        Company_ValleyFoods_PurchasingReport 389 KB
+        Company_ValleyFoods_CashBoxBalances 389 KB
+        Company_ValleyFoods_HR_Settings 389 KB
+        Company_TopChemical_ExecutiveFollowUp 388 KB
+        Company_ValleyFoods_WarehouseMovement 388 KB
+        Company_TopLight_Sales_Offer 387 KB
+        Company_Assessment_AssessmentForm 387 KB
+        Company_ErpTest_Customers 387 KB
+        Company_TopChemical_StockRevision 387 KB
+        Company_TopChemical_BudgetCash 386 KB
+        Company_TopChemical_ImportFollow 386 KB
+        Company_TopChemical_CustomsOffice 384 KB
+        Company_TopChemical_Employees 384 KB
+        0_ERPlogin 383 KB
+        Company_Assessment_ResultView 382 KB
+        Company_TopChemical_Purchasing 382 KB
+        Company_TopLight_Products 382 KB
+        Company_ValleyFoods_QualityMyAcks 381 KB
+        Company_TopChemical_EmpPermits 381 KB
+        Company_Assessment_Take 381 KB
+        Company_ValleyFoods_QualityDashboard 381 KB
+        Company_ValleyFoods_SalesReturns 380 KB
+        Company_TopChemical_Dashboard 380 KB
+        Company_TopChemical_Trust 379 KB
+        Company_ErpTest_Financial_Position 379 KB
+        Company_Assessment_Batches 379 KB
+        Company_ValleyFoods_MfgRecipes 379 KB
+        Company_TopLight_Financial_Position 379 KB
+        Company_ErpTest_Income_Statement 379 KB
+        Company_TopChemical_Debts 379 KB
+        Company_TopLight_Income_Statement 378 KB
+        Company_ErpTest_Categories 378 KB
+        Company_ValleyFoods_IncomeStatement 378 KB
+        Company_TopChemical_Products 378 KB
+        Company_ErpTest_Customer_Statement 378 KB
+        Company_TopLight_Customer_Statement 378 KB
+        Company_ValleyFoods_AssetTechnical 378 KB
+        0_ERPsetup 378 KB
+        Company_ValleyFoods_Contracts 377 KB
+        Company_ValleyFoods_WorkCenters 376 KB
+        Company_ValleyFoods_ShiftAssignment 376 KB
+        Company_ValleyFoods_WorkCenterAssets 376 KB
+        Company_TopChemical_MainReview 375 KB
+        Company_ValleyFoods_CashIncomes 375 KB
+        Company_ValleyFoods_CashExpenses 375 KB
+        Company_TopChemical_Barcode 375 KB
+        Company_ValleyFoods_VacationAlloc 375 KB
+        Company_TopChemical_KPI 375 KB
+        Company_TopLight_Customers 374 KB
+        Company_TopChemical_EmployeeSalary 374 KB
+        DbLive_Viewer 374 KB
+        Company_TopChemical_EmployeeStatus 374 KB
+        Company_ValleyFoods_Salary 374 KB
+        Company_ValleyFoods_Dashboard 374 KB
+        Company_ErpTest_Sales_Analysis 374 KB
+        Company_TopLight_Sales_Analysis 374 KB
+        Company_TopChemical_Clients 373 KB
+        Company_ErpTest_Sales_Costing_Print 373 KB
+        Company_TopLight_Sales_Costing_Print 373 KB
+        Company_TopChemical_BudgetParties 373 KB
+        Company_TopChemical_BudgetIncome 373 KB
+        Company_ErpTest_Sales_Returns 373 KB
+        Company_TopLight_Sales_Returns 373 KB
+        Company_ErpTest_Sales_Print 373 KB
+        Company_TopLight_Sales_Print 373 KB
+        Company_ValleyFoods_SalesPrint 372 KB
+        Company_ErpTest_Sales_Costing_Analysis 372 KB
+        Company_TopLight_Sales_Costing_Analysis 372 KB
+        Company_ErpTest_Cash_Report 371 KB
+        Company_TopChemical_EmpSalariesClose 371 KB
+        Company_Assessment_Results 371 KB
+        Company_Assessment_Assessments 371 KB
+        Company_ErpTest_KPI 371 KB
+        Company_TopLight_Cash_Report 371 KB
+        Company_ErpTest_Dashboard 371 KB
+        Company_TopLight_KPI 371 KB
+        Company_TopLight_Dashboard 371 KB
+        Company_ErpTest_Purchase_Print 370 KB
+        Company_TopLight_Purchase_Print 370 KB
+        Company_ErpTest_Sales_Offer_Print 370 KB
+        Company_TopLight_Sales_Offer_Print 370 KB
+        Company_Assessment_Dashboard 369 KB
+        Company_ErpTest_Manufacture_Print 369 KB
+        Company_ErpTest_Sales_Release 369 KB
+        Company_TopLight_Sales_Release 369 KB
+        Company_ErpTest_Product_Movement 369 KB
+        Company_TopLight_Product_Movement 369 KB
+        User_Sessions 368 KB
+        0_ERPDashboard 368 KB
+        Record_History_Panel 368 KB
+        User_Views 368 KB
+        Company_ValleyFoods_KPI 367 KB
+        ERP_Perf_Dashboard 367 KB
+        Company_ErpTest_Purchase_Needs 367 KB
+        Company_TopLight_Purchase_Needs 367 KB
+  PASS  only the three shared files are minified — a page template cannot be run through it by accident
+  PASS  the cache key is a hash of the CONTENT, so a deploy misses once instead of serving the previous release
+  PASS  and it uses the CHUNKED cache — a 195 KB value does not fit in CacheService's 100 KB limit
+  PASS  a minifier that throws serves the unminified file rather than taking the page down
+  PASS  ?nominify=1 turns it off without a deploy
+  PASS  the ~900 KB xlsx library is still fetched on first export, not on every page load
+  PASS  and the chart library on first chart
+  PASS  neither is a top-level script tag
+
+3 check(s) FAILED.
+
+── RT6 — soft nav: the same gate, a hard fallback, nothing left running
+   OK
+
+── RT10 — telemetry costs one cache write and names nobody
+   FAILED
+
+  PASS  perfRecord_ exists
+  FAIL  a logged request pays one cache write
+  PASS  and ZERO sheet writes — no spreadsheet is even opened on the request path
+  FAIL  apiRouter_ records through perfRecordRequest_
+  PASS  which also touches no sheet
+  FAIL  and is wrapped whole — a telemetry path that can throw is one that can fail a save
+  FAIL  it runs on the success path
+  FAIL  and on the failure path, so a slow error is not invisible
+  PASS  ERP_Perf_Log declares its columns
+  FAIL  exactly the nine columns the plan names, and no tenth
+        ts, action, company, page, elapsed_ms, sheet_reads, status, user_hash, client_ms, diagnostic, sample_p, outcome, auth_ms, handler_ms, resp_size, mysql_query, mysql_cache, mysql_connection_ms, mysql_sql_ms, mysql_result_read_ms, mysql_rows
+  FAIL  and the values it writes are visible in one place
+  PASS  no email reaches the row — the user column is perfUserHash_(email) and nothing else
+  FAIL  the user column is a hash
+  PASS  no record id, no payload, no field values
+  FAIL  nine values for nine columns
+        counted 0
+  PASS  the hash is salted from a script property
+  PASS  and never returns the email it was given
+  PASS  100% of writes are recorded
+  FAIL  100% of anything slow
+  FAIL  and a configurable fraction of fast reads
+  PASS  the default read sample is 10%
+  PASS  every tunable is in one CONFIG block rather than buried in a function
+evalmachine.<anonymous>:38
+  if (!PERF_TELEMETRY_.ENABLED || !perfDiagnosticsEnabled_()) return false;
+                       ^
+
+ReferenceError: perfDiagnosticsEnabled_ is not defined
+    at perfShouldSample_ (evalmachine.<anonymous>:38:24)
+    at evalmachine.<anonymous>:1:1
+    at Script.runInContext (node:vm:149:12)
+    at Object.runInContext (node:vm:301:6)
+    at Object.<anonymous> (D:\Work\Script\tools\verify\rt10_telemetry.js:135:53)
+    at Module._compile (node:internal/modules/cjs/loader:1872:14)
+    at Object..js (node:internal/modules/cjs/loader:2003:10)
+    at Module.load (node:internal/modules/cjs/loader:1594:32)
+    at Module._load (node:internal/modules/cjs/loader:1396:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+
+Node.js v24.19.0
+
+── RT11 — the retry chip belongs to the page that owns the record
+   OK
+
+── RT9 — the audit queue: nothing lost, nothing duplicated
+   OK
+
+── RT8 — no search box over a truncated list stays silent about it
+   FAILED
+
+  PASS  28 registered action(s) return a truncated list
+  PASS  20 page(s) over a truncated list declare their search scope
+  FAIL  no page renders a search box over a truncated list in silence
+        Company_TopChemical_EmpDeductions.html searches only the rows get_emp_deductions returned, and says nothing  (Company_TopChemical_Actions.js:getEmpDeductions_)
+        Company_TopChemical_EmployeeStatus.html searches only the rows get_employee_status returned, and says nothing  (Company_TopChemical_Actions.js:getEmployeeStatus_)
+        Company_TopChemical_EmpOvertime.html searches only the rows get_emp_overtime returned, and says nothing  (Company_TopChemical_Actions.js:getEmpOvertime_)
+        Company_TopChemical_EmpPermits.html searches only the rows get_emp_permits returned, and says nothing  (Company_TopChemical_Actions.js:getEmpPermits_)
+        Company_TopChemical_EmpSalaries.html searches only the rows get_emp_salaries returned, and says nothing  (Company_TopChemical_Actions.js:getEmpSalaries_)
+        Company_ValleyFoods_MfgOrders.html searches only the rows get_valley_mfg_byproducts returned, and says nothing  (Company_ValleyFoods_Actions.js:getValleyMfgByproducts_)
+  PASS  UIC.dataTable acts on `truncated`
+  PASS  the notice is rendered with the .dt-search-scope class
+  PASS  .dt-search-scope is defined in the shared stylesheet, not left an orphan class
+  PASS  the notice is drawn only when the search box is drawn
+
+1 check(s) FAILED.
+
+── Customs-office path repair: مكتب الجمارك prefix preview contract
+   OK
+
+── OPT-1 — PK memo lifecycle, index matching contract, blank rows and snapshot ownership
+   OK
+
+── OPT-2 — chunked cache layout, byte limits, partial eviction and invalidation
+   OK
+
+── OPT-3 — hoisted lookups: invoice approval scan/snapshot, movement unit map
+   OK
+
+── OPT-4 — batched approval writes with layout-verified fallback
+   OK
+
+── TL-DB — Top Light sheets-as-database: value-only writes, key-addressed patches, soft delete
+   OK
+
+── ET-STATIC — Testing System clone: no Top Light leftovers, translation layer, policies, field literals
+   FAILED
+
+erptest_clone_static: FAIL (28)
+  Company_ErpTest_Actions.js: ACTION_DEFINITIONS key not allowed: get_et_categories
+  Company_ErpTest_Actions.js: ACTION_DEFINITIONS key not allowed: add_et_category
+  Company_ErpTest_Actions.js: ACTION_DEFINITIONS key not allowed: edit_et_category
+  Company_TopLight_Actions.js: differs from HEAD
+  Company_TopLight_Cash.html: differs from HEAD
+  Company_TopLight_Cash_Report.html: differs from HEAD
+  Company_TopLight_Customers.html: differs from HEAD
+  Company_TopLight_Customer_Statement.html: differs from HEAD
+  Company_TopLight_Dashboard.html: differs from HEAD
+  Company_TopLight_Financial_Position.html: differs from HEAD
+  Company_TopLight_Income_Statement.html: differs from HEAD
+  Company_TopLight_KPI.html: differs from HEAD
+  Company_TopLight_Nav.html: differs from HEAD
+  Company_TopLight_Products.html: differs from HEAD
+  Company_TopLight_Product_Movement.html: differs from HEAD
+  Company_TopLight_Purchase_Needs.html: differs from HEAD
+  Company_TopLight_Purchase_Print.html: differs from HEAD
+  Company_TopLight_Purchasing.html: differs from HEAD
+  Company_TopLight_Registry.js: differs from HEAD
+  Company_TopLight_Sales.html: differs from HEAD
+  Company_TopLight_Sales_Analysis.html: differs from HEAD
+  Company_TopLight_Sales_Costing_Analysis.html: differs from HEAD
+  Company_TopLight_Sales_Costing_Print.html: differs from HEAD
+  Company_TopLight_Sales_Offer.html: differs from HEAD
+  Company_TopLight_Sales_Offer_Print.html: differs from HEAD
+  Company_TopLight_Sales_Print.html: differs from HEAD
+  Company_TopLight_Sales_Release.html: differs from HEAD
+  Company_TopLight_Sales_Returns.html: differs from HEAD
+
+── ET-MFG — Testing System T-MFG / T-STOCK on the real erp_test headers
+   OK
+
+── ET-PARITY — Testing System reads equal Top Light (legacy and packs)
+   OK
+
+── ET-WRITE — Testing System write layer: T-WRITE, T-ATOMIC, compaction, reconcile, get_et_sync
+   OK
+
+── LIVE-NOTICE P1 — stamps carry writer and request; get_page_versions returns views, labels and the union of tables
+   OK
+
+── LIVE-NOTICE P2 — own saves are silent, off-view changes go stale, the notice names what/who/when
+   OK
+
+── LIVE-NOTICE P6 — views from device JSON: inert paint, trusted only when the stamps match, exact bust, per-user, logout, limits
+   OK
+
+── ET-CLIENT — Testing System browser packs: warm render, sync, logout / user isolation
+   FAILED
+
+  PASS  cold load fetches the list from the server
+  PASS  IndexedDB erp_packs_<company>_<email> created
+  PASS  warm load renders the cached view without a list call
+  PASS  unchanged seqs after sync -> no refresh
+  PASS  warm load still paints first (before the network)
+  FAIL  sync saw the change -> page refresh requested
+  FAIL  the refresh goes to the network and gets the new list
+  PASS  a change to the (unstored) cash table still triggers a refresh
+  PASS  save reply journal applied to the local pack
+  PASS  after a save the next list read is fresh (no stale view)
+  PASS  erp_test_cash_bank_movement is never stored
+  PASS  entries older than 7 days are discarded
+  PASS  logout deletes erp_packs_… then runs the real logout
+  PASS  a different signed-in email deletes the previous user's database
+  PASS  client_packs:false -> every list read goes to the server (legacy behaviour)
+
+2 client-pack check(s) FAILED.
+
+
+── DBLIVE-1 — tc_products_live paging: 50/page, cached total, bust on write
+   FAILED
+
+Company_TopChemical_Actions.js (slice):318
+    }
+    ^
+
+SyntaxError: Missing catch or finally after try
+    at new Script (node:vm:117:7)
+    at createScript (node:vm:269:10)
+    at Object.runInContext (node:vm:300:10)
+    at Object.<anonymous> (D:\Work\Script\tools\verify\dblive_products_paging.js:157:4)
+    at Module._compile (node:internal/modules/cjs/loader:1872:14)
+    at Object..js (node:internal/modules/cjs/loader:2003:10)
+    at Module.load (node:internal/modules/cjs/loader:1594:32)
+    at Module._load (node:internal/modules/cjs/loader:1396:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+
+Node.js v24.19.0
+
+── TC-BALANCE — رصيد أصناف الميزانية: name_ar join aggregation, duplicate/unmatched policy, MySQL view join, page wiring
+   FAILED
+
+
+Grouping and sums
+  PASS  status is success
+  PASS  system_qty_error is false when the view answers
+  PASS  one row per legal_products record
+  PASS  rows are ordered by legal_products id
+  PASS  row 1 is the first name_ar
+  PASS  the trimmed-space line joins the same product
+  PASS  sum of correlated current_qty (5 + 7 - 2)
+  PASS  sum of correlated total_cost_sign (100 + 50 - 20)
+  PASS  sum of correlated total_sales_value
+  PASS  system_qty comes from product_system_id 10
+  PASS  difference = system_qty - summed qty
+  PASS  asset_code resolves to its chart_of_accounts level-5 name
+  PASS  the response carries the chart_of_accounts select options
+  PASS  modal lines carry the correlated transaction codes in order
+  PASS  each line carries exactly the nine modal fields
+  PASS  line fields are trimmed strings / numeric
+  PASS  a product with no correlated lines is still listed at zero
+  PASS  a live zero from the view is kept, not treated as missing
+  PASS  a product without asset_code resolves to empty
+  PASS  blank name/sku cannot join and shows no system balance
+  PASS  the duplicate name gets no lines — nothing is summed twice
+  PASS  the duplicated name is reported
+  PASS  the unmatched lines (ج and blank name) are counted, not dropped
+  PASS  the unmatched warning carries its detail rows
+  PASS  an unmatched name carries its count and sums
+  PASS  blank product names are their own unmatched row
+  PASS  the duplicate detail names its ids and the id that claimed the lines
+
+MySQL-down fallback
+  PASS  status stays success when the view throws
+  PASS  system_qty_error is true so the page can say why
+  PASS  aggregation survives the outage
+  PASS  every system_qty is null instead of a fabricated number
+  PASS  the parsed id list and the names array survive the outage
+
+Multi-choice product_system_id
+  PASS  a comma list parses in ascending order
+  PASS  arabic comma/space/junk are tolerated and duplicates dropped
+  PASS  a single stored number still parses
+  PASS  blank/zero/negative/junk parse to no ids
+node:internal/assert/utils:77
+    throw err;
+    ^
+
+AssertionError [ERR_ASSERTION]: a multi link carries its ids and resolved names — ["10","11"]
+    at ok (D:\Work\Script\tools\verify\tc_budget_stock_balance.js:26:10)
+    at Object.<anonymous> (D:\Work\Script\tools\verify\tc_budget_stock_balance.js:179:1)
+    at Module._compile (node:internal/modules/cjs/loader:1872:14)
+    at Object..js (node:internal/modules/cjs/loader:2003:10)
+    at Module.load (node:internal/modules/cjs/loader:1594:32)
+    at Module._load (node:internal/modules/cjs/loader:1396:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+    at node:internal/main/run_main_module:33:47 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: false,
+  expected: true,
+  operator: '==',
+  diff: 'simple'
+}
+
+Node.js v24.19.0
+
+── TC-INPUTS — المدخلات: unified dataTable view, row details modal, preserved actions and formatted dates
+   OK
+
+── TC-CAPABILITY — live-view read contract, permissions, planning calculations, filters and stale responses
+   FAILED
+
+
+Calculation behavior
+  PASS  Q=100, requirement=2.5, stock=120 gives 250, 130, and capacity 48
+  PASS  Q=0 has zero planned need and is covered
+  PASS  empty product has an explicit non-feasible/unknown state
+  PASS  null per-unit requirement stays unknown and cannot claim feasibility
+  PASS  non-finite stock is invalid
+  PASS  negative requirement is invalid
+  PASS  zero requirement is covered and non-limiting
+  PASS  category multi-selection limits visible material IDs while overall bottleneck uses all rows
+  PASS  selecting multiple category IDs returns the union of their material IDs
+  PASS  material picker searches used_product_id/used_product_name locally
+  PASS  repeated material IDs do not double-count stock or produce confident capacity
+  PASS  inconsistent stock for a repeated material ID is visibly distinguished
+  PASS  null category has a selectable uncategorized bucket
+  PASS  category dropdown shows an explicit uncategorized choice
+  PASS  switching products resets filters while refresh retains them
+  PASS  empty planned quantity has an invalid-input state
+  PASS  late response from an earlier product request is discarded
+  PASS  new page inline script parses after server scriptlet substitution
+
+Read and permission contract
+  PASS  both named actions have an independent read grant
+  PASS  audit table identifies the live MySQL view
+  PASS  dedicated route and navigation entry are registered
+  PASS  unauthorized user is rejected before the data adapter
+evalmachine.<anonymous>:46
+      throw err;
+      ^
+
+ReferenceError: tcCapabilityParseRankedJson_ is not defined
+    at Object.getProductionCapabilityProducts_ (evalmachine.<anonymous>:34:20)
+    at Object.<anonymous> (D:\Work\Script\tools\verify\tc_production_capability.js:58:39)
+    at Module._compile (node:internal/modules/cjs/loader:1872:14)
+    at Object..js (node:internal/modules/cjs/loader:2003:10)
+    at Module.load (node:internal/modules/cjs/loader:1594:32)
+    at Module._load (node:internal/modules/cjs/loader:1396:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+    at node:internal/main/run_main_module:33:47
+
+Node.js v24.19.0
+
+── TC-CAPABILITY-PICKER — instant catalog pickers: shared controller, freshness, races, fallback
+   FAILED
+
+
+1 — catalog actions: permissions, wiring, specs
+  PASS  get_production_capability_catalog is gated to page 'tc_production_capability' (read)
+  PASS  get_sales_capacity_catalog is gated to page 'tc_sales_capacity' (read)
+  PASS  ACTION_TABLES maps the production catalog to mysql:manuf_product_support_capability
+  PASS  ACTION_TABLES maps the sales catalog to mysql:manuf_product_support_capability
+  PASS  get_production_capability_catalog registered
+  PASS  get_sales_capacity_catalog registered
+  PASS  catalog cache TTL is 30s
+  PASS  the catalog definition is version 1
+  PASS  catalog reads depend conservatively on mysql:*
+  PASS  catalog normalize keeps only the refresh boolean so search/limits never affect cache keys
+  PASS  catalog normalize defaults refresh to false
+  PASS  a complete catalog validates
+  PASS  count/products mismatch is invalid
+  PASS  incomplete without overflow is invalid
+  PASS  overflow shape validates
+  PASS  byte overflow shape validates
+  PASS  unsupported-ID shape validates
+  PASS  non-string entry IDs are invalid
+  PASS  complete with overflow is invalid
+  PASS  no OR-permission action: each catalog has its own page grant
+  PASS  a production-only user cannot invoke the sales catalog action
+  PASS  an ungranted user cannot invoke the production catalog action
+  PASS  production grant authorizes its own catalog but not the sales one (and vice versa by symmetry)
+  PASS  mysqlRead_ authorizes every cache hit and miss against the actual request action
+  PASS  cache keys isolate the requesting action, scope and authority
+  PASS  the catalog definition repeats server authorization before cache access
+
+2 — catalog adapter against synthetic JDBC
+  PASS  shared catalog bounds are 2,000 pairs / 256 KiB
+  PASS  byte counts are UTF-8, not string length
+evalmachine.<anonymous>:66
+      throw err;
+      ^
+
+ReferenceError: tcCapabilityParseRankedJson_ is not defined
+    at Object.dbCapabilityCatalog_ (evalmachine.<anonymous>:46:20)
+    at Object.<anonymous> (D:\Work\Script\tools\verify\tc_capability_picker.js:188:18)
+    at Module._compile (node:internal/modules/cjs/loader:1872:14)
+    at Object..js (node:internal/modules/cjs/loader:2003:10)
+    at Module.load (node:internal/modules/cjs/loader:1594:32)
+    at Module._load (node:internal/modules/cjs/loader:1396:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+    at node:internal/main/run_main_module:33:47
+
+Node.js v24.19.0
+
+── QUALITY-UID — RFC 9562 sortable ids: shape, uniqueness, timestamp round-trip
+   OK
+
+── QUALITY-TABLES — ACTION_TABLES accepts arrays: flatten, join, legacy strings intact
+   OK
+
+── QUALITY-SOP — SOP lifecycle over the real block: refusals, PDF freeze, obsoletion, acks
+   OK
+
+── QUALITY-SOP-ACL — page grants: full-only decisions, array tables cover five sheets
+   OK
+
+── QUALITY-ACKS — launch applicability/idempotency/supersede, server-side email scoping, own-row signing, supervisor record
+   OK
+
+── QUALITY-NCR — NCR/CAPA lifecycle over the real block: zero-write refusals, annual codes, overdue rule, full-gated CAPA verification
+   OK
+
+── QUALITY-DASHBOARD — every KPI exact over fixtures, dashboard cached via vfRefsCached_ with zero writes, write-registration ref-bust chain
+   OK
+
+── QUALITY-AUDITS — audit lifecycle and findings over the real block: AUD codes, zero-write refusals, Closed lockdown, escalation back-link and shared NCR allocator
+   OK
+
+── TC-FINANCIAL-RATIOS — selectable comparison periods, net sales/other income/expenses monthly charts, compact labels, account comparisons, expense ratio/order/cutoff, A4 PDF layout, read-only queries and route
+   FAILED
+
+<anonymous_script>:1
+Income account 1
+^
+
+SyntaxError: Unexpected token 'I', "Income account 1" is not valid JSON
+    at JSON.parse (<anonymous>)
+    at dbTcFinancialParseSnapshotJson_ (evalmachine.<anonymous>:210:23)
+    at dbTcFinancialProductionSnapshot_ (evalmachine.<anonymous>:314:14)
+    at dbTcFinancialProduction_ (evalmachine.<anonymous>:340:16)
+    at Object.productionHandler (evalmachine.<anonymous>:348:36)
+    at Object.<anonymous> (D:\Work\Script\tools\verify\tc_financial_ratios.js:148:28)
+    at Module._compile (node:internal/modules/cjs/loader:1872:14)
+    at Object..js (node:internal/modules/cjs/loader:2003:10)
+    at Module.load (node:internal/modules/cjs/loader:1594:32)
+    at Module._load (node:internal/modules/cjs/loader:1396:12)
+
+Node.js v24.19.0
+
+── QUALITY-SOP-CODES - readable <PREFIX>-<ABBR>-<SEQUENCE> codes, idempotent create, additive schema upgrade, combined save + concurrency, server allowlist, shared template renderer, general-quality handlers
+   OK
+
+── QUALITY-SOP-UI - the real page code: library, template workspace, metadata controls, combined save payload, read-only + legacy, general-quality page, Quality-only navigation
+   OK
+
+── QUALITY-E2E — one shared state through the full SOP → Ack → NCR → CAPA → close → dashboard journey over the real handlers
+   OK
+
+36 of 127 checks FAILED.

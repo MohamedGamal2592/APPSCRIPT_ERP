@@ -1,0 +1,80 @@
+
+0 — the shared layer exposes it
+
+  PASS  UIC.Live is defined by the shared layer
+  PASS    UIC.Live.save()
+  PASS    UIC.Live.busy()
+  PASS    UIC.Live.watchPage()
+  PASS    UIC.Live.unwatchPage()
+
+1 — the change is on screen before the server has answered
+
+  PASS  the draft is in the list immediately
+  PASS    at the top
+  PASS    flagged __pending so a page can grey the row
+  PASS    and the page was told to redraw once
+  PASS    busy() is true while it is on the wire
+  PASS  after the reply the list still has 2 rows
+  PASS  the server's record REPLACES the draft, carrying the assigned id
+  PASS    and is no longer pending
+  PASS    one more redraw
+  PASS    busy() is false again
+
+2 — a rejected save restores the list exactly
+
+  PASS  the draft was inserted optimistically
+  PASS  the failed row is gone again
+  PASS    and the list is byte-identical to before the save
+  PASS    with a redraw for the insert and one for the rollback
+  PASS    and nothing is left in flight
+
+3 — a failed EDIT restores the original row, not a blank one
+
+  PASS  the edit shows immediately
+  PASS    in place, without duplicating the row
+  PASS  after the failure there is still one row
+  PASS    and it is the ORIGINAL, field for field
+
+4 — a handler that returns no record still behaves
+
+  PASS  a draft with no key gets a temporary one so it can be tracked
+  PASS  the row stays
+  PASS    no longer pending
+  PASS    but flagged __stale, because its key is still the temporary one
+
+5 — with no list to patch it degrades to a plain save
+
+  PASS  the action and payload still go through
+  PASS  and a failure with no patch falls back to the reload the page gave it
+
+6 — watchPage: only an EXISTING, CHANGED stamp is a change
+
+  PASS  nothing is polled until the first interval elapses
+  PASS  the first tick calls get_page_versions
+  PASS    naming the page
+  PASS    and fires nothing — the first reply is the BASELINE
+  PASS  an identical second reply is not a change
+  PASS  a stamp that CHANGED fires, naming just that table
+  PASS  a stamp that VANISHED fires nothing (CacheService evicted it)
+  PASS  a table seen for the FIRST time is a baseline, not a change
+  PASS    but its next move does fire
+  PASS  unwatchPage stops the poll
+
+7 — the poll does not fight the user
+
+  PASS  a hidden tab is not polled at all
+  PASS    and resumes when the tab comes back
+  PASS  no poll is issued while a save is still in flight
+  PASS    and one is issued once the save lands
+
+8 — the poll cannot be configured into a quota fire
+
+  PASS  an interval below the 10s floor is raised to it, not honoured
+  PASS  consecutive failures back the poll off instead of hammering a sick server
+
+9 — a queued confirmation reconciles the original optimistic row
+
+  PASS  transport uncertainty keeps exactly one pending row and queued request
+  PASS  later same-request confirmation replaces the correct row, not merely the retry chip
+
+S18 — optimistic saves and change polling both check out.

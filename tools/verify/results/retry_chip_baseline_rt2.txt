@@ -1,0 +1,32 @@
+  PASS  the draft row is on screen before the request settles
+  PASS  and it is marked pending while it is unconfirmed
+  PASS  a refused add takes the row back off
+  PASS  and the list is byte-identical to what it was before the save
+  PASS  the page was redrawn on the way in and on the way back
+  PASS  a refused edit restores the row exactly
+  PASS  and restores the SAME object, so anything else holding a reference to it is still right
+  PASS  no __pending flag is left behind on a rolled-back row
+  PASS  the server's record replaces the draft, carrying the id it assigned
+  PASS  and the fields the server computed, which the draft could not have known
+  PASS  the row stops being pending once it is confirmed
+  PASS  no temporary key survives into the confirmed row
+  PASS  a request that never reached the server is queued, not thrown away
+  PASS  and the row STAYS on screen — the payload is still good and it is still going to land
+  PASS  a chip says so
+  PASS  and offers to retry now
+  PASS  the chip is not a toast: it does not disappear on its own
+  PASS  pending() counts it, so the navigation guard can see it
+  PASS  and the guard has something to say before the page is left
+  PASS  the queue survives the tab being closed
+  PASS  the transport failure queued
+  PASS  the retry actually went out
+  PASS  and a server refusal on retry drops it from the queue rather than retrying forever
+  PASS  API.call marks a failure that never reached a handler, so the retry decision is exact rather than a guess
+  PASS  and it marks ONLY the failure handler — a handler that rejected is never retried
+  PASS  the retry backs off exponentially and is capped
+  PASS  and gives up after a bounded number of tries rather than retrying forever
+  PASS  a queued change is only discarded when the user says so
+  PASS  UIC.navTo asks before leaving with an unsaved row
+  PASS  and so does closing the tab
+
+RT2b — a refused save leaves the list exactly as it was, and a dropped one is not lost.

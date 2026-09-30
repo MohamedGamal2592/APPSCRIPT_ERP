@@ -1907,9 +1907,20 @@ const ValleyFoodsHRModules = (function () {
 
   /* Count active calendar days in the payroll convention used by the salary
    * formulas: every month is exactly 30 days, and a status becomes effective
-   * on Status_Date itself.  Therefore an active start on day 5 contributes
-   * days 5..30 (26), while an inactive status on day 20 ends an active period
-   * after day 19 (19 days when the period started before the month). */
+   * on Status_Date itself.  An active start on day 5 therefore contributes
+   * days 5..30 (26), and an employee active at the end contributes through
+   * day 30.
+   *
+   * A status that ENDS an active period is INCLUSIVE of its own day: the date
+   * written on «استقالة» — or on any other non-active status — is the
+   * employee's last working day and is paid for.  A stop on day 20 of a period
+   * that began before the month is 20 days, not 19.
+   *
+   * That day is added ONLY when the new status is not ACTIVE_STATUS. Adding it
+   * to every segment would pay the boundary day twice whenever one active row
+   * follows another — two active rows on days 5 and 10 would count day 10 for
+   * the segment that ends AND for the segment that starts — because there the
+   * day belongs to the period beginning, not to one ending. */
   function monthlySalaryWorkingDays_(statusEvents, month, year) {
     var monthStartKey = year * 10000 + month * 100 + 1;
     var monthEndKey = year * 10000 + month * 100 + 30;
@@ -1925,9 +1936,23 @@ const ValleyFoodsHRModules = (function () {
       if (event.status_date > monthEndKey) return;
 
       var eventDay = event.status_date % 100;
-      if (active) days += Math.max(0, eventDay - cursorDay);
-      active = event.status_type === ACTIVE_STATUS;
-      cursorDay = eventDay;
+      var becomesActive = event.status_type === ACTIVE_STATUS;
+      var nextCursor = eventDay;
+      if (active) {
+        /* [cursorDay .. eventDay] when this status ends the period, because the
+           event's own day is worked; [cursorDay .. eventDay) when the employee
+           stays active, because eventDay opens the next segment instead. */
+        days += Math.max(0, becomesActive
+          ? (eventDay - cursorDay)
+          : (eventDay - cursorDay + 1));
+        if (!becomesActive) nextCursor = eventDay + 1;   /* that day is spent */
+      }
+      active = becomesActive;
+      /* The cursor never moves backwards. A re-hire dated on or before the day
+         a stop was already paid for would otherwise pay that day a second
+         time — a real shape in this sheet, where a correction is entered as a
+         second row on the same date rather than by editing the first. */
+      cursorDay = Math.max(cursorDay, nextCursor);
     });
 
     if (active) days += 31 - cursorDay;
@@ -3530,7 +3555,7 @@ const ValleyFoodsHRModules = (function () {
       var rec = {
         emp_id: empId,
         name_ar: '=VLOOKUP(A' + r + ',valley_employee_info!A:B,2,0)',
-        basic_salary: '=INDEX(valley_employee_salary_updated!F:F,MATCH(A' + r + ',valley_employee_salary_updated!A:A,0))',
+        basic_salary: '=INDEX(valley_employee_salary_updated!D:D,MATCH(A' + r + ',valley_employee_salary_updated!A:A,0))',
         allow: '=INDEX(valley_employee_salary_updated!E:E,MATCH(A' + r + ',valley_employee_salary_updated!A:A,0))',
         title: '=INDEX(valley_employee_info!E:E,MATCH(A' + r + ',valley_employee_info!A:A,0))',
         section: '=INDEX(valley_employee_info!F:F,MATCH(A' + r + ',valley_employee_info!A:A,0))',

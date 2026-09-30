@@ -55,6 +55,7 @@ const STEPS = [
   ['s19_live_rollout.js', 'S19 — the UIC.Live rollout, page by page'],
   ['s20_quiet_refresh.js', 'S20 — quiet refresh: scope, watches, no blocking reload'],
   ['s21_shifts_and_expenses.js', 'S21 — الورديات: overlap rule; المصروفات: report maths'],
+  ['vf_salary_status_days.js', 'إنشاء رواتب الشهر — the day a status ends is paid, and paid once'],
   ['s22_missing_template.js', 'S22 — a registered page with no HTML file fails as a page'],
   ['s23_page_params.js', 'S23 — URL parameters come from the server, not the iframe URL'],
   ['s18_table_columns.js', 'S18b — table column widths: the classifier and the contract'],
