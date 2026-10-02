@@ -25,8 +25,11 @@
     .odoo-input:focus{outline:none;border-color:#16a34a;box-shadow:0 0 0 3px rgba(22,163,74,.12);}
     .odoo-input:disabled{background:#f1f5f9;color:#94a3b8;}
     .odoo-nb{display:flex;gap:2px;border-bottom:2px solid #16a34a;margin-bottom:14px;flex-wrap:wrap;}
-    .odoo-tab{padding:12px 22px;cursor:pointer;border:none;background:transparent;color:#475569;font-size:16px;font-weight:700;border-bottom:2px solid transparent;margin-bottom:-2px;}
-    .odoo-tab.active{color:#15803d;border-bottom-color:#15803d;}
+    .odoo-tab{padding:12px 22px;cursor:pointer;border:none;background:transparent;color:#475569;font-size:16px;font-weight:700;border-bottom:2px solid transparent;margin-bottom:-2px;border-radius:8px 8px 0 0;}
+    .odoo-tab:hover{background:#f0fdf4;}
+    /* The open tab is filled, not only underlined, so the user can tell which
+       section they are in while working inside its details. */
+    .odoo-tab.active{color:#fff;background:#16a34a;border-bottom-color:#15803d;}
     .odoo-pane{display:none;}
     .odoo-pane.active{display:block;}
     /* [iPhone run 2] Verbatim, but scoped: from 600px up and on paper this is
@@ -50,7 +53,13 @@
     .mo-calc-inline .odoo-input{flex:1 1 auto;min-width:0;}
     .mo-calc-mini{flex:0 0 auto;padding:4px 8px;font-size:15px;line-height:1;}
     .pc-modes{display:flex;gap:6px;margin-bottom:10px;}
-    .pc-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) 70px 30px;gap:6px;align-items:center;margin-bottom:6px;}
+    /* from | to | duration | cause (takes the spare width) | remove */
+    .pc-row{display:grid;grid-template-columns:120px 120px 80px minmax(0,1fr) 30px;gap:6px;align-items:center;margin-bottom:6px;}
+    @media (max-width: 600px) {
+      .pc-row{grid-template-columns:minmax(0,1fr) minmax(0,1fr) 64px 30px;}
+      .pc-row .pc-note{grid-column:1 / -1;order:5;}
+      .pc-row.pc-head .pc-note{display:none;}
+    }
     .pc-total{margin-top:10px;padding:8px 10px;border-radius:8px;background:var(--bg-subtle, #f8fafc);font-weight:700;}
     .odoo-sub{background:var(--bg-subtle, #fafafa);border:1px dashed var(--border-color, #e2e8f0);border-radius:8px;padding:8px 10px;margin-top:8px;}
     .btn{cursor:pointer;border:none;border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;}
@@ -119,6 +128,7 @@
          under رقم التشغيلة. It is a suggestion list, never a constraint: the
          field remains free text and a new batch number is typed straight in. */
       var BATCH_OPTIONS = [];
+      var BYPRODUCT_BATCH_OPTIONS = [];
       var MFG_OUTPUTS = [];      /* [{uid,product_id,qty,cost_unit,total_cost,product_name}] */
       var OUTPUT_FOOTERS = [];   /* [[{item,item_code,qty,unit_cost,total_cost}]] parallel to MFG_OUTPUTS */
       var OUTPUT_BATCHES = [];   /* [[batches]] parallel to MFG_OUTPUTS (lazy-loaded per material) */
@@ -204,6 +214,24 @@
           UIC.Calculator.open({ target: el, title: 'الحاسبة — كمية الخام الداخلة', precision: 3, min: 0 });
           return;
         }
+        /* By-product quantity: same carton note as the actual-qty calculator,
+           but for the by-product chosen on that row. The combo's hidden input
+           is read first so a pick not yet mirrored into state still counts. */
+        if (targetId.indexOf('bp-qty-') === 0) {
+          var bi = Number(targetId.slice(7));
+          var itemEl = document.getElementById('bp-item-' + bi);
+          var bpId = itemEl ? itemEl.value : ((MFG_BYPRODUCTS[bi] && MFG_BYPRODUCTS[bi].item) || '');
+          var bpCarton = productCarton_(bpId);
+          var bpProd = productOption_(bpId);
+          UIC.Calculator.open({
+            target: el, title: 'الحاسبة — كمية المنتج الثانوي' + (bpProd && bpProd.label ? ' (' + bpProd.label + ')' : ''), precision: 2, min: 0,
+            note: bpCarton == null
+              ? (bpProd ? 'لا توجد كرتونة او تغليف مسجلة لهذا المنتج' : 'اختر «المنتج الثانوي» أولاً لعرض الكرتونة او التغليف')
+              : 'الكرتونة او التغليف — ' + (bpProd.label || '') + ': ' + bpCarton,
+            noteValue: bpCarton
+          });
+          return;
+        }
         var carton = productCarton_(getCombo_('f-product'));
         var prod = productOption_(getCombo_('f-product'));
         UIC.Calculator.open({
@@ -265,6 +293,7 @@
         if (opts.min != null) attr += ' min="' + opts.min + '"';
         if (opts.step != null) attr += ' step="' + opts.step + '"';
         if (opts.inputmode) attr += ' inputmode="' + opts.inputmode + '"';
+        if (opts.list) attr += ' list="' + esc(opts.list) + '" autocomplete="off"';
         if (opts.disabled) attr += ' disabled';
         return '<input id="' + id + '" class="odoo-input" type="' + (type || 'text') + '" value="' + esc(value) + '"' + (onChange ? ' onchange="' + onChange + '"' : '') + attr + '>';
       }
@@ -316,6 +345,7 @@
           RECIPE_OPTIONS = res.recipe_options || [];
           PRODUCT_OPTIONS = res.product_options || [];
           BATCH_OPTIONS = res.batch_options || [];
+          BYPRODUCT_BATCH_OPTIONS = res.byproduct_batch_options || [];
           ENUMS = res.enums || {};
           WORKCENTER_OPTIONS = res.work_center_options || {};
           if (IS_NEW) {
@@ -544,7 +574,7 @@
         html += '<div class="muted">نوع العملية: ' + esc(order.operation_type || '') + ' | الوردية: ' + esc(order.shift_name || order.shift || '') + ' | التاريخ: ' + esc(order.manufacture_date || '') + '</div>';
         html += '<div>المنتج المنتج: ' + esc(order.produced_product_name || order.produced_product || '') + ' | التصنيف: ' + esc(order.product_category || '') + '</div>';
         html += '<div>كمية الخام الداخلة: ' + fmt3(order.manufactured_qty) + ' | الكمية المتوقعة: ' + fmt3(order.expected_qty) + ' | الكمية الفعلية: ' + fmt3(order.actual_qty) + '</div>';
-        html += '<div>الوصفة: ' + esc(order.recipe_name || order.recipe_id || '') + ' | رقم التشغيلة: ' + esc(order.manufacture_batch || '') + ' | الحالة: ' + esc(order.mo_status || '') + '</div>';
+        html += '<div>الوصفة: ' + esc(order.recipe_name || optLabel_(RECIPE_OPTIONS, order.recipe_id) || order.recipe_id || '') + ' | رقم التشغيلة: ' + esc(order.manufacture_batch || '') + ' | الحالة: ' + esc(order.mo_status || '') + '</div>';
         html += '<div class="sec"><h3>الخامات الداخلة والدفعات المستهلكة</h3>';
         MFG_OUTPUTS.forEach(function (o, i) {
           html += '<h4>' + esc(o.product_name || o.product_id) + ' — الكمية: ' + fmt3(o.qty) + '</h4>';
@@ -561,12 +591,12 @@
         html += '</div>';
         html += '<div class="sec"><h3>مراكز التشغيل</h3><table><thead><tr><th>التسلسل</th><th>مركز التشغيل</th><th>البداية</th><th>النهاية</th><th>الساعات الفعلية</th>' + (canCost() ? '<th>تكلفة المركز</th><th>الإجمالي</th>' : '') + '</tr></thead><tbody>';
         MFG_WORKOPS.forEach(function (wop) {
-          html += '<tr><td>' + esc(wop.work_center_sequence || '') + '</td><td>' + esc(wop.work_center_name || wop.work_center_id || '') + '</td><td>' + (wop.start_time ? fmtDateTime(wop.start_time) : '') + '</td><td>' + (wop.end_time ? fmtDateTime(wop.end_time) : '') + '</td><td>' + fmt3(wop.actual_hours) + '</td>' + (canCost() ? '<td>' + fmt3(wop.work_center_cost) + '</td><td>' + fmt3(wop.total_cost) + '</td>' : '') + '</tr>';
+          html += '<tr><td>' + esc(wop.work_center_sequence || '') + '</td><td>' + esc(wop.work_center_name || workCenterLabel_(wop.work_center_id) || wop.work_center_id || '') + '</td><td>' + (wop.start_time ? fmtDateTime(wop.start_time) : '') + '</td><td>' + (wop.end_time ? fmtDateTime(wop.end_time) : '') + '</td><td>' + fmt3(wop.actual_hours) + '</td>' + (canCost() ? '<td>' + fmt3(wop.work_center_cost) + '</td><td>' + fmt3(wop.total_cost) + '</td>' : '') + '</tr>';
         });
         html += '</tbody></table></div>';
         if (MFG_BYPRODUCTS && MFG_BYPRODUCTS.length) {
           html += '<div class="sec"><h3>المنتجات المرافقة</h3><table><thead><tr><th>الصنف</th><th>الكمية</th>' + (canCost() ? '<th>التكلفة</th>' : '') + '</tr></thead><tbody>';
-          MFG_BYPRODUCTS.forEach(function (b) { html += '<tr><td>' + esc(b.item || '') + '</td><td>' + fmt3(b.qty) + '</td>' + (canCost() ? '<td>' + fmt3(b.total_cost) + '</td>' : '') + '</tr>'; });
+          MFG_BYPRODUCTS.forEach(function (b) { html += '<tr><td>' + esc(optLabel_(PRODUCT_OPTIONS, b.item) || b.item || '') + '</td><td>' + fmt3(b.qty) + '</td>' + (canCost() ? '<td>' + fmt3(b.total_cost) + '</td>' : '') + '</tr>'; });
           html += '</tbody></table></div>';
         }
         html += '<div class="sec"><h3>الإجماليات والاعتمادات</h3>';
@@ -583,6 +613,18 @@
             setTimeout(function () { try { w.print(); } catch (e) {} }, 350);
           }
         });
+      }
+
+      /* id -> label from a {value,label} option list, so the print sheet
+         shows the same names as the form's combos instead of raw ids. */
+      function optLabel_(list, id) {
+        var found = '';
+        if (id === undefined || id === null || id === '') return found;
+        (list || []).forEach(function (o) {
+          var v = (o && o.value !== undefined) ? o.value : o;
+          if (!found && String(v) === String(id)) found = String((o && o.label !== undefined) ? o.label : (o || ''));
+        });
+        return found;
       }
 
       function selList_(list) { return (list || []).map(function (v) { return (v && typeof v === 'object') ? v : { value: v, label: v }; }); }
@@ -661,7 +703,11 @@
       function switchTab(id) {
         ['tab-products', 'tab-work', 'tab-byproduct'].forEach(function (t) {
           var p = document.getElementById(t); if (p) p.classList.toggle('active', t === id);
-          var b = document.querySelector('.odoo-tab[onclick*="' + id + '"]'); if (b) b.classList.toggle('active', t === id);
+          /* Look the button up by THIS tab (t), not the target id — keyed on id,
+             every pass toggled the same button and the last pass cleared it, so
+             the highlight never followed the open tab. */
+          var b = document.querySelector('.odoo-tab[onclick*="\'' + t + '\'"]');
+          if (b) b.classList.toggle('active', t === id);
         });
         /* Candidate only: first open of an inactive tab draws it then. */
         if (mfgFormStateOn_()) {
@@ -1674,9 +1720,9 @@
         if (!wcLabel) wcLabel = String(w.work_center_id || '') || 'غير محدد';
         var canEdit = editable();
         UIC.openModal('vf-workop-notes', {
-          size: 'sm',
+          size: 'md',
           title: 'ملاحظات مركز العمل — ' + wcLabel,
-          body: '<textarea id="wo-notes-modal-ta" class="odoo-input" rows="5" style="resize:vertical;min-height:90px;"' + (canEdit ? '' : ' disabled') + '>' + esc(w.notes || '') + '</textarea>',
+          body: '<textarea id="wo-notes-modal-ta" class="odoo-input" rows="8" style="resize:vertical;min-height:140px;"' + (canEdit ? '' : ' disabled') + '>' + esc(w.notes || '') + '</textarea>',
           footer: canEdit
             ? UIC.button({ text: 'إلغاء', type: 'outline', onClick: 'MFGVIEW_PAGE.closeWorkOpNotes()' }) + ' ' +
               UIC.button({ text: 'حفظ', onClick: 'MFGVIEW_PAGE.saveWorkOpNotes(' + i + ')' })
@@ -1746,21 +1792,24 @@
         };
         var html = '<div class="pc-modes">' + modeBtn('range', 'من — إلى') + modeBtn('minutes', 'مجموع الدقائق') + '</div>';
         if (st.mode === 'range') {
-          html += '<div class="odoo-ro" style="margin-bottom:6px;">أدخل كل فترة توقف (من ساعة إلى ساعة). الفترة التي تتخطى منتصف الليل تُحسب تلقائياً.</div>' +
-            '<div class="pc-row odoo-ro"><span>من</span><span>إلى</span><span>المدة</span><span></span></div>' +
+          html += '<div class="odoo-ro" style="margin-bottom:6px;">أدخل كل فترة توقف (من ساعة إلى ساعة) وسببها. الفترة التي تتخطى منتصف الليل تُحسب تلقائياً. تُضاف الفترات وأسبابها إلى ملاحظات مركز العمل.</div>' +
+            '<div class="pc-row pc-head odoo-ro"><span>من</span><span>إلى</span><span>المدة</span><span class="pc-note">سبب التوقف / ملاحظات</span><span></span></div>' +
             st.rows.map(function (r, k) {
               var m = pcRowMinutes_(r);
               return '<div class="pc-row">' +
                 '<input id="pc-from-' + k + '" class="odoo-input" type="time" value="' + esc(r.from) + '" oninput="MFGVIEW_PAGE.pauseCalcSet(' + k + ',\'from\',this.value)" onchange="MFGVIEW_PAGE.pauseCalcSet(' + k + ',\'from\',this.value)" style="direction:ltr;">' +
                 '<input id="pc-to-' + k + '" class="odoo-input" type="time" value="' + esc(r.to) + '" oninput="MFGVIEW_PAGE.pauseCalcSet(' + k + ',\'to\',this.value)" onchange="MFGVIEW_PAGE.pauseCalcSet(' + k + ',\'to\',this.value)" style="direction:ltr;">' +
                 '<span id="pc-dur-' + k + '" class="odoo-ro">' + (m == null ? '—' : pcFmtMin_(m)) + '</span>' +
+                '<input id="pc-note-' + k + '" class="odoo-input pc-note" type="text" value="' + esc(r.note || '') + '" placeholder="سبب التوقف…" oninput="MFGVIEW_PAGE.pauseCalcSet(' + k + ',\'note\',this.value)">' +
                 (st.rows.length > 1 ? '<button type="button" class="btn btn-ghost" style="padding:2px 6px;font-size:11px;" onclick="MFGVIEW_PAGE.pauseCalcRemove(' + k + ')">✕</button>' : '<span></span>') +
                 '</div>';
             }).join('') +
             '<button type="button" class="btn btn-outline" style="padding:3px 10px;font-size:12px;" onclick="MFGVIEW_PAGE.pauseCalcAdd()">+ فترة توقف</button>';
         } else {
           html += '<label class="odoo-ro" for="pc-minutes" style="display:block;margin-bottom:4px;">عدد الدقائق (يمكن كتابة مجموع مثل 15+20+30)</label>' +
-            '<input id="pc-minutes" class="odoo-input" type="text" inputmode="decimal" value="' + esc(st.minutes) + '" oninput="MFGVIEW_PAGE.pauseCalcSet(-1,\'minutes\',this.value)" style="direction:ltr;">';
+            '<input id="pc-minutes" class="odoo-input" type="text" inputmode="decimal" value="' + esc(st.minutes) + '" oninput="MFGVIEW_PAGE.pauseCalcSet(-1,\'minutes\',this.value)" style="direction:ltr;">' +
+            '<label class="odoo-ro" for="pc-minutes-note" style="display:block;margin:8px 0 4px;">سبب التوقف / ملاحظات</label>' +
+            '<input id="pc-minutes-note" class="odoo-input" type="text" value="' + esc(st.minutesNote || '') + '" placeholder="سبب التوقف…" oninput="MFGVIEW_PAGE.pauseCalcSet(-1,\'minutesNote\',this.value)">';
         }
         return html + '<div id="pc-total" class="pc-total"></div>';
       }
@@ -1788,10 +1837,10 @@
       function openPauseCalc(i) {
         if (!editable() || !MFG_WORKOPS[i]) return;
         var current = Number(MFG_WORKOPS[i].total_pause_duration) || 0;
-        PAUSE_CALC = { i: i, mode: 'range', rows: [{ from: '', to: '' }], minutes: '' };
+        PAUSE_CALC = { i: i, mode: 'range', rows: [{ from: '', to: '', note: '' }], minutes: '', minutesNote: '' };
         var wcLabel = workCenterLabel_(MFG_WORKOPS[i].work_center_id);
         UIC.openModal('vf-pause-calc', {
-          size: 'sm',
+          size: 'lg',
           title: 'حاسبة التوقف (ساعات)' + (wcLabel ? ' — ' + wcLabel : ''),
           body: '<div id="pc-body">' + pcBody_() + '</div>',
           footer: UIC.button({ text: 'إلغاء', type: 'outline', onClick: 'MFGVIEW_PAGE.closePauseCalc()' }) + ' ' +
@@ -1803,12 +1852,12 @@
       function pauseCalcMode(mode) { if (PAUSE_CALC) { PAUSE_CALC.mode = mode; pcRender_(); } }
       function pauseCalcSet(k, field, value) {
         var st = PAUSE_CALC; if (!st) return;
-        if (field === 'minutes') st.minutes = value; else if (st.rows[k]) st.rows[k][field] = value;
+        if (field === 'minutes' || field === 'minutesNote') st[field] = value; else if (st.rows[k]) st.rows[k][field] = value;
         pcPaintTotal_();
       }
       function pauseCalcAdd() {
         if (!PAUSE_CALC) return;
-        PAUSE_CALC.rows.push({ from: '', to: '' });
+        PAUSE_CALC.rows.push({ from: '', to: '', note: '' });
         pcRender_();
         var el = document.getElementById('pc-from-' + (PAUSE_CALC.rows.length - 1)); if (el) el.focus();
       }
@@ -1828,11 +1877,38 @@
         var el = document.getElementById('wo-pause-' + st.i);
         var base = addToCurrent ? (Number(MFG_WORKOPS[st.i] && MFG_WORKOPS[st.i].total_pause_duration) || 0) : 0;
         var hours = Math.round((base + mins / 60) * 100) / 100;
+        var noteText = pcNotesText_(st, mins);
+        var wi = st.i;
         closePauseCalc();
+        /* The stop periods and their causes are appended to the row's notes,
+           which save with the MO like a note typed in the notes dialog. */
+        if (noteText && MFG_WORKOPS[wi]) {
+          var prev = String(MFG_WORKOPS[wi].notes || '').replace(/\s+$/, '');
+          MFG_WORKOPS[wi].notes = prev ? prev + '\n' + noteText : noteText;
+        }
         if (el) {
           el.value = hours;
           try { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); } catch (e) {}
         }
+        if (noteText) redrawWorkOpsKeepingFocus_();
+      }
+      /* One line per valid stop period: «توقف من 10:00 إلى 10:30 (30 د) — السبب»,
+         plus a total line when there is more than one period. */
+      function pcNotesText_(st, mins) {
+        var lines = [];
+        if (st.mode === 'minutes') {
+          var mNote = String(st.minutesNote || '').trim();
+          lines.push('توقف ' + pcFmtMin_(mins) + (mNote ? ' — ' + mNote : ''));
+          return lines.join('\n');
+        }
+        st.rows.forEach(function (r) {
+          var m = pcRowMinutes_(r);
+          if (m == null) return;
+          var note = String(r.note || '').trim();
+          lines.push('توقف من ' + r.from + ' إلى ' + r.to + ' (' + pcFmtMin_(m) + ')' + (note ? ' — ' + note : ''));
+        });
+        if (lines.length > 1) lines.push('إجمالي التوقف: ' + pcFmtMin_(mins) + ' = ' + pcHours_(mins) + ' ساعة');
+        return lines.join('\n');
       }
 
       /* The same treatment as the notes cell: the row keeps a compact button
@@ -1901,15 +1977,18 @@
             : (function () { var nm = ''; (PRODUCT_OPTIONS || []).forEach(function (p) { if (String(p.value) === String(b.item)) nm = p.label; }); return esc(nm || b.item) || '<span class="odoo-ro">—</span>'; })();
           return '<tr>' +
             '<td data-label="' + BYPROD_COLS[0] + '">' + bpCell + '</td>' +
-            '<td data-label="' + BYPROD_COLS[1] + '">' + inputHtml('bp-qty-' + i, b.qty, 'number', 'MFGVIEW_PAGE.setByproduct(' + i + ',\'qty\',this.value)', { min: '0', step: '0.01', disabled: !editable() }) + '</td>' +
-            '<td data-label="' + BYPROD_COLS[2] + '">' + inputHtml('bp-batch-' + i, b.manufacture_internal_batch || '', 'text', 'MFGVIEW_PAGE.setByproduct(' + i + ',\'manufacture_internal_batch\',this.value)', { disabled: !editable() }) + '</td>' +
+            '<td data-label="' + BYPROD_COLS[1] + '">' + inlineCalc_(inputHtml('bp-qty-' + i, b.qty, 'number', 'MFGVIEW_PAGE.setByproduct(' + i + ',\'qty\',this.value)', { min: '0', step: '0.01', disabled: !editable() }), 'MFGVIEW_PAGE.openCalc(\'bp-qty-' + i + '\')', 'حاسبة كمية المنتج الثانوي') + '</td>' +
+            '<td data-label="' + BYPROD_COLS[2] + '">' + inputHtml('bp-batch-' + i, b.manufacture_internal_batch || '', 'text', 'MFGVIEW_PAGE.setByproduct(' + i + ',\'manufacture_internal_batch\',this.value)', { disabled: !editable(), list: 'bp-batch-options' }) + '</td>' +
             (editable() ? '<td data-label="' + BYPROD_COLS[3] + '"><button class="btn btn-ghost" style="padding:2px 6px;font-size:11px;" onclick="MFGVIEW_PAGE.removeByproduct(' + i + ')">✕</button></td>' : '<td data-label="' + BYPROD_COLS[3] + '"></td>') +
             '</tr>';
         }).join('');
         var addBtn = editable() ? '<button class="btn btn-outline" style="margin-top:8px;" onclick="MFGVIEW_PAGE.addByproduct()">+ منتج ثانوي</button>' : '';
+        /* Suggestions for «رقم التشغيلة الداخلية»: values already used in the
+           by-product sheet, as f-batch-options does for the header batch. */
         tb.innerHTML = (MFG_BYPRODUCTS.length
           ? '<table class="odoo-table card-table"><thead><tr><th>' + BYPROD_COLS[0] + '</th><th>' + BYPROD_COLS[1] + '</th><th>' + BYPROD_COLS[2] + '</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>'
-          : '<div class="odoo-ro">لا توجد منتجات ثانوية</div>') + addBtn;
+          : '<div class="odoo-ro">لا توجد منتجات ثانوية</div>') + addBtn +
+          UIC.datalist('bp-batch-options', BYPRODUCT_BATCH_OPTIONS);
         if (editable()) {
           MFG_BYPRODUCTS.forEach(function (bb, bi) {
             var el = document.getElementById('bp-item-' + bi);
@@ -2249,12 +2328,12 @@
               if (fastScopedSave && (payload.save_scope.indexOf('byproducts') !== -1)) drawByproducts();
               renderKpi();
               if (fastScopedSave) return;
-              if (window.confirm('تم الحفظ. هل تريد الانتقال إلى تبويب ورديات التشغيل (البدء/الإيقاف) الآن؟')) { switchTab('workops'); }
+              if (window.confirm('تم الحفظ. هل تريد الانتقال إلى تبويب ورديات التشغيل (البدء/الإيقاف) الآن؟')) { switchTab('tab-work'); }
               return;
             }
             if (fs && submission) fs.setControlsEnabled('vf-root', true);
             load(true);
-            if (window.confirm('تم حفظ أمر التصنيع. هل تريد إدخال بيانات التشغيل (الخطوات/الدفعات) الآن؟')) { switchTab('workops'); }
+            if (window.confirm('تم حفظ أمر التصنيع. هل تريد إدخال بيانات التشغيل (الخطوات/الدفعات) الآن؟')) { switchTab('tab-work'); }
           })
           .catch(function (e) { try { console.error('[MFGVIEW][save] FAILED:', (e && e.message) || e); } catch (eLog3) {}
             /* Candidate: a rejection restores editability without discarding

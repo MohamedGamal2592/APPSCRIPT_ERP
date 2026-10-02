@@ -870,7 +870,9 @@
      "route": "company_action",
      "company": "37fc50edf1424abd",
      "action": "get_et_purchasing_headers",
-     "data": {},
+     "data": {
+      "loadAll": true
+     },
      "read": true,
      "kind": "SHEETS"
     }
@@ -887,7 +889,9 @@
     },
     {
      "action": "get_et_purchasing_headers",
-     "data": {}
+     "data": {
+      "loadAll": true
+     }
     }
    ],
    "reason": "1 first-wave read(s) + stamps"
@@ -960,7 +964,9 @@
      "route": "company_action",
      "company": "37fc50edf1424abd",
      "action": "get_et_sales_headers",
-     "data": {},
+     "data": {
+      "loadAll": true
+     },
      "read": true,
      "kind": "SHEETS"
     }
@@ -977,7 +983,9 @@
     },
     {
      "action": "get_et_sales_headers",
-     "data": {}
+     "data": {
+      "loadAll": true
+     }
     }
    ],
    "reason": "1 first-wave read(s) + stamps"
@@ -1010,7 +1018,9 @@
      "route": "company_action",
      "company": "37fc50edf1424abd",
      "action": "get_et_sales_offer_headers",
-     "data": {},
+     "data": {
+      "loadAll": true
+     },
      "read": true,
      "kind": "SHEETS"
     }
@@ -1027,7 +1037,9 @@
     },
     {
      "action": "get_et_sales_offer_headers",
-     "data": {}
+     "data": {
+      "loadAll": true
+     }
     }
    ],
    "reason": "1 first-wave read(s) + stamps"
@@ -1652,7 +1664,9 @@
      "route": "company_action",
      "company": "37fc50edf1424abd",
      "action": "get_et_manufacture_headers",
-     "data": {},
+     "data": {
+      "loadAll": true
+     },
      "read": true,
      "kind": "SHEETS"
     }
@@ -1669,7 +1683,9 @@
     },
     {
      "action": "get_et_manufacture_headers",
-     "data": {}
+     "data": {
+      "loadAll": true
+     }
     }
    ],
    "reason": "1 first-wave read(s) + stamps"

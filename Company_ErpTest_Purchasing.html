@@ -75,9 +75,9 @@
     renderList();
   }
 
-  var LOADED_ALL = false;
-  function toggleLoadAll() { LOADED_ALL = !LOADED_ALL; renderList(); }
-
+  /* Like et_products / et_customers: the whole list is read once and
+     UIC.dataTable pages it 50 rows at a time, so search, sort and the pager
+     all work over every record. */
   function renderList(quiet) {
     /* [live-notice] the view on screen */
     if (UIC.Live.setView) UIC.Live.setView('list', { refresh: function () { renderList(true); }, loading: true });
@@ -86,13 +86,13 @@
       'جاري استرجاع الموردين والتكاليف...',
       'لحظة، جاري تجهيز جدول المشتريات...'
     ] });
-    companyCall('get_et_purchasing_headers', LOADED_ALL ? { loadAll: true } : {})
+    companyCall('get_et_purchasing_headers', { loadAll: true })
       .then(function (r) {
         /* Phase 2.1: options no longer ride along with the list — see
          * ensureOptions(). Still honoured if a response happens to carry them. */
         if (r.options) __options = r.options;
         __headers = r.headers || [];
-        renderHeadersTable(); try{schedulePrefetch();}catch(e){};
+        UIC.keepTableView('purchasing-table', renderHeadersTable); try{schedulePrefetch();}catch(e){};
       })
       .catch(function (e) { showError(e); })
       .finally(function () { if (!quiet) UI.hideSpinner(); });
@@ -149,13 +149,7 @@
     });
     content.innerHTML = '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;">' +
       '<button class="btn btn-primary" onclick="openForm(\'\')">+ إضافة عملية شراء</button></div>' +
-      UIC.showAllBar({ loadedAll: LOADED_ALL, showAll: 'toggleLoadAll()', showLatest: 'toggleLoadAll()' }) +
       UIC.dataTable('purchasing-table', {
-        /* [RT-1] The list endpoint caps at the newest rows unless `loadAll` is
-           passed, and the search box filters only what is in memory — so the
-           table says which records the box actually searches. */
-        truncated: !LOADED_ALL,
-        showAll: 'toggleLoadAll()',
         title: 'المشتريات',
         headers: [
           { key: 'code', label: 'الكود' },
@@ -216,26 +210,26 @@
         { key: 'tax_system', label: 'النظام الضريبي', type: 'select', options: [{ value: 'true', label: 'نعم' }, { value: 'false', label: 'لا' }], default: 'false' },
         { key: 'receipt_date', label: 'تاريخ الاستلام *', type: 'date', required: true, default: 'today' },
         { key: 'items', label: 'الأصناف', type: 'text' },
-        { key: 'type', label: 'النوع', type: 'select', options: ['بيع', 'تصنيع', 'اصول منشأة'] },
-        { key: 'shipping_type', label: 'نوع الشحن', type: 'select', options: ['CIF', 'FOB', 'C&F', 'محلي'] },
-        { key: 'supplier_name', label: 'المورد', type: 'select', options: o.supplier_options || [] },
-        { key: 'currency', label: 'العملة', type: 'select', options: o.currency_options || [], default: 'EGP' },
-        { key: 'exchange_rate', label: 'سعر الصرف', type: 'number', default: 1 },
+        { key: 'type', label: 'النوع', type: 'select', required: true, options: ['بيع', 'تصنيع', 'اصول منشأة'] },
+        { key: 'shipping_type', label: 'نوع الشحن', type: 'select', required: true, options: ['CIF', 'FOB', 'C&F', 'محلي'] },
+        { key: 'supplier_name', label: 'المورد', type: 'select', required: true, options: o.supplier_options || [] },
+        { key: 'currency', label: 'العملة', type: 'select', required: true, options: o.currency_options || [], default: 'EGP' },
+        { key: 'exchange_rate', label: 'سعر الصرف', type: 'number', required: true, default: 1 },
         { key: 'value', label: 'القيمة (Value) *', type: 'number', required: true }
       ]},
-      { title: 'التكاليف والمصاريف', fields: [
-        { key: 'cif_insurance_value', label: 'قيمة التأمين (CIF)', type: 'number' },
-        { key: 'importation_reprice', label: 'إعادة تسعير الاستيراد', type: 'number' },
-        { key: 'tax_declared_value', label: 'القيمة الضريبية المعلنة', type: 'number' },
-        { key: 'administrative_expenses', label: 'مصاريف إدارية', type: 'number' },
-        { key: 'customs_expenses', label: 'مصاريف جمركية', type: 'number' },
-        { key: 'unloading_expenses', label: 'مصاريف تفريغ', type: 'number' },
-        { key: 'bank_commission', label: 'عمولة البنك', type: 'number' },
-        { key: 'customs_clearance', label: 'تخليص جمركي ومينائي', type: 'number' },
-        { key: 'additional_fees', label: 'رسوم إضافية', type: 'number' },
-        { key: 'clearance_expenses', label: 'مصاريف تخليص', type: 'number' },
-        { key: 'other_expenses', label: 'مصاريف أخرى', type: 'number' },
-        { key: 'internal_cost_adjustment', label: 'تسوية التكلفة الداخلية', type: 'number' }
+      { title: 'التكاليف والمصاريف', open: true, fields: [
+        { key: 'cif_insurance_value', label: 'قيمة التأمين (CIF)', type: 'number', required: true },
+        { key: 'importation_reprice', label: 'إعادة تسعير الاستيراد', type: 'number', required: true },
+        { key: 'tax_declared_value', label: 'القيمة الضريبية المعلنة', type: 'number', required: true },
+        { key: 'administrative_expenses', label: 'مصاريف إدارية', type: 'number', required: true },
+        { key: 'customs_expenses', label: 'مصاريف جمركية', type: 'number', required: true },
+        { key: 'unloading_expenses', label: 'مصاريف تفريغ', type: 'number', required: true },
+        { key: 'bank_commission', label: 'عمولة البنك', type: 'number', required: true },
+        { key: 'customs_clearance', label: 'تخليص جمركي ومينائي', type: 'number', required: true },
+        { key: 'additional_fees', label: 'رسوم إضافية', type: 'number', required: true },
+        { key: 'clearance_expenses', label: 'مصاريف تخليص', type: 'number', required: true },
+        { key: 'other_expenses', label: 'مصاريف أخرى', type: 'number', required: true },
+        { key: 'internal_cost_adjustment', label: 'تسوية التكلفة الداخلية', type: 'number', required: true }
       ]},
       { title: 'الضرائب وأخرى', fields: [
         { key: 'purchase_tax', label: 'ضريبة الشراء', type: 'number' },
@@ -252,13 +246,15 @@
     if (v !== null && v !== undefined && v !== '') return v;
     if (s.type === 'date' && s.default === 'today') return formatDate(new Date());
     if (s.default !== undefined && s.default !== null) return s.default;
-    return s.type === 'number' ? 0 : '';
+    /* A mandatory number starts blank on a new record so it has to be typed
+       (0 is accepted); optional numbers keep defaulting to 0. */
+    return s.type === 'number' && !s.required ? 0 : '';
   }
 
   function renderField(s, record) {
     var v = fieldValue(s, record);
     if (s.type === 'select') {
-      return UIC.field({ key: s.key, label: s.label, type: 'select', options: s.options, value: v });
+      return UIC.field({ key: s.key, label: s.label, type: 'select', options: s.options, value: v, required: !!s.required });
     }
     if (s.type === 'date') {
       return UIC.field({ key: s.key, label: s.label, type: 'date', value: v, required: !!s.required });
@@ -283,24 +279,36 @@
       '<button class="btn btn-outline" onclick="showList()">← عودة</button>' +
       '<h2 style="margin:0;">' + (record ? 'تعديل عملية شراء' : 'إضافة عملية شراء') + '</h2></div>' +
       '<form id="purchasing-form">' +
-      '<div style="display:flex;flex-wrap:wrap;gap:24px;padding:16px;background:var(--bg-surface);border:1px solid var(--border-color);border-radius:8px;margin-bottom:16px;">' +
-      '<div>قيمة بناءً على الفاتورة: <strong id="value_based_on_invoice_display">0</strong></div>' +
-      '<div>إجمالي التكاليف: <strong id="total_costs_display">0</strong></div>' +
-      '<div>مجموع تكاليف الأصناف: <strong id="lines_total_display">0</strong></div>' +
-      '<div>قيمة البيع: <strong id="sales_value_display">0</strong></div>' +
-      '<div>نوع الضريبة: <strong id="tax_type_display">-</strong></div>' +
-      '<div>ضريبة المبيعات: <strong id="sales_tax_display">0</strong></div>' +
-      '<div>الشهر: <strong id="month_display">-</strong></div>' +
-      '<div>السنة: <strong id="year_display">-</strong></div>' +
-      '<div id="reconcile_warning" style="flex-basis:100%;color:var(--danger);font-weight:700;display:none;">⚠ مجموع تكاليف الأصناف لا يساوي إجمالي التكاليف</div>' +
+      /* The sheet's calculated columns (tlDerivePurchasingHeader_), shown live
+         for reference and for the lines-vs-total check. */
+      '<div style="padding:16px;background:var(--bg-surface);border:1px solid var(--border-color);border-radius:8px;margin-bottom:16px;">' +
+      '<div style="font-weight:700;margin-bottom:10px;">حسابات الشيت (للمراجعة)</div>' +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px 24px;">' +
+      calcCell('القيمة بناءً على الفاتورة', 'value_based_on_invoice_display', 'القيمة × سعر الصرف') +
+      calcCell('مجموع المصاريف', 'expenses_display', 'إدارية + جمركية + تفريغ + عمولة البنك + تخليص جمركي ومينائي + رسوم إضافية + تخليص + أخرى') +
+      calcCell('إضافات غير البيع', 'non_sale_extra_display', 'تسوية التكلفة الداخلية + ضريبة الشراء (لغير نوع «بيع»)') +
+      calcCell('إجمالي التكاليف', 'total_costs_display', 'القيمة بناءً على الفاتورة + المصاريف + الإضافات') +
+      calcCell('مجموع إجمالي الأصناف', 'lines_total_display', 'مجموع عمود الإجمالي في الأصناف') +
+      calcCell('الفرق', 'diff_display', 'إجمالي التكاليف − مجموع الأصناف') +
+      calcCell('قيمة البيع', 'sales_value_display', 'لنوع «بيع»: إجمالي التكاليف × 103% مقربة لأقرب 100') +
+      calcCell('نوع الضريبة', 'tax_type_display', 'ضريبة الشراء ÷ (إعادة التسعير + المصاريف الجمركية)؛ ≥ 8% ← 14%') +
+      calcCell('ضريبة المبيعات', 'sales_tax_display', 'قيمة البيع × 14% إذا نوع الضريبة > 6%') +
+      calcCell('نسبة تأمين CIF', 'cif_rate_display', '(قيمة التأمين − القيمة) ÷ القيمة، للشحن CIF') +
+      calcCell('الشهر', 'month_display', 'من تاريخ الاستلام') +
+      calcCell('السنة', 'year_display', 'من تاريخ الاستلام') +
+      '</div>' +
+      '<div id="reconcile_status" style="margin-top:12px;font-weight:700;"></div>' +
       '</div>' +
       sectionsHtml +
       '</form>' +
       '<h3 style="margin-top:20px;">الأصناف</h3>' +
       '<div class="table-wrap">' +
       '<table id="lines-table" class="table" style="min-width:900px;"><thead><tr>' +
-      '<th>المنتج</th><th>الكمية</th><th>سعر الوحدة</th><th>تكاليف أخرى</th><th>سعر البيع</th><th>نوع الحركة</th><th>الإجمالي</th>' + (__canEdit ? '<th></th>' : '') +
-      '</tr></thead><tbody id="lines-tbody"></tbody></table>' +
+      '<th>المنتج *</th><th>الكمية *</th><th>سعر الوحدة *</th><th>تكاليف أخرى *</th><th>سعر البيع *</th><th>نوع الحركة *</th><th>الإجمالي</th>' +
+      '<th title="الإجمالي ÷ الكمية">تكلفة الوحدة</th><th title="الكمية × سعر الوحدة + تكاليف أخرى ÷ سعر الصرف">التكلفة بالعملة</th><th title="سعر البيع × الكمية">إجمالي البيع</th>' +
+      (__canEdit ? '<th></th>' : '') +
+      '</tr></thead><tbody id="lines-tbody"></tbody>' +
+      '<tfoot><tr style="font-weight:700;"><td colspan="6">مجموع الإجمالي / إجمالي التكاليف</td><td id="lines_total_foot"></td><td colspan="' + (__canEdit ? 4 : 3) + '" id="lines_total_vs"></td></tr></tfoot></table>' +
       '</div>' +
       (__canEdit ? '<div style="margin:12px 0;"><button class="btn btn-outline" onclick="addLine()">+ إضافة صنف</button></div>' : '') +
       '<div style="margin:16px 0;">' + (__canEdit ? '<button class="btn btn-primary" onclick="savePurchasing()">حفظ</button> ' : '') +
@@ -327,9 +335,9 @@
   }
 
   function attachCalcListeners() {
-    ['value','exchange_rate','type','tax_type','receipt_date','administrative_expenses','customs_expenses',
+    ['value','exchange_rate','type','shipping_type','receipt_date','administrative_expenses','customs_expenses',
      'unloading_expenses','bank_commission','customs_clearance','additional_fees','clearance_expenses',
-     'other_expenses','internal_cost_adjustment'].forEach(function (k) {
+     'other_expenses','internal_cost_adjustment','purchase_tax','importation_reprice','cif_insurance_value'].forEach(function (k) {
       var el = document.getElementById(k);
       if (el) { el.addEventListener('input', recalc); el.addEventListener('change', recalc); }
     });
@@ -349,17 +357,20 @@
             return '<option value="' + p.value + '"' + (String(p.value) === String(l.product) ? ' selected' : '') + '>' + FMT.escape(p.label) + '</option>';
           }).join('') +
           '</select></td>' +
-        '<td><input class="input" type="number" min="0" step="any" value="' + (l.qty != null ? l.qty : '') + '" oninput="updateLineInput(' + i + ', \'qty\', this.value)"></td>' +
-        '<td><input class="input" type="number" min="0" step="any" value="' + (l.unit_price != null ? l.unit_price : '') + '" oninput="updateLineInput(' + i + ', \'unit_price\', this.value)"></td>' +
-        '<td><input class="input" type="number" min="0" step="any" value="' + (l.other_cost != null ? l.other_cost : '') + '" oninput="updateLineInput(' + i + ', \'other_cost\', this.value)"></td>' +
-        '<td><input class="input" type="number" min="0" step="any" value="' + (l.sales_value != null ? l.sales_value : '') + '" oninput="updateLineInput(' + i + ', \'sales_value\', this.value)"></td>' +
+        lineNumInput(i, 'qty', l.qty) +
+        lineNumInput(i, 'unit_price', l.unit_price) +
+        lineNumInput(i, 'other_cost', l.other_cost) +
+        lineNumInput(i, 'sales_value', l.sales_value) +
         '<td><select id="movement_type_' + i + '" class="input" onchange="updateLineSelect(' + i + ', \'movement_type\', this.value)">' +
           '<option value="">اختر...</option>' +
           (opts.movement_type_options || []).map(function (o) {
             return '<option value="' + FMT.escape(o.fifth) + '"' + (String(o.fifth) === String(l.movement_type) ? ' selected' : '') + '>' + FMT.escape(o.code) + '</option>';
           }).join('') +
           '</select></td>' +
-        '<td id="total_cost_' + i + '"></td>' +
+        '<td id="total_cost_' + i + '" style="font-weight:700;"></td>' +
+        '<td id="unit_cost_' + i + '"></td>' +
+        '<td id="cost_currency_' + i + '"></td>' +
+        '<td id="sales_value_amount_' + i + '"></td>' +
         (__canEdit ? '<td><button class="btn btn-outline" style="padding:4px 10px;" onclick="removeLine(' + i + ')">حذف</button></td>' : '') +
         '</tr>';
     }
@@ -377,8 +388,19 @@
     return (__options.product_options || []).filter(function (p) { return !chosen[String(p.value)]; });
   }
 
+  function lineNumInput(i, key, v) {
+    return '<td><input id="' + key + '_' + i + '" class="input" type="number" min="0" step="any" required value="' + (v != null ? v : '') + '" oninput="updateLineInput(' + i + ', \'' + key + '\', this.value)"></td>';
+  }
+
+  function calcCell(label, id, formula) {
+    return '<div title="' + FMT.escape(formula) + '"><div style="font-size:12px;color:var(--text-muted);">' + label + '</div>' +
+      '<strong id="' + id + '">-</strong>' +
+      '<div style="font-size:11px;color:var(--text-muted);">' + FMT.escape(formula) + '</div></div>';
+  }
+
+  /* Mandatory numbers start blank (0 is accepted once typed). */
   function addLine() {
-    __lines.push({ product: '', qty: 0, unit_price: 0, other_cost: 0, sales_value: 0, movement_type: '' });
+    __lines.push({ product: '', qty: '', unit_price: '', other_cost: '', sales_value: '', movement_type: '' });
     renderLines();
   }
 
@@ -389,6 +411,8 @@
 
   function updateLineInput(i, key, value) {
     __lines[i][key] = value;
+    var el = document.getElementById(key + '_' + i);
+    if (el) el.style.borderColor = '';
     recalc();
   }
 
@@ -397,45 +421,113 @@
     renderLines();
   }
 
+  /* Mirrors the sheet's calculated columns (tlDerivePurchasingHeader_ /
+     tlDerivePurchasingLine_ in Company_ErpTest_Actions.js) — keep in step. */
+  function num0(v) { return Math.max(0, num(v)); }
+
+  function lineCalc(l, rate) {
+    var qty = num0(l.qty), price = num0(l.unit_price), other = num0(l.other_cost), r = num0(rate);
+    var total = qty * price * r + other;
+    return {
+      total: total,
+      unitCost: qty > 0 ? total / qty : 0,
+      costCurrency: qty * price + other / (r || 1),
+      salesAmount: num0(l.sales_value) * qty
+    };
+  }
+
+  function headerCalc(h) {
+    var value = num0(h.value), rate = num0(h.exchange_rate);
+    var vbi = value * rate;
+    var expenses = num0(h.administrative_expenses) + num0(h.customs_expenses) + num0(h.unloading_expenses) +
+      num0(h.bank_commission) + num0(h.customs_clearance) + num0(h.additional_fees) +
+      num0(h.clearance_expenses) + num0(h.other_expenses);
+    var isSale = String(h.type || '').trim() === 'بيع';
+    var nonSaleExtra = isSale ? 0 : num0(h.internal_cost_adjustment) + num0(h.purchase_tax);
+    var totalCosts = vbi + expenses + nonSaleExtra;
+    var denom = num0(h.importation_reprice) + num0(h.customs_expenses);
+    var taxType = '';
+    if (denom > 0) { var ratio = num0(h.purchase_tax) / denom; taxType = ratio >= 0.08 ? 0.14 : ratio; }
+    var salesValue = isSale ? Math.round((totalCosts * 103 / 100) / 100) * 100 : 0;
+    var salesTax = (taxType !== '' && taxType > 0.06) ? salesValue * 14 / 100 : 0;
+    var cifRate = (String(h.shipping_type || '').trim() === 'CIF' && value > 0) ? (num0(h.cif_insurance_value) - value) / value : '';
+    return { vbi: vbi, expenses: expenses, nonSaleExtra: nonSaleExtra, totalCosts: totalCosts,
+      taxType: taxType, salesValue: salesValue, salesTax: salesTax, cifRate: cifRate };
+  }
+
+  var LINE_REQUIRED = [['product', 'المنتج'], ['qty', 'الكمية'], ['unit_price', 'سعر الوحدة'], ['other_cost', 'تكاليف أخرى'],
+    ['sales_value', 'سعر البيع'], ['movement_type', 'نوع الحركة']];
+
+  /* Marks every bad line cell and returns the first message, or '' when the lines are valid. */
+  function validateLines(rate) {
+    var first = '';
+    var blank = function (v) { return String(v == null ? '' : v).trim() === ''; };
+    (__lines || []).forEach(function (l, i) {
+      var n = ' (الصنف ' + (i + 1) + ')';
+      LINE_REQUIRED.forEach(function (f) {
+        var bad = blank(l[f[0]]) || (f[0] === 'qty' && !(Number(l.qty) > 0));
+        var el = document.getElementById(f[0] + '_' + i);
+        if (el) el.style.borderColor = bad ? 'var(--danger)' : '';
+        if (bad && !first) first = (f[0] === 'qty' && !blank(l.qty) ? 'الكمية يجب أن تكون أكبر من صفر' : f[1] + ' مطلوب') + n;
+      });
+      var totBad = !(lineCalc(l, rate).total > 0);
+      var tEl = document.getElementById('total_cost_' + i);
+      if (tEl) tEl.style.color = totBad ? 'var(--danger)' : '';
+      if (totBad && !first) first = 'الإجمالي يجب أن يكون أكبر من صفر' + n;
+    });
+    return first;
+  }
+
   function recalc() {
     var headerRate = num(getVal('exchange_rate'));
 
     var lineSum = 0;
     (__lines || []).forEach(function (l, i) {
-      var tc = num(l.qty) * num(l.unit_price) * headerRate + num(l.other_cost);
-      lineSum += tc;
-      setText('total_cost_' + i, FMT.number(tc));
+      var c = lineCalc(l, headerRate);
+      lineSum += c.total;
+      setText('total_cost_' + i, FMT.number(c.total));
+      setText('unit_cost_' + i, FMT.number(c.unitCost));
+      setText('cost_currency_' + i, FMT.number(c.costCurrency));
+      setText('sales_value_amount_' + i, FMT.number(c.salesAmount));
     });
     setText('lines_total_display', FMT.number(lineSum));
+    setText('lines_total_foot', FMT.number(lineSum));
 
-    var value = num(getVal('value'));
-    var vbi = value * headerRate;
-    setText('value_based_on_invoice_display', FMT.number(vbi));
-
-    var expenses = num(getVal('administrative_expenses')) + num(getVal('customs_expenses')) +
-      num(getVal('unloading_expenses')) + num(getVal('bank_commission')) + num(getVal('customs_clearance')) +
-      num(getVal('additional_fees')) + num(getVal('clearance_expenses')) + num(getVal('other_expenses'));
-    var type = getVal('type');
-    var totalCosts = vbi + expenses + (type === 'بيع' ? 0 : num(getVal('internal_cost_adjustment')) + num(getVal('purchase_tax')));
+    var h = headerCalc({
+      value: getVal('value'), exchange_rate: getVal('exchange_rate'), type: getVal('type'),
+      shipping_type: getVal('shipping_type'), cif_insurance_value: getVal('cif_insurance_value'),
+      administrative_expenses: getVal('administrative_expenses'), customs_expenses: getVal('customs_expenses'),
+      unloading_expenses: getVal('unloading_expenses'), bank_commission: getVal('bank_commission'),
+      customs_clearance: getVal('customs_clearance'), additional_fees: getVal('additional_fees'),
+      clearance_expenses: getVal('clearance_expenses'), other_expenses: getVal('other_expenses'),
+      internal_cost_adjustment: getVal('internal_cost_adjustment'), purchase_tax: getVal('purchase_tax'),
+      importation_reprice: getVal('importation_reprice')
+    });
+    var totalCosts = h.totalCosts;
+    setText('value_based_on_invoice_display', FMT.number(h.vbi));
+    setText('expenses_display', FMT.number(h.expenses));
+    setText('non_sale_extra_display', FMT.number(h.nonSaleExtra));
     setText('total_costs_display', FMT.number(totalCosts));
 
-    var mismatch = Math.abs(lineSum - totalCosts) > 0.01;
-    var lcEl = document.getElementById('lines_total_display');
-    var tcEl = document.getElementById('total_costs_display');
-    var warnEl = document.getElementById('reconcile_warning');
-    if (lcEl) lcEl.style.color = mismatch ? 'var(--danger)' : '';
-    if (tcEl) tcEl.style.color = mismatch ? 'var(--danger)' : '';
-    if (warnEl) warnEl.style.display = mismatch ? '' : 'none';
+    var diff = totalCosts - lineSum;
+    var mismatch = Math.abs(diff) > 0.01;
+    var noLines = !(__lines || []).length;
+    setText('diff_display', FMT.number(diff));
+    ['lines_total_display', 'total_costs_display', 'diff_display', 'lines_total_foot'].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) el.style.color = mismatch ? 'var(--danger)' : 'var(--success)';
+    });
+    var statusMsg = noLines ? '⚠ يجب إضافة صنف واحد على الأقل'
+      : mismatch ? '⚠ مجموع إجمالي الأصناف (' + FMT.number(lineSum) + ') لا يساوي إجمالي التكاليف (' + FMT.number(totalCosts) + ') — الفرق ' + FMT.number(diff)
+      : '✓ مجموع إجمالي الأصناف يساوي إجمالي التكاليف';
+    var stEl = document.getElementById('reconcile_status');
+    if (stEl) { stEl.textContent = statusMsg; stEl.style.color = (noLines || mismatch) ? 'var(--danger)' : 'var(--success)'; }
+    setText('lines_total_vs', mismatch ? '≠ ' + FMT.number(totalCosts) + ' (الفرق ' + FMT.number(diff) + ')' : '= ' + FMT.number(totalCosts) + ' ✓');
 
-    var salesValue = type === 'بيع' ? Math.round((totalCosts * 103 / 100) / 100) * 100 : 0;
-    setText('sales_value_display', FMT.number(salesValue));
-
-    var purchaseTax = num(getVal('purchase_tax'));
-    var denom = num(getVal('importation_reprice')) + num(getVal('customs_expenses'));
-    var taxType = denom > 0 ? (purchaseTax / denom >= 0.08 ? 0.14 : purchaseTax / denom) : '';
-    setText('tax_type_display', taxType === '' ? '-' : taxType);
-    var salesTax = (taxType === '' || num(taxType) > 0.06) ? salesValue * 14 / 100 : 0;
-    setText('sales_tax_display', FMT.number(salesTax));
+    setText('sales_value_display', FMT.number(h.salesValue));
+    setText('tax_type_display', h.taxType === '' ? '-' : (Math.round(h.taxType * 10000) / 100) + '%');
+    setText('sales_tax_display', FMT.number(h.salesTax));
+    setText('cif_rate_display', h.cifRate === '' ? '-' : (Math.round(h.cifRate * 10000) / 100) + '%');
 
     var d = new Date(getVal('receipt_date'));
     if (!isNaN(d.getTime())) {
@@ -466,21 +558,27 @@
     var btn = document.querySelector('#purchasing-form .btn-primary') || document.querySelector('.btn-primary');
     UI.submitOnce(btn, function () {
       var data = UIC.collectForm('purchasing-form');
-      if (!UIC.validateForm('purchasing-form')) return Promise.reject();
+      var formOk = UIC.validateForm('purchasing-form');
       var header = {};
       HEADER_KEYS.forEach(function (k) { header[k] = data[k] !== undefined ? data[k] : ''; });
-      if (String(header.code || '').trim() === '') { UIC.toast('الكود (Code) مطلوب', 'error'); return Promise.reject(); }
-      if (String(header.value || '').trim() === '') { UIC.toast('قيمة الفاتورة (Value) مطلوبة', 'error'); return Promise.reject(); }
+      var fail = function (msg) { UIC.toast(msg, 'error'); return Promise.reject(); };
+      var missing = headerSections().reduce(function (acc, sec) { return acc.concat(sec.fields); }, [])
+        .filter(function (s) { return s.required && String(header[s.key] == null ? '' : header[s.key]).trim() === ''; });
+      if (!formOk || missing.length) {
+        return fail('حقول مطلوبة: ' + missing.map(function (s) { return s.label.replace(/\s*\*$/, ''); }).join('، '));
+      }
+      if (!(Number(header.exchange_rate) > 0)) return fail('سعر الصرف يجب أن يكون أكبر من صفر');
 
       var rate = num(header.exchange_rate);
+      if (!(__lines || []).length) return fail('يجب إضافة صنف واحد على الأقل');
+      var lineErr = validateLines(rate);
+      if (lineErr) return fail(lineErr);
       var lineSum = 0;
-      (__lines || []).forEach(function (l) { lineSum += num(l.qty) * num(l.unit_price) * rate + num(l.other_cost); });
-      var vbi = num(header.value) * rate;
-      var expenses = num(header.administrative_expenses) + num(header.customs_expenses) + num(header.unloading_expenses) +
-        num(header.bank_commission) + num(header.customs_clearance) + num(header.additional_fees) +
-        num(header.clearance_expenses) + num(header.other_expenses);
-      var headerTotal = vbi + expenses + (header.type === 'بيع' ? 0 : num(header.internal_cost_adjustment) + num(header.purchase_tax));
-      if (Math.abs(lineSum - headerTotal) > 0.01) { UIC.toast('مجموع الأصناف لا يساوي إجمالي التكاليف', 'error'); return Promise.reject(); }
+      (__lines || []).forEach(function (l) { lineSum += lineCalc(l, rate).total; });
+      var headerTotal = headerCalc(header).totalCosts;
+      if (Math.abs(lineSum - headerTotal) > 0.01) {
+        return fail('مجموع إجمالي الأصناف (' + FMT.number(lineSum) + ') لا يساوي إجمالي التكاليف (' + FMT.number(headerTotal) + ')');
+      }
 
       var payload = { header: header, lines: __lines || [] };
       var isEdit = __editingUid ? true : false;

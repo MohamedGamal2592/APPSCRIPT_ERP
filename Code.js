@@ -228,10 +228,129 @@ var STORAGE_BACKENDS_ = { firestore: true, sheets: true };
 var STORAGE_ENVIRONMENTS_ = { staging: true, production: true };
 function storageError_(code, message, cause) { var e = new Error(code + ': ' + message); e.code = code; if (cause) e.cause = String(cause && cause.message || cause).slice(0, 160); return e; }
 function readScriptProperty_(key, fallback) {
+  var diagTok = (typeof diagOpen_ === 'function') ? diagOpen_('script_property') : null;   // [save-diag]
   try { var v = PropertiesService.getScriptProperties().getProperty(key); return v === null || v === undefined ? fallback : String(v).trim(); }
   catch (e) { throw storageError_('STORAGE_PROPERTY_ACCESS_ERROR', 'Unable to read Script Property ' + key, e); }
+  finally { if (diagTok) diagClose_(diagTok); }
 }
+/* [save-fast] getSystemStorageConfig_ reads four Script Properties per call,
+ * and a party save calls it once for the history write and once for SystemLog
+ * (measured 8 reads, ~300 ms). For the actions listed here, apiRouter_ switches
+ * on a memo for the life of that one request, so the second caller reuses the
+ * first answer. Off everywhere else — including every verify sandbox, which
+ * does not carry these globals — so behaviour there is unchanged. */
+var SAVE_FAST_ACTIONS_ = { add_et_party: true, edit_et_party: true };
+var _storageCfgMemoOn_ = false;
+var _storageCfgMemo_ = null;
+
+/* ── [save-fast A] The audit writes of a save, deferred to the minute drain ──
+ *
+ * WHY. A party save wrote its record history (to the ERP_History_Queue sheet)
+ * and its SystemLog row (to the SystemLog sheet) inside the request: opening
+ * the auth spreadsheet, reading a header row, two appends — measured ~1.4 s of
+ * the user's wait, for rows nobody reads during that wait.
+ *
+ * WHAT. For SAVE_FAST_ACTIONS_ only, each of the two is written as ONE Script
+ * Property (auq_<time>_<kind>_<rand>) — durable, no lock, one call — and
+ * drainAuditDeferred_, run at the top of the minute drainHistoryQueue_, moves
+ * them to exactly the sheets they went to before, then deletes the properties.
+ *
+ * NEVER LOST. Write first, delete after: a drain that dies in between writes
+ * the rows again next minute (an audit duplicate, never a gap — the same trade
+ * drainHistoryQueue_ already makes). Deferral is used only while the drain is
+ * provably running — it stamps auq_drain_hb in CacheService every run and a
+ * save defers only if that stamp is under ten minutes old — so a missing or
+ * broken trigger means the old synchronous write, not a growing pile. A value
+ * too large for one property also takes the old path.
+ *
+ * VISIBLE DELAY. The history panel and the SystemLog show the save up to a
+ * minute later. The history already waited for this same drain. */
+var _saveFastOn_ = false;
+var _auditDeferOk_ = null;          // per request: is the drain alive?
+var AUDIT_DEFER_PREFIX_ = 'auq_';
+var AUDIT_DEFER_HEARTBEAT_KEY_ = 'auq_drain_hb';
+var AUDIT_DEFER_MAX_CHARS_ = 8500;  // a Script Property value holds 9 KB
+
+function auditDeferOn_() {
+  if (typeof _saveFastOn_ === 'undefined' || _saveFastOn_ !== true) return false;
+  if (_auditDeferOk_ === null) {
+    try {
+      var hb = Number(CacheService.getScriptCache().get(AUDIT_DEFER_HEARTBEAT_KEY_));
+      _auditDeferOk_ = hb > 0 && (Date.now() - hb) < 10 * 60000;
+    } catch (e) { _auditDeferOk_ = false; }
+  }
+  return _auditDeferOk_ === true;
+}
+
+/* true = queued; false = the caller writes the old way. Never throws. */
+function auditDeferPut_(kind, payload) {
+  if (!auditDeferOn_()) return false;
+  var diagTok = (typeof diagOpen_ === 'function') ? diagOpen_('audit_defer') : null;   // [save-diag]
+  try {
+    var json = JSON.stringify({ k: kind, p: payload });
+    if (json.length > AUDIT_DEFER_MAX_CHARS_) return false;
+    var key = AUDIT_DEFER_PREFIX_ + Date.now() + '_' + kind + '_' + Utilities.getUuid().slice(0, 8);
+    PropertiesService.getScriptProperties().setProperty(key, json);
+    return true;
+  } catch (e) {
+    return false;
+  } finally { if (diagTok) diagClose_(diagTok); }
+}
+
+function auditDeferRevive_(obj, fields) {
+  fields.forEach(function (f) {
+    var v = obj[f];
+    if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/.test(v)) obj[f] = new Date(v);
+  });
+  return obj;
+}
+
+/* Run by drainHistoryQueue_ before its own work, so history moved here reaches
+ * ERP_Record_History in the same run. Under the script lock, so two drains
+ * cannot both write the same entries. */
+function drainAuditDeferred_() {
+  try { CacheService.getScriptCache().put(AUDIT_DEFER_HEARTBEAT_KEY_, String(Date.now()), 900); } catch (e) {}
+  var props = PropertiesService.getScriptProperties();
+  function pending() {
+    var all = props.getProperties();
+    var keys = Object.keys(all).filter(function (k) { return k.indexOf(AUDIT_DEFER_PREFIX_) === 0 && k !== AUDIT_DEFER_HEARTBEAT_KEY_; }).sort();
+    return { all: all, keys: keys };
+  }
+  if (!pending().keys.length) return { status: 'success', entries: 0 };
+  return executeWithLock_(function () {
+    var p = pending();                       // again, inside the lock
+    var hist = [], logs = [], done = [], bad = 0;
+    p.keys.forEach(function (k) {
+      var e = null;
+      try { e = JSON.parse(p.all[k]); } catch (ignore) { e = null; }
+      if (!e || (e.k !== 'h' && e.k !== 's')) { bad++; return; }   // left in place, reported
+      if (e.k === 'h') (e.p || []).forEach(function (r) { hist.push(auditDeferRevive_(r, ['changed_at', 'created_at'])); });
+      else logs.push(auditDeferRevive_(e.p || {}, ['timestamp']));
+      done.push(k);
+    });
+    /* WRITE FIRST, into the same places the request used to write. */
+    if (hist.length && !enqueueHistoryRows_(hist)) writeHistoryRowsDirect_(hist);
+    if (logs.length) {
+      var sh = ensureSystemLogSheet_();
+      var matrix = logs.map(function (values) {
+        return SYSTEM_LOG_HEADERS.map(function (h) {
+          var v = values[String(h).toLowerCase()];
+          return v === undefined || v === null ? '' : v;
+        });
+      });
+      sh.getRange(sh.getLastRow() + 1, 1, matrix.length, SYSTEM_LOG_HEADERS.length).setValues(matrix);
+      noteMutation_(sh);
+    }
+    /* Persisted. ONLY NOW are the entries removed. */
+    done.forEach(function (k) { try { props.deleteProperty(k); } catch (eDel) {} });
+    if (bad) try { console.error('drainAuditDeferred_: ' + bad + ' unreadable entr(y|ies) left in Script Properties'); } catch (eL) {}
+    return { status: 'success', entries: done.length, history_rows: hist.length, log_rows: logs.length, unreadable: bad };
+  }, 10000);
+}
+
 function getSystemStorageConfig_() {
+  var memoOn = (typeof _storageCfgMemoOn_ !== 'undefined') && _storageCfgMemoOn_ === true;
+  if (memoOn && _storageCfgMemo_) return Object.assign({}, _storageCfgMemo_);
   var backend = String(readScriptProperty_(SYSTEM_STORAGE_PROPERTY_KEYS_.backend, CONFIG.SYSTEM_STORAGE_BACKEND || 'firestore')).trim().toLowerCase();
   if (!STORAGE_BACKENDS_[backend]) throw storageError_('STORAGE_BACKEND_ERROR', 'Unsupported system storage backend');
   var projectId = String(readScriptProperty_(SYSTEM_STORAGE_PROPERTY_KEYS_.projectId, '') || '').trim();
@@ -247,7 +366,9 @@ function getSystemStorageConfig_() {
   if (!databaseId || !/^[A-Za-z0-9_-]{1,63}$|^\(default\)$/.test(databaseId)) throw storageError_('STORAGE_CONFIGURATION_ERROR', 'FIRESTORE_DATABASE_ID is invalid');
   if (backend === 'firestore' && !projectId) throw storageError_('STORAGE_CONFIGURATION_ERROR', 'FIRESTORE_PROJECT_ID is not configured');
   if (backend === 'firestore' && !/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(projectId)) throw storageError_('STORAGE_CONFIGURATION_ERROR', 'FIRESTORE_PROJECT_ID is invalid');
-  return { backend: backend, projectId: projectId, databaseId: databaseId, environment: environment };
+  var cfg = { backend: backend, projectId: projectId, databaseId: databaseId, environment: environment };
+  if (memoOn) _storageCfgMemo_ = Object.assign({}, cfg);
+  return cfg;
 }
 function systemStorageTarget_() { return getSystemStorageConfig_(); }
 function firestoreConfigurationPreflight_() {
@@ -356,8 +477,9 @@ function firestoreRequest_(method, url, body, options) {
   var o = options || {}, retries = Number(o.maxRetries === undefined ? FIRESTORE_MAX_RETRIES_ : o.maxRetries), attempt = 0;
   while (true) {
     var started = new Date().getTime(); firestoreMetric_('call'); var req = { method: method, muteHttpExceptions: true, contentType: 'application/json', headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() } }; if (body !== undefined && body !== null) req.payload = JSON.stringify(body);
-    var response;
-    try { response = UrlFetchApp.fetch(url, req); } catch (err) { if (attempt < retries) { attempt++; firestoreMetric_('retry'); Utilities.sleep(firestoreRetryDelayMs_(attempt, null)); continue; } var te = new Error('FIRESTORE_TRANSPORT_ERROR: ' + err.message); te.retryable = true; throw te; }
+    var response, diagHttp = (typeof diagOpen_ === 'function') ? diagOpen_('firestore_http') : null;   // [save-diag]
+    try { response = UrlFetchApp.fetch(url, req); } catch (err) { if (diagHttp) diagClose_(diagHttp); if (attempt < retries) { attempt++; firestoreMetric_('retry'); Utilities.sleep(firestoreRetryDelayMs_(attempt, null)); continue; } var te = new Error('FIRESTORE_TRANSPORT_ERROR: ' + err.message); te.retryable = true; throw te; }
+    if (diagHttp) diagClose_(diagHttp);
     FIRESTORE_METRICS_.latencyMs += new Date().getTime() - started; var status = response.getResponseCode(), text = response.getContentText() || '', parsed = null; try { parsed = text ? JSON.parse(text) : null; } catch (ignore) {}
     if (status >= 200 && status < 300) return parsed || {};
     var error = firestoreError_(status, parsed, url); if (error.retryable && attempt < retries) { attempt++; firestoreMetric_('retry'); Utilities.sleep(firestoreRetryDelayMs_(attempt, response)); continue; } throw error;
@@ -693,7 +815,11 @@ function buildRecordsFromRaw_(data, headers) {
 }
 
 function getSpreadsheet_(ssId) {
-  if (!_ssCache_[ssId]) _ssCache_[ssId] = SpreadsheetApp.openById(ssId);
+  if (!_ssCache_[ssId]) {
+    var diagTok = (typeof diagOpen_ === 'function') ? diagOpen_('open_spreadsheet') : null;   // [save-diag]
+    try { _ssCache_[ssId] = SpreadsheetApp.openById(ssId); }
+    finally { if (diagTok) diagClose_(diagTok); }
+  }
   return _ssCache_[ssId];
 }
 
@@ -708,9 +834,12 @@ const _headerCache_ = {};
 function getHeaders_(sheet) {
   const key = sheet.getParent().getId() + '_' + sheet.getSheetId();
   if (!_headerCache_[key]) {
-    const lastCol = sheet.getLastColumn();
-    countSheetRead_();
-    _headerCache_[key] = lastCol > 0 ? sheet.getRange(1, 1, 1, lastCol).getValues()[0] : [];
+    var diagTok = (typeof diagOpen_ === 'function') ? diagOpen_('read_headers') : null;   // [save-diag]
+    try {
+      const lastCol = sheet.getLastColumn();
+      countSheetRead_();
+      _headerCache_[key] = lastCol > 0 ? sheet.getRange(1, 1, 1, lastCol).getValues()[0] : [];
+    } finally { if (diagTok) diagClose_(diagTok); }
   }
   return _headerCache_[key];
 }
@@ -882,6 +1011,7 @@ function parseTableStamp_(value) {
  */
 function noteTableChange_(scopeId, sheetName) {
   if (!scopeId || !sheetName) return;
+  var diagTok = (typeof diagOpen_ === 'function') ? diagOpen_('change_stamp') : null;   // [save-diag]
   try {
     var cache = CacheService.getScriptCache();
     var key = tableVersionKey_(scopeId, sheetName);
@@ -902,6 +1032,7 @@ function noteTableChange_(scopeId, sheetName) {
     if (w.length > LIVE_STAMP_WRITERS_) w.length = LIVE_STAMP_WRITERS_;
     cache.put(key, JSON.stringify({ t: now, w: w }), TABLE_VERSION_TTL_);
   } catch (e) { /* a stamp is a convenience, never a requirement */ }
+  if (diagTok) diagClose_(diagTok);
 }
 
 /**
@@ -912,6 +1043,7 @@ function noteTableChange_(scopeId, sheetName) {
  */
 function noteRecordChange_(scopeId, sheetName, key) {
   if (!scopeId || !sheetName || key === undefined || key === null || String(key).trim() === '') return;
+  var diagTok = (typeof diagOpen_ === 'function') ? diagOpen_('change_stamp') : null;   // [save-diag]
   try {
     var cache = CacheService.getScriptCache();
     var ck = tableVersionKey_(scopeId, sheetName);
@@ -927,7 +1059,7 @@ function noteRecordChange_(scopeId, sheetName, key) {
       st = parseTableStamp_(cache.get(ck));
       entry = mineOf(st);
     }
-    if (!entry) return;
+    if (!entry) { if (diagTok) diagClose_(diagTok); return; }
     var keys = Array.isArray(entry.k) ? entry.k : [];
     var s = String(key).trim();
     if (keys.indexOf(s) === -1) {
@@ -937,6 +1069,7 @@ function noteRecordChange_(scopeId, sheetName, key) {
     entry.k = keys;
     cache.put(ck, JSON.stringify({ t: st.t, w: st.w }), TABLE_VERSION_TTL_);
   } catch (e) { /* a stamp is a convenience, never a requirement */ }
+  if (diagTok) diagClose_(diagTok);
 }
 
 /**
@@ -1053,7 +1186,9 @@ function maxIdOf_(sheet, idColumnName) {
   const lastRow = sheet.getLastRow();
   if (lastRow < 2) return 0;
   countSheetRead_();
+  var diagTok = (typeof diagOpen_ === 'function') ? diagOpen_('id_scan') : null;   // [save-diag]
   const col = sheet.getRange(2, idIdx + 1, lastRow - 1, 1).getValues();
+  if (diagTok) diagClose_(diagTok);
   let max = 0;
   for (let i = 0; i < col.length; i++) {
     const v = Number(col[i][0]);
@@ -1066,12 +1201,15 @@ function executeWithLock_(fn, timeoutMs) {
   if (_scriptLockHeld_) return fn();
   _scriptLockHeld_ = true;
   const lock = LockService.getScriptLock();
+  var diagTok = null, diagT0 = Date.now();   // [save-diag]
   try {
     lock.waitLock(timeoutMs || 5000);
+    if (typeof diagWaited_ === 'function') { diagWaited_('lock_wait', diagT0); diagTok = diagOpen_('lock'); }
     return fn();
   } finally {
     _scriptLockHeld_ = false;
     try { lock.releaseLock(); } catch (e) {}
+    if (diagTok) diagClose_(diagTok);
   }
 }
 
@@ -1915,14 +2053,16 @@ function chunkedCacheGeneration_() {
 
 function withChunkedCacheLock_(fn) {
   var lock = null;
+  var diagTok = null, diagT0 = Date.now();   // [save-diag]
   try {
     if (typeof LockService !== 'undefined' && LockService.getScriptLock) {
       lock = LockService.getScriptLock();
       if (!lock.tryLock(5000)) return null;
     }
+    if (typeof diagWaited_ === 'function') { diagWaited_('cache_lock_wait', diagT0); diagTok = diagOpen_('cache_lock'); }
     return fn();
   } catch (e) { return null; }
-  finally { try { if (lock) lock.releaseLock(); } catch (e2) {} }
+  finally { try { if (lock) lock.releaseLock(); } catch (e2) {} if (diagTok) diagClose_(diagTok); }
 }
 
 function removeChunkedPublication_(cache, keys, maxChunks) {
@@ -2125,10 +2265,12 @@ function getRecordsByPk_(dbId, sheetName, pkColumn) {
  */
 function invalidateRefsCache_(dbId, kind) {
   const key = 'refs_' + String(dbId) + '_' + kind;
+  var diagTok = (typeof diagOpen_ === 'function') ? diagOpen_('refs_invalidate') : null;   // [save-diag]
   // Remove both forms: the chunked entry written today, and the single-key entry
   // any still-live cache may hold from before Phase 6.
   try { removeChunkedCache_(key); } catch (e) {}
   try { CacheService.getScriptCache().remove(key); } catch (e) {}
+  if (diagTok) diagClose_(diagTok);
 }
 
 /**
@@ -2404,7 +2546,9 @@ function logHistoryMany_(entries) {
 }
 
 function logHistory_(dbId, sheetName, recordUid, recordId, user, action, newValues, oldValues) {
-  writeHistoryRows_(historyRowsFor_(dbId, sheetName, recordUid, recordId, user, action, newValues, oldValues));
+  var diagTok = (typeof diagOpen_ === 'function') ? diagOpen_('history') : null;   // [save-diag]
+  try { writeHistoryRows_(historyRowsFor_(dbId, sheetName, recordUid, recordId, user, action, newValues, oldValues)); }
+  finally { if (diagTok) diagClose_(diagTok); }
 }
 
 /* Phase 5 — afterWrite(docType, change): single audit fan-out for the shared
@@ -2555,6 +2699,30 @@ var HISTORY_QUEUE_HEADERS_ = [
  * to find out a row was stuck. */
 var HISTORY_CLAIM_STALE_MS_ = 10 * 60 * 1000;
 
+/* [history-drain batch] The most queue rows one drain run takes. A run is one
+ * read, one claim write, one history write, one done-mark write and one
+ * deleteRows, whatever the size, so this bounds the run's time and how long
+ * writeHistoryRowsDirect_ holds the script lock — not the number of calls. */
+var HISTORY_DRAIN_BATCH_ = 2000;
+
+/* [history-drain reject] Where a queue row that can never be written goes:
+ * the queue's own columns, then why and when. Kept, never dropped. */
+var HISTORY_REJECT_SHEET_ = 'ERP_History_Queue_Rejected';
+var HISTORY_REQUIRED_FIELDS_ = ['sheet_name', 'record_uid', 'action', 'column_name'];
+
+function ensureHistoryRejectSheet_() {
+  var ss = getSpreadsheet_(CONFIG.AUTH_SPREADSHEET_ID);
+  var sh = ss.getSheetByName(HISTORY_REJECT_SHEET_);
+  if (!sh) {
+    sh = ss.insertSheet(HISTORY_REJECT_SHEET_);
+    var head = HISTORY_QUEUE_HEADERS_.concat(['reject_reason', 'rejected_at']);
+    sh.getRange(1, 1, 1, head.length).setValues([head]);
+    sh.setFrozenRows(1);
+    noteMutation_(sh);
+  }
+  return sh;
+}
+
 /* A row still queued after this is REPORTED. Never dropped. */
 var HISTORY_STALE_REPORT_MS_ = 30 * 60 * 1000;
 
@@ -2654,7 +2822,23 @@ function drainHistoryQueueFirestore_() {
  * takes it ONCE for a minute's worth of saves from every company instead of
  * once per save.
  */
+/* [history-drain] The trigger entry point. Apps Script hides every function
+ * whose name ends in "_" from the editor — the Run menu and the Add Trigger
+ * list — so drainHistoryQueue_ could not be picked when installing the trigger
+ * by hand (2026-10-01). This is the same drain under a name the list shows.
+ * Like any global without a trailing "_" it is also reachable through
+ * google.script.run; that is harmless: the drain takes no input, claims the rows
+ * it works on, and running it twice cannot lose or double a row (rt9). */
+function runHistoryDrain() {
+  return drainHistoryQueue_();
+}
+
 function drainHistoryQueue_() {
+  /* [save-fast A] the deferred audit entries first, so their history rows are
+     drained by the run below. Never stops the drain. */
+  if (typeof drainAuditDeferred_ === 'function') {
+    try { drainAuditDeferred_(); } catch (eAud) { try { console.error('drainAuditDeferred_: ' + eAud.message); } catch (eL) {} }
+  }
   if (typeof systemStorageTarget_ === 'function' && systemStorageTarget_().backend === 'firestore') return drainHistoryQueueFirestore_();
   try {
     var ss = getSpreadsheet_(CONFIG.AUTH_SPREADSHEET_ID);
@@ -2666,18 +2850,31 @@ function drainHistoryQueue_() {
     var idx = {};
     HISTORY_QUEUE_HEADERS_.forEach(function (h, i) { idx[h] = i; });
 
-    var all = sh.getRange(2, 1, sh.getLastRow() - 1, HISTORY_QUEUE_HEADERS_.length).getValues();
+    /* [history-drain batch] One contiguous block from the TOP of the queue, at
+     * most HISTORY_DRAIN_BATCH_ rows, so every phase below is ONE sheet call.
+     * The per-row version could not survive a backlog: on 2026-10-01 the queue
+     * held 50,147 rows (the trigger had never been installed) — ~150,000
+     * single-cell writes and row deletes per run, far past the six-minute limit,
+     * every minute. Now a backlog drains HISTORY_DRAIN_BATCH_ rows a minute, and
+     * an ordinary minute's worth in one run.
+     *
+     * The rules are the old ones: unclaimed rows, rows a dead drain marked done,
+     * and stale claims are taken; a FRESH claim by another drain is never
+     * stolen — the block stops in front of it. Rows only ever join the queue at
+     * the bottom, so the block cannot move under this run. */
+    var lastRow = sh.getLastRow();
+    var all = sh.getRange(2, 1, Math.min(HISTORY_DRAIN_BATCH_, lastRow - 1), HISTORY_QUEUE_HEADERS_.length).getValues();
 
-    /* PHASE 1 — CLAIM. Unclaimed rows; rows already marked done by a drain that
-     * died before deleting them; and rows whose claim is old enough that the
-     * drain holding it must have died. */
+    /* PHASE 1 — CLAIM. */
     var take = [], alreadyDone = {};
     for (var i = 0; i < all.length; i++) {
       var existing = String(all[i][idx.claim_id] || '').trim();
-      if (!existing) { take.push(i); continue; }
       if (existing.indexOf('|done') !== -1) { take.push(i); alreadyDone[i] = true; continue; }
-      var at = new Date(all[i][idx.claimed_at]).getTime();
-      if (isNaN(at) || (now - at) > HISTORY_CLAIM_STALE_MS_) take.push(i);
+      if (existing) {
+        var at = new Date(all[i][idx.claimed_at]).getTime();
+        if (!isNaN(at) && (now - at) <= HISTORY_CLAIM_STALE_MS_) break;   // another drain's fresh claim
+      }
+      take.push(i);
     }
     if (!take.length) {
       /* Nothing this drain may touch, but the queue is not empty — every row is
@@ -2686,12 +2883,13 @@ function drainHistoryQueue_() {
       reportStaleHistoryQueue_();
       return { status: 'success', rows: 0 };
     }
+    var m = take.length;               // take is exactly rows 0..m-1 of the block
 
     var claimedAt = new Date();
-    take.forEach(function (r) {
-      if (alreadyDone[r]) return;      /* keep the done mark: it is the evidence */
-      sh.getRange(r + 2, idx.claim_id + 1, 1, 2).setValues([[claimId, claimedAt]]);
-    });
+    sh.getRange(2, idx.claim_id + 1, m, 2).setValues(take.map(function (r) {
+      /* keep a done mark: it is the evidence */
+      return alreadyDone[r] ? [all[r][idx.claim_id], all[r][idx.claimed_at]] : [claimId, claimedAt];
+    }));
     noteMutation_(sh);
 
     /* PHASE 2 — DEDUPE. A drain that died after writing but before deleting
@@ -2710,6 +2908,7 @@ function drainHistoryQueue_() {
 
     /* PHASE 3 — WRITE the survivors, in ERP_Record_History's own column order,
      * with the ids allocated once for the whole batch. */
+    var rejectedCount = 0;
     if (toWrite.length) {
       var histRows = toWrite.map(function (r) {
         var row = all[r];
@@ -2720,25 +2919,46 @@ function drainHistoryQueue_() {
         });
         return o;
       });
-      writeHistoryRowsDirect_(histRows);
+      /* [history-drain reject] writeHistoryRowsDirect_ refuses the WHOLE batch
+       * when one row lacks a required field, so one malformed queue row stopped
+       * every run at the same block, for good (2026-10-01, the first run ever:
+       * "Missing required fields: column_name"). Such a row can never be
+       * written, so it is moved — not dropped — to HISTORY_REJECT_SHEET_ with
+       * the reason, and the rest of the batch is written. */
+      var good = [], rejected = [];
+      histRows.forEach(function (o, k) {
+        var missing = HISTORY_REQUIRED_FIELDS_.filter(function (f) {
+          return o[f] === undefined || o[f] === null || String(o[f]).trim() === '';
+        });
+        if (missing.length) rejected.push(all[toWrite[k]].concat(['missing: ' + missing.join(', '), new Date()]));
+        else good.push(o);
+      });
+      if (rejected.length) {
+        var rj = ensureHistoryRejectSheet_();
+        rj.getRange(rj.getLastRow() + 1, 1, rejected.length, rejected[0].length).setValues(rejected);
+        noteMutation_(rj);
+        rejectedCount = rejected.length;
+        try { console.error('drainHistoryQueue_: ' + rejected.length + ' row(s) missing a required field moved to ' + HISTORY_REJECT_SHEET_); } catch (eL) {}
+      }
+      if (good.length) writeHistoryRowsDirect_(good);
 
       /* PHASE 4 — MARK done, so a death before the delete below costs a skipped
-       * write next time rather than a duplicated one. */
-      toWrite.forEach(function (r) {
-        sh.getRange(r + 2, idx.claim_id + 1).setValue(claimId + '|done');
-      });
+       * write next time rather than a duplicated one. One write for the block:
+       * a deduped row is in history already, so it is done too. */
+      sh.getRange(2, idx.claim_id + 1, m, 1).setValues(take.map(function (r) {
+        return [alreadyDone[r] ? all[r][idx.claim_id] : claimId + '|done'];
+      }));
       noteMutation_(sh);
     }
 
-    /* PHASE 5 — DELETE, bottom-up so the indices stay valid. */
-    take.slice().sort(function (a, b) { return b - a; }).forEach(function (r) {
-      sh.deleteRow(r + 2);
-    });
+    /* PHASE 5 — DELETE the block, in one call. */
+    sh.deleteRows(2, m);
     noteMutation_(sh);
 
     return {
-      status: 'success', rows: take.length, written: toWrite.length,
-      deduped: take.length - toWrite.length, claim: claimId
+      status: 'success', rows: take.length, written: toWrite.length - rejectedCount,
+      rejected: rejectedCount, deduped: take.length - toWrite.length, claim: claimId,
+      remaining: Math.max(0, lastRow - 1 - m)
     };
   } catch (e) {
     try { console.error('drainHistoryQueue_: ' + e.message); } catch (eL) {}
@@ -2845,6 +3065,7 @@ function historyTailKeys_(n) {
 function writeHistoryRows_(rows) {
   if (!rows || !rows.length) return;
   if (typeof systemStorageTarget_ === 'function' && systemStorageTarget_().backend === 'firestore') { writeHistoryRowsFirestore_(rows); return; }
+  if (typeof auditDeferPut_ === 'function' && auditDeferPut_('h', rows)) return;   // [save-fast A]
   if (HISTORY_QUEUE_ENABLED_ && enqueueHistoryRows_(rows)) return;
   writeHistoryRowsDirect_(rows);
 }
@@ -6841,6 +7062,37 @@ function diagPing() {
  * module's own dispatch. null outside a request that asked for timing. */
 var _diagMarks_ = null;
 
+/* [save-diag] Named spans inside a request that asked for diag_timing, so the
+ * et_customers save probes can say WHERE a write's time goes, not only that it
+ * went. A span opened inside another is recorded as «parent/child»; the reply
+ * carries the sums and the counts (router_timing_ms.spans / span_counts).
+ * Outside such a request every helper returns after one null test. Callers
+ * reach them through a typeof test, because the verify suites lift single
+ * functions into a sandbox that does not carry these. */
+function diagOpen_(name) {
+  var m = _diagMarks_;
+  if (!m) return null;
+  var tok = { name: m.inSpan ? m.inSpan + '/' + name : name, t0: Date.now(), prev: m.inSpan || '' };
+  m.inSpan = tok.name;
+  return tok;
+}
+function diagClose_(tok) {
+  var m = _diagMarks_;
+  if (!m || !tok) return;
+  m.inSpan = tok.prev;
+  var s = m.spans || (m.spans = {}), c = m.counts || (m.counts = {});
+  s[tok.name] = (s[tok.name] || 0) + Math.max(0, Date.now() - tok.t0);
+  c[tok.name] = (c[tok.name] || 0) + 1;
+}
+/* A lock wait is a span that ends when the lock is granted. It is kept apart
+ * from the time the lock is then held: waiting is other users' work, holding is
+ * ours, and the two have different cures. */
+function diagWaited_(name, t0) {
+  var m = _diagMarks_;
+  if (!m) return;
+  diagClose_({ name: m.inSpan ? m.inSpan + '/' + name : name, t0: t0, prev: m.inSpan || '' });
+}
+
 /* [diag-timing] The two slices apiRouterRequest_ cannot see: project load
  * before apiRouter_ was entered, and the telemetry either side of the request.
  * Only a reply that already carries a diag breakdown is touched. */
@@ -6895,6 +7147,12 @@ function apiRouter_(request) {
      filled in once the session is authenticated (apiRouterRequest_). */
   var liveData = request && request.payload && request.payload.data;
   _liveReqMeta_ = { rid: String((liveData && typeof liveData === 'object' && liveData.__request_id) || ''), who: '', name: '' };
+  /* [save-fast] the storage-config memo, for this request only */
+  _storageCfgMemo_ = null;
+  _storageCfgMemoOn_ = !!(request && request.action === 'company_action' && request.payload &&
+    SAVE_FAST_ACTIONS_[String(request.payload.module_action || '')] === true);
+  _saveFastOn_ = _storageCfgMemoOn_;   // [save-fast A] the audit deferral, same actions
+  _auditDeferOk_ = null;
   try {
     result = apiRouterRequest_(request, perfCtx);
   } catch (err) {
@@ -6902,6 +7160,10 @@ function apiRouter_(request) {
     throw err;
   } finally {
     _liveReqMeta_ = null;
+    _storageCfgMemoOn_ = false;
+    _storageCfgMemo_ = null;
+    _saveFastOn_ = false;
+    _auditDeferOk_ = null;
   }
   var finishStartMs = Date.now();
   perfFinishRequest_(perfCtx, request, result, null);
@@ -6999,7 +7261,9 @@ function apiRouterRequest_(request, perfCtx) {
     handlerFinishedMs = new Date().getTime();
     
     // Log successful operation
+    var diagLog = (typeof diagOpen_ === 'function') ? diagOpen_('system_log') : null;   // [save-diag]
     try { logSystemAction_(request, authUser, result, status, errorMessage, startTime); } catch (loggingError) {}
+    if (diagLog) diagClose_(diagLog);
 
     // Super-admin-only diagnostic for the explicit MySQL connection probe, and
     // [diag-timing] for any request that asks with diag_timing: true. It is
@@ -7031,6 +7295,8 @@ function apiRouterRequest_(request, perfCtx) {
           t.after_dispatch = Math.max(0, handlerFinishedMs - marks.dispatchEnd);
         }
         t.sheet_reads = (typeof getSheetsReadCount_ === 'function') ? getSheetsReadCount_() : '';
+        t.spans = marks.spans || {};          // [save-diag]
+        t.span_counts = marks.counts || {};
       }
     }
     _diagMarks_ = null;
@@ -7248,7 +7514,9 @@ function requestGuardSheet_(dbId) {
 }
 function requestGuardFind_(sheet, key) {
   if (sheet.getLastRow() < 2) return null;
+  var diagTok = (typeof diagOpen_ === 'function') ? diagOpen_('guard_find') : null;   // [save-diag]
   var found = sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).createTextFinder(key).matchEntireCell(true).matchCase(true).findAll();
+  if (diagTok) diagClose_(diagTok);
   if (found.length > 1) throw new Error('Duplicate request receipts');
   if (!found.length) return null;
   var row = found[0].getRow();
@@ -7266,6 +7534,7 @@ function requestGuardExecute_(payload, user, dbId, invoke, opts) {
   var email = String(user.email || '').trim().toLowerCase();
   if (input.__request_owner && input.__request_owner !== email) return requestGuardReply_('REQUEST_OWNER_MISMATCH', 'الطلب المؤجل يخص مستخدمًا آخر. راجعه بالحساب الأصلي.', true, false);
   if (!email) return requestGuardReply_('REQUEST_USER_REQUIRED', 'تعذر تحديد المستخدم لحماية العملية من التكرار.', false, false);
+  var diagClaim = (typeof diagOpen_ === 'function') ? diagOpen_('guard_claim') : null;   // [save-diag]
   var key = requestGuardHash_(JSON.stringify([dbId, payload.target_system, email, action, requestId]));
   var hash = requestGuardHash_(requestGuardCanonical_(clean));
   var claim;
@@ -7300,12 +7569,16 @@ function requestGuardExecute_(payload, user, dbId, invoke, opts) {
       if (row > sheet.getMaxRows()) sheet.insertRowsAfter(sheet.getMaxRows(), 1);
       sheet.getRange(row, 1, 1, REQUEST_RECEIPT_HEADERS_.length).setValues([[key,requestId,email,action,hash,'pending','',now,now]]);
       noteMutation_(dbId, 'ERP_Request_Receipts');
+      var diagFlush = (typeof diagOpen_ === 'function') ? diagOpen_('flush') : null;   // [save-diag]
       SpreadsheetApp.flush();
+      if (diagFlush) diagClose_(diagFlush);
       return { claimed: true };
     }, 10000);
   } catch (e) {
+    if (diagClaim) diagClose_(diagClaim);
     return requestGuardReply_('REQUEST_GUARD_UNAVAILABLE', 'تعذر تثبيت حماية الطلب؛ لم تُنفذ العملية. أعد المحاولة بنفس الطلب.', true, false);
   }
+  if (diagClaim) diagClose_(diagClaim);
   if (claim.reply) return claim.reply;
   var result, state = 'done';
   try {
@@ -7424,6 +7697,7 @@ function requestGuardExecute_(payload, user, dbId, invoke, opts) {
       if (thrownRecovery) result.recovery = thrownRecovery;
     }
   }
+  var diagFin = (typeof diagOpen_ === 'function') ? diagOpen_('guard_finalize') : null;   // [save-diag]
   try {
     executeWithLock_(function () {
       var sheet = requestGuardSheet_(dbId), receipt = requestGuardFind_(sheet, key);
@@ -7432,12 +7706,16 @@ function requestGuardExecute_(payload, user, dbId, invoke, opts) {
       if (encoded.length > 40000) encoded = JSON.stringify({ status: 'success', reloadRequired: true, message: 'تم تسجيل الطلب مسبقًا. حدّث الصفحة لعرض البيانات.' });
       sheet.getRange(receipt.row, 6, 1, 4).setValues([[state,encoded,receipt.values[7],new Date()]]);
       noteMutation_(dbId, 'ERP_Request_Receipts');
+      var diagFlush = (typeof diagOpen_ === 'function') ? diagOpen_('flush') : null;   // [save-diag]
       SpreadsheetApp.flush();
+      if (diagFlush) diagClose_(diagFlush);
     }, 10000);
   } catch (err) {
+    if (diagFin) diagClose_(diagFin);
     // A claim already exists: never execute the business handler again.
     return requestGuardReply_('REQUEST_UNCERTAIN', 'قد تكون العملية حُفظت، لكن تعذر تأكيد النتيجة. لا تنشئ طلبًا بديلًا قبل مراجعة السجل. رقم الطلب: ' + requestId, true, false);
   }
+  if (diagFin) diagClose_(diagFin);
   return result;
 }
 
@@ -7477,13 +7755,19 @@ function executeCompanyAction_(payload, sessionToken, authUser) {
      * Status-only paths (approve_/toggle_/cancel_/revert_/close_/delete_) skip
      * field validation explicitly inside validateBeforeWrite via
      * STATUS_ONLY_ACTIONS_; they remain status-gated in their handlers. */
-    if (typeof validateBeforeWrite === 'function' && typeof docTypeForAction_ === 'function') {
-      var __dt = docTypeForAction_(safePayload.module_action);
-      if (__dt) validateBeforeWrite(__dt, safePayload, dbId);
-    }
+    var diagVal = (typeof diagOpen_ === 'function') ? diagOpen_('validate') : null;   // [save-diag]
+    try {
+      if (typeof validateBeforeWrite === 'function' && typeof docTypeForAction_ === 'function') {
+        var __dt = docTypeForAction_(safePayload.module_action);
+        if (__dt) validateBeforeWrite(__dt, safePayload, dbId);
+      }
+    } finally { if (diagVal) diagClose_(diagVal); }
     var marks = (typeof _diagMarks_ !== 'undefined') ? _diagMarks_ : null;   // [diag-timing]
     if (marks) marks.dispatchStart = Date.now();
-    var dispatched = company.dispatch(safePayload, authUser, dbId, guardCtx);
+    var diagDisp = (typeof diagOpen_ === 'function') ? diagOpen_('dispatch') : null;   // [save-diag]
+    var dispatched;
+    try { dispatched = company.dispatch(safePayload, authUser, dbId, guardCtx); }
+    finally { if (diagDisp) diagClose_(diagDisp); }
     if (marks) marks.dispatchEnd = Date.now();
     return dispatched;
   }, { recovery: recovery });
@@ -8419,6 +8703,8 @@ function logSystemAction_(request, authUser, result, status, errorMessage, start
     } catch (e) { try { console.error('Failed to log system action: ' + e.message); } catch (ignore) {} }
     return;
   }
+
+  if (typeof auditDeferPut_ === 'function' && auditDeferPut_('s', values)) return;   // [save-fast A]
 
   const logEntry = SYSTEM_LOG_HEADERS.map(function (h) {
     const v = values[String(h).toLowerCase()];

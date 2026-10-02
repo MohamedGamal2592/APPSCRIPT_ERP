@@ -80,6 +80,7 @@
         window.__typeOptions = r.type_options || [];
         window.__countryOptions = r.country_options || [];
         window.__regionOptions = r.region_options || [];
+        window.__regionByCountry = r.region_by_country || null;
         renderParties(r.parties || []);
         if (!(opts && opts.keepBalances && BALANCES)) fetchBalances();
       })
@@ -114,25 +115,24 @@
     return (p.balance === undefined || p.balance === null) ? null : p.balance;
   }
 
+  /* النوع is عميل | مورد. `direction` is the side the server settled on; an
+     optimistic row has only the form's `customer_direction`. Older rows may
+     still store a six-way classification — the server's side covers those. */
+  function isCustomerParty(p) {
+    var dir = String(p.direction || p.customer_direction || '').trim().toLowerCase();
+    return dir === 'customer' || dir === 'عميل' || dir === 'client';
+  }
+
   function renderParties(list) {
     window.__parties = list;
     var rows = list.map(function (p) {
       /* `direction` is the side the server settled the classification on
          (customer | vendor); `customer_direction` is the classification
          itself. A row saved before the list existed has only the old word. */
-      var dir = String(p.direction || p.customer_direction || '').toLowerCase();
-      var isCustomer = dir === 'customer' || dir === 'عميل' || dir === 'client';
-      /* Show the classification itself, except on a legacy row whose stored
-         value is just the bare side word — «عميل» reads better than the raw
-         «customer» the sheet holds. */
-      var rawDir = String(p.customer_direction || '').trim();
-      var bareDir = /^(customer|vendor|client|supplier|عميل|مورد)$/i.test(rawDir);
-      var dirLabel = (rawDir && !bareDir) ? rawDir : (isCustomer ? 'عميل' : 'مورد');
+      var isCustomer = isCustomerParty(p);
       return {
         name: p.name,
-        /* The pill names the classification and is coloured by its side, so
-           the six-way value is visible without a second column. */
-        direction: UIC.statusPill(dirLabel, isCustomer ? 'success' : 'warning'),
+        direction: UIC.statusPill(isCustomer ? 'عميل' : 'مورد', isCustomer ? 'success' : 'warning'),
         type: p.type || '-',
         country: p.country || '-',
         region: p.region || '-',
@@ -203,10 +203,9 @@
     var list = window.__parties || [];
     var headers = ['الاسم', 'النوع', 'الهاتف', 'العنوان', 'الرصيد'];
     var rows = list.map(function (p) {
-      var isCustomer = String(p.customer_direction).toLowerCase() === 'customer' || String(p.customer_direction).toLowerCase() === 'عميل' || String(p.customer_direction).toLowerCase() === 'client';
       return {
         'الاسم': p.name || '',
-        'النوع': isCustomer ? 'عميل' : 'مورد',
+        'النوع': isCustomerParty(p) ? 'عميل' : 'مورد',
         'الهاتف': p.telephone || '',
         'العنوان': p.address || '',
         'الرصيد': balanceOf(p) || 0
@@ -219,16 +218,37 @@
       .finally(function () { UI.hideSpinner(); });
   }
 
-  /* The six classifications, plus whatever this party already carries when it
-     is not one of them — a row written before the list existed would
-     otherwise be cleared by the picker on the next save. */
-  function directionOptions(current) {
-    var opts = (window.__directionOptions || []).map(function (v) { return { value: v, label: v }; });
-    var cur = String(current == null ? '' : current).trim();
-    if (cur && !opts.some(function (o) { return o.value === cur; })) {
-      opts.unshift({ value: cur, label: cur });
-    }
-    return opts;
+  /* The regions already used with this country. The server sends the map; a
+     cached reply from before it did falls back to the parties on hand. */
+  function regionOptionsFor(country) {
+    var c = String(country == null ? '' : country).trim();
+    if (!c || c === '__new__') return [];
+    var map = window.__regionByCountry;
+    if (map) return map[c] || [];
+    var seen = {}, out = [];
+    (window.__parties || []).forEach(function (p) {
+      var g = String(p.region == null ? '' : p.region).trim();
+      if (String(p.country == null ? '' : p.country).trim() === c && g && !seen[g]) { seen[g] = true; out.push(g); }
+    });
+    return out;
+  }
+
+  function regionField(country, value) {
+    return UIC.enumSelect({ key: 'region', label: 'المنطقة', value: value || '',
+      options: regionOptionsFor(country), required: true,
+      placeholder: country ? 'اختر المنطقة...' : 'اختر الدولة أولاً' });
+  }
+
+  /* A new country redraws المنطقة with that country's regions; a region that
+     does not belong to it is cleared. */
+  function onCountryChange(country) {
+    var slot = document.getElementById('region-slot');
+    if (!slot) return;
+    var curEl = document.getElementById('region');
+    var cur = curEl ? curEl.value : '';
+    if (cur === '__new__') cur = (document.getElementById('region_custom') || {}).value || '';
+    var keep = regionOptionsFor(country).indexOf(cur) !== -1 ? cur : '';
+    slot.innerHTML = regionField(country, keep);
   }
 
   function openPartyModal(id) {
@@ -236,20 +256,20 @@
     var body =
       '<form id="party-form">' +
       UIC.field({ key: 'name', label: 'الاسم', value: p ? p.name : '', required: true }) +
-      /* A CLOSED list (UIC.combo, not UIC.enumSelect): the six values decide
-         which side of العملاء / الموردون a party falls on, and a typed-in
-         seventh would normalize to '' on the server and drop the party out of
-         both filters. Searchable, and the stored value is the label itself. */
+      /* A CLOSED list (UIC.combo, not UIC.enumSelect): عميل | مورد decides
+         which of العملاء / الموردون a party falls under. A row still carrying
+         an older six-way value opens on its side. */
       UIC.combo({ key: 'customer_direction', label: 'النوع', required: true,
-        options: directionOptions(p ? p.customer_direction : ''),
-        value: p ? (p.customer_direction || '') : '',
+        options: (window.__directionOptions && window.__directionOptions.length ? window.__directionOptions : ['عميل', 'مورد']),
+        value: p ? (isCustomerParty(p) ? 'عميل' : 'مورد') : '',
         placeholder: 'اختر النوع...' }) +
       UIC.enumSelect({ key: 'type', label: 'الصنف', value: p ? p.type : '', options: window.__typeOptions || [], required: true }) +
-      UIC.enumSelect({ key: 'country', label: 'الدولة', value: p ? p.country : '', options: window.__countryOptions || [], required: true }) +
-      UIC.enumSelect({ key: 'region', label: 'المنطقة', value: p ? p.region : '', options: window.__regionOptions || [], required: true }) +
+      UIC.enumSelect({ key: 'country', label: 'الدولة', value: p ? p.country : '', options: window.__countryOptions || [], required: true,
+        onChange: onCountryChange }) +
+      '<div id="region-slot">' + regionField(p ? p.country : '', p ? p.region : '') + '</div>' +
       UIC.field({ key: 'telephone', label: 'الهاتف', value: p ? p.telephone : '', required: true }) +
       UIC.field({ key: 'address', label: 'العنوان', value: p ? p.address : '', required: true }) +
-      UIC.field({ key: 'registration_number', label: 'رقم التسجيل', value: p ? p.registration_number : '' }) +
+      UIC.field({ key: 'registration_number', label: 'رقم السجل التجاري', value: p ? p.registration_number : '' }) +
       UIC.field({ key: 'tax_id', label: 'الرقم الضريبي', value: p ? p.tax_id : '' }) +
       '</form>';
     UIC.openModal('party-modal', {
@@ -259,26 +279,59 @@
     });
   }
 
+  /* [save-diag] What one save costs on THIS page, stage by stage, kept on the
+     device for et_customers_perf («٦ — الحفظ من الصفحة نفسها»). Numbers only —
+     no field values leave the form. Never throws into the save. */
+  var SAVE_TIMING_KEY = 'et_save_timing_v1';
+  function saveTimingDone(st, ok, e) {
+    try {
+      st.confirmed = Math.round(performance.now() - st.t0);
+      st.paint = st.renders.length ? Math.round(st.renders[0]) : null;
+      st.reconcile = st.renders.length > 1 ? Math.round(st.renders[st.renders.length - 1]) : null;
+      st.rows = (window.__parties || []).length;
+      st.ok = !!ok;
+      if (!ok) st.err = String((e && (e.code || e.message)) || 'error').slice(0, 80);
+      delete st.t0; delete st.renders;
+      var all = JSON.parse(localStorage.getItem(SAVE_TIMING_KEY) || '[]');
+      if (!Array.isArray(all)) all = [];
+      all.push(st);
+      if (all.length > 30) all = all.slice(-30);
+      localStorage.setItem(SAVE_TIMING_KEY, JSON.stringify(all));
+    } catch (x) {}
+  }
+
   function saveParty(id) {
+    var st = { at: Date.now(), kind: id ? 'edit' : 'add', t0: performance.now(), renders: [] };   // [save-diag]
     var data = UIC.collectForm('party-form');
     if (!UIC.validateForm('party-form')) return;
     ['type', 'country', 'region'].forEach(function (k) {
       if (data[k] === '__new__') data[k] = data[k + '_custom'] || '';
       delete data[k + '_custom'];
     });
+    var map = window.__regionByCountry;
+    if (map && data.country && data.region) {
+      var regs = map[data.country] = map[data.country] || [];
+      if (regs.indexOf(data.region) === -1) regs.push(data.region);
+    }
+    if (data.country && window.__countryOptions && window.__countryOptions.indexOf(data.country) === -1) window.__countryOptions.push(data.country);
     if (id) data.id = id;
     /* [RT-4] Optimistic. The three rotating reassurance messages that used to
        cover this wait are deleted rather than kept: they were the UI being
        designed around the wait, and there is no wait to design around now. */
     if (!window.__parties) window.__parties = [];
-    return UIC.Live.save({
+    st.collect = Math.round(performance.now() - st.t0);   // [save-diag]
+    var saving = UIC.Live.save({
       call: companyCall,
       action: id ? 'edit_et_party' : 'add_et_party',
       data: data,
       list: window.__parties,
       key: 'id',
       draft: Object.assign({}, data),
-      render: function () { renderParties(window.__parties); },
+      render: function () {
+        var r0 = performance.now();
+        renderParties(window.__parties);
+        st.renders.push(performance.now() - r0);   // [save-diag] 1st = the optimistic row, last = the server's record
+      },
       modal: 'party-modal',
       message: 'تم الحفظ',
       /* An add gets its id from the server; the reply carries it either on
@@ -289,7 +342,12 @@
         return rec;
       },
       reload: fetchParties
-    }).catch(function () { /* Live.save has already toasted and rolled back */ });
+    });
+    /* [save-diag] Everything that ran before the browser was free again: the
+       optimistic row, the modal closing and the request leaving. */
+    st.feedback = Math.round(performance.now() - st.t0);
+    return saving.then(function (r) { saveTimingDone(st, true); return r; },
+      function (e) { saveTimingDone(st, false, e); /* Live.save has already toasted and rolled back */ });
   }
 
   function showError(e) {

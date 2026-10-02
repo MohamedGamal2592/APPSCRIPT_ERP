@@ -147,11 +147,12 @@ const cases = [
 const IGNORE = { now: true, created_at: true, asof: true };
 /* `allow` names the DELIBERATE divergences from Top Light, per case:
      mfg     — the manufacturing extras Top Light has no column for
-     parties — et_customers classifies a party six ways («النوع»), so
+     parties — et_customers stores «النوع» (عميل | مورد; older rows six ways), so
                get_et_parties returns the STORED classification plus the side
                it settles on, where Top Light returns only the side. The
                parity that still matters is that the side agrees, and that is
-               asserted below rather than skipped. */
+               asserted below rather than skipped. It also sends
+               region_by_country for the form's المنطقة list. */
 function diff(a, b, p, out, allow) {
   allow = allow || {};
   const allowMfg = allow.mfg;
@@ -175,7 +176,7 @@ function diff(a, b, p, out, allow) {
       if (IGNORE[k]) return;
       if (allowMfg && k === 'mfgExtra' && !(k in a) && Number(b[k]) === 0) return;
       if (partyRow && (k === 'direction' || k === 'customer_direction')) return;
-      if (allow.parties && k === 'direction_options' && !(k in a)) return;
+      if (allow.parties && (k === 'direction_options' || k === 'region_by_country') && !(k in a)) return;
       diff(a[k], b[k], p + '.' + k, out, allow);
     });
     return;

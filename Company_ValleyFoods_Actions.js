@@ -247,6 +247,10 @@ const ValleyFoods = (function () {
     'add_monthly_salary': { page: 'vf_hr_monthly_salaries', access: 'write' },
     'generate_monthly_salaries': { page: 'vf_hr_monthly_salaries', access: 'write' },
 
+    // تحليلات الموارد البشرية
+    'get_valley_hr_turnover': { page: 'vf_hr_analysis', access: 'read' },
+    'get_valley_hr_metrics': { page: 'vf_hr_analysis', access: 'read' },
+
     // الحضور والانصراف
     'get_attendance_sessions': { page: 'vf_hr_attendance', access: 'read' },
     'add_attendance_session': { page: 'vf_hr_attendance', access: 'write' },
@@ -448,6 +452,8 @@ const ValleyFoods = (function () {
     'update_overtime': 'valley_emp_overtime',
     'get_monthly_salaries_data': 'valley_emp_salaries', 'add_monthly_salary': 'valley_emp_salaries',
     'generate_monthly_salaries': 'valley_emp_salaries',
+    'get_valley_hr_turnover': 'valley_employee_status',
+    'get_valley_hr_metrics': 'valley_employee_status',
     'get_attendance_sessions': 'valley_attendance_session', 'add_attendance_session': 'valley_attendance_session',
     'get_attendance_data': 'valley_employee_attendance', 'add_manual_attendance': 'valley_employee_attendance',
     'get_attendance_employees': 'valley_employee_info',
@@ -694,6 +700,9 @@ const ValleyFoods = (function () {
   const PAGE_VIEWS = {
     'vf_asset_technical': {
       'list': ['valley_product_technical', 'valley_products']
+    },
+    'vf_hr_analysis': {
+      'report': ['valley_employee_status', 'valley_employee_info', 'valley_emp_salaries', 'valley_emp_deductions', 'valley_employee_vacations', 'valley_employee_vacation_allocation', 'valley_employee_contracts', 'valley_sales_invoices', 'valley_sales_returns']
     },
     'vf_hr_attendance': {
       'form': ['valley_attendance_import_batch', 'valley_employee_attendance', 'valley_employee_info', 'valley_attendance_session', 'valley_employee_status'],
@@ -1989,6 +1998,866 @@ const ValleyFoodsHRModules = (function () {
       statuses_by_employee: monthlySalaryStatusJson_(statuses),
       existing_by_employee: existingById
     };
+  }
+
+  // ===================== HR ANALYSIS — TURNOVER (SHRM) =====================
+  /*
+   * SHRM turnover over the valley_employee_status history:
+   *
+   *   monthly rate = separations in the month / average headcount × 100
+   *   average headcount = (headcount at month start + headcount at month end) / 2
+   *   annual (or year-to-date) rate = sum of the monthly rates
+   *
+   * Headcount uses the same status convention as payroll: «يعمل بالشركة» is
+   * effective ON its date, and any other status dated D makes D the last
+   * working day. So a start-of-month headcount is the state after every event
+   * dated before day 1, an end-of-month headcount the state after every event
+   * dated on or before the last day — end(M) is always start(M+1).
+   *
+   * A separation is a move from active to a non-active status; a non-active
+   * row following another non-active row is not a second separation. When
+   * one employee has several rows on the same date only the last one counts
+   * (a correction is entered as a second row on the same date). An employee
+   * whose first row is a separation was evidently employed before it: they
+   * are treated as active from hiring_date (or from the beginning of the
+   * data when hiring_date is missing or later), and the reply counts them.
+   */
+  var HR_TURNOVER_CATEGORY = {
+    'استقالة': 'voluntary',
+    'انقطاع عن العمل': 'voluntary',
+    'انهاء تعاقد': 'involuntary',
+    'بلوغ سن التقاعد': 'other',
+    'الوفاة': 'other',
+    'معاه عجز': 'other'
+  };
+  var HR_TURNOVER_MONTHS = ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو',
+    'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];
+
+  function hrTurnoverRound_(n) { return Math.round(n * 100) / 100; }
+
+  function hrTurnoverDateText_(key) {
+    if (!key) return '';
+    return Math.floor(key / 10000) + '-' + pad2_(Math.floor(key / 100) % 100) + '-' + pad2_(key % 100);
+  }
+
+  /* Days between two yyyymmdd keys (b − a). */
+  function hrTurnoverDays_(a, b) {
+    var da = new Date(Math.floor(a / 10000), Math.floor(a / 100) % 100 - 1, a % 100);
+    var db = new Date(Math.floor(b / 10000), Math.floor(b / 100) % 100 - 1, b % 100);
+    return Math.round((db.getTime() - da.getTime()) / 86400000);
+  }
+
+  /* Pure: employees + raw status rows + options -> the report. No I/O, so the
+     verify suite runs it as is.
+     opts: { year, employee_type, section, title, today_key }. The employee
+     filters narrow the population BEFORE anything is counted, so headcount
+     and separations always describe the same group of people. */
+  var HR_TURNOVER_UNSET = 'غير محدد';
+  function hrTurnoverText_(v) { return String(v == null ? '' : v).trim() || HR_TURNOVER_UNSET; }
+
+  /* State of a timeline after every event dated before `key`, or on/before
+     it when `inclusive` — the start-of-day and end-of-day headcount rules. */
+  function hrActiveAfter_(events, key, inclusive) {
+    var active = false;
+    for (var i = 0; i < events.length; i++) {
+      if (inclusive ? events[i].date > key : events[i].date >= key) break;
+      active = events[i].active;
+    }
+    return active;
+  }
+
+  /* Shared by every HR metric: the filtered population and one status
+     timeline per employee (same-date rows collapsed to the last one; a first
+     row that is a separation gets an implied active start at hiring_date).
+     opts: { year, employee_type, section, title, today_key }. The employee
+     filters narrow the population BEFORE anything is counted, so every metric
+     describes the same group of people. */
+  function hrPopulation_(employees, statusRows, opts) {
+    var o = opts || {};
+    var todayKey = Number(o.today_key) || monthlySalaryDateKey_(new Date());
+    var currentYear = Math.floor(todayKey / 10000);
+    var year = Number(o.year) || currentYear;
+    var typeFilter = String(o.employee_type || '').trim();
+    var sectionFilter = String(o.section || '').trim();
+    var titleFilter = String(o.title || '').trim();
+
+    var employeeByKey = {};
+    var employeeTypes = {};
+    var sectionOptions = {};
+    var titleOptions = {};
+    (employees || []).forEach(function (e) {
+      var key = monthlySalaryEmployeeKey_(e.emp_id);
+      if (key && !employeeByKey[key]) employeeByKey[key] = e;
+      var t = String(e.employee_type || '').trim();
+      if (t) employeeTypes[t] = true;
+      var sec = hrTurnoverText_(e.section);
+      var ttl = hrTurnoverText_(e.title);
+      sectionOptions[sec] = true;
+      titleOptions[sec + '|' + ttl] = { title: ttl, section: sec };
+    });
+
+    function inScope_(emp) {
+      if (typeFilter && String(emp.employee_type || '').trim() !== typeFilter) return false;
+      if (sectionFilter && hrTurnoverText_(emp.section) !== sectionFilter) return false;
+      if (titleFilter && hrTurnoverText_(emp.title) !== titleFilter) return false;
+      return true;
+    }
+
+    var invalidDateCount = 0;
+    (statusRows || []).forEach(function (row) {
+      var code = row.Employee_Code !== undefined ? row.Employee_Code : row.employee_code;
+      var date = row.Status_Date !== undefined ? row.Status_Date : row.status_date;
+      if (monthlySalaryEmployeeKey_(code) && monthlySalaryDateKey_(date) === null) invalidDateCount++;
+    });
+
+    var byEmployee = monthlySalaryStatusJson_(statusRows);
+    var minYear = currentYear;
+    var implicitStartCount = 0;
+    var timelines = [];
+    Object.keys(byEmployee).forEach(function (key) {
+      var emp = employeeByKey[key] || {};
+      if (!inScope_(emp)) return;
+      var events = [];
+      byEmployee[key].forEach(function (e) {
+        var last = events[events.length - 1];
+        var ev = { date: e.status_date, status_type: e.status_type, active: e.status_type === ACTIVE_STATUS };
+        if (last && last.date === ev.date) events[events.length - 1] = ev;
+        else events.push(ev);
+      });
+      if (!events.length) return;
+      if (!events[0].active) {
+        var hireKey = monthlySalaryDateKey_(emp.hiring_date);
+        events.unshift({
+          date: hireKey && hireKey < events[0].date ? hireKey : 0,
+          status_type: ACTIVE_STATUS, active: true, implicit: true
+        });
+        implicitStartCount++;
+      }
+      events.forEach(function (ev) {
+        if (ev.date) minYear = Math.min(minYear, Math.floor(ev.date / 10000));
+      });
+      timelines.push({
+        key: key,
+        emp: emp,
+        name: emp.name_ar || '',
+        section: hrTurnoverText_(emp.section),
+        title: hrTurnoverText_(emp.title),
+        employee_type: emp.employee_type || '',
+        events: events
+      });
+    });
+
+    var noStatusCount = 0;
+    Object.keys(employeeByKey).forEach(function (key) {
+      if (inScope_(employeeByKey[key]) && !byEmployee[key]) noStatusCount++;
+    });
+
+    var years = [];
+    for (var y = currentYear; y >= minYear; y--) years.push(y);
+    if (years.indexOf(year) === -1) years.push(year);
+
+    return {
+      todayKey: todayKey,
+      currentYear: currentYear,
+      year: year,
+      typeFilter: typeFilter,
+      sectionFilter: sectionFilter,
+      titleFilter: titleFilter,
+      filtered: !!(typeFilter || sectionFilter || titleFilter),
+      employeeByKey: employeeByKey,
+      inScope: inScope_,
+      timelines: timelines,
+      noStatusCount: noStatusCount,
+      implicitStartCount: implicitStartCount,
+      invalidDateCount: invalidDateCount,
+      options: {
+        years: years,
+        employee_types: Object.keys(employeeTypes).sort(),
+        section_options: Object.keys(sectionOptions).sort(function (a, b) { return a.localeCompare(b, 'ar'); }),
+        title_options: Object.keys(titleOptions).map(function (k) { return titleOptions[k]; })
+          .sort(function (a, b) { return a.title.localeCompare(b.title, 'ar'); })
+      }
+    };
+  }
+
+  /* Months of `year` that have started; the current month runs to today. */
+  function hrPeriodMonths_(year, todayKey) {
+    var months = [];
+    for (var m = 1; m <= 12; m++) {
+      var startKey = year * 10000 + m * 100 + 1;
+      if (startKey > todayKey) break;
+      var endKey = Math.min(year * 10000 + m * 100 + 31, todayKey);
+      months.push({ month: m, start_key: startKey, end_key: endKey, partial: endKey === todayKey });
+    }
+    return months;
+  }
+
+  function hrTurnoverReport_(employees, statusRows, opts) {
+    var pop = hrPopulation_(employees, statusRows, opts);
+    var timelines = pop.timelines;
+    var months = hrPeriodMonths_(pop.year, pop.todayKey);
+
+    function newBucket_() {
+      return { begin: 0, end: 0, hires: 0, separations: 0, voluntary: 0, involuntary: 0, other: 0 };
+    }
+
+    var separations = [];
+    /* Each month keeps the whole population plus one bucket per section and
+       per title, so the breakdown tables use exactly the totals' arithmetic. */
+    var monthly = months.map(function (mo) { return { mo: mo, all: newBucket_(), section: {}, title: {} }; });
+
+    timelines.forEach(function (t) {
+      monthly.forEach(function (row) {
+        var mo = row.mo;
+        var sec = row.section[t.section] || (row.section[t.section] = newBucket_());
+        var ttl = row.title[t.title] || (row.title[t.title] = newBucket_());
+        var begin = hrActiveAfter_(t.events, mo.start_key, false);
+        var end = hrActiveAfter_(t.events, mo.end_key, true);
+        if (begin) { row.all.begin++; sec.begin++; ttl.begin++; }
+        if (end) { row.all.end++; sec.end++; ttl.end++; }
+        for (var i = 0; i < t.events.length; i++) {
+          var ev = t.events[i];
+          if (ev.date < mo.start_key) continue;
+          if (ev.date > mo.end_key) break;
+          var wasActive = i > 0 && t.events[i - 1].active;
+          if (ev.active && !wasActive) { row.all.hires++; sec.hires++; ttl.hires++; }
+          if (!ev.active && wasActive) {
+            var cat = HR_TURNOVER_CATEGORY[ev.status_type] || 'other';
+            row.all.separations++; row.all[cat]++;
+            sec.separations++; sec[cat]++;
+            ttl.separations++; ttl[cat]++;
+            var startEv = null;
+            for (var j = i - 1; j >= 0 && t.events[j].active; j--) startEv = t.events[j];
+            var startDate = startEv && startEv.date ? startEv.date : 0;
+            separations.push({
+              emp_id: t.key, name_ar: t.name, section: t.section, title: t.title,
+              employee_type: t.employee_type, status_type: ev.status_type, category: cat,
+              status_date: hrTurnoverDateText_(ev.date), month: mo.month,
+              start_date: hrTurnoverDateText_(startDate),
+              tenure_days: startDate ? hrTurnoverDays_(startDate, ev.date) + 1 : null
+            });
+          }
+        }
+      });
+    });
+
+    function rateOf_(count, avg) { return avg > 0 ? count / avg * 100 : 0; }
+
+    /* Rolls a list of monthly buckets into one period line: average headcount
+       is the mean of the monthly averages, each rate the sum of monthly rates. */
+    function summarize_(buckets) {
+      var s = { begin: 0, end: 0, hires: 0, separations: 0, voluntary: 0, involuntary: 0, other: 0,
+        avg_headcount: 0, rate: 0, voluntary_rate: 0, involuntary_rate: 0, other_rate: 0 };
+      buckets.forEach(function (b, idx) {
+        var avg = (b.begin + b.end) / 2;
+        if (idx === 0) s.begin = b.begin;
+        s.end = b.end;
+        s.hires += b.hires; s.separations += b.separations;
+        s.voluntary += b.voluntary; s.involuntary += b.involuntary; s.other += b.other;
+        s.avg_headcount += avg;
+        s.rate += rateOf_(b.separations, avg);
+        s.voluntary_rate += rateOf_(b.voluntary, avg);
+        s.involuntary_rate += rateOf_(b.involuntary, avg);
+        s.other_rate += rateOf_(b.other, avg);
+      });
+      s.avg_headcount = buckets.length ? hrTurnoverRound_(s.avg_headcount / buckets.length) : 0;
+      s.annualized_rate = buckets.length ? hrTurnoverRound_(s.rate / buckets.length * 12) : 0;
+      ['rate', 'voluntary_rate', 'involuntary_rate', 'other_rate'].forEach(function (k) { s[k] = hrTurnoverRound_(s[k]); });
+      return s;
+    }
+
+    var monthRows = monthly.map(function (row) {
+      var b = row.all;
+      var avg = (b.begin + b.end) / 2;
+      return {
+        month: row.mo.month, month_name: HR_TURNOVER_MONTHS[row.mo.month - 1], partial: row.mo.partial,
+        begin: b.begin, end: b.end, avg_headcount: hrTurnoverRound_(avg),
+        hires: b.hires, separations: b.separations,
+        voluntary: b.voluntary, involuntary: b.involuntary, other: b.other,
+        rate: hrTurnoverRound_(rateOf_(b.separations, avg))
+      };
+    });
+
+    var totals = summarize_(monthly.map(function (row) { return row.all; }));
+    totals.months = months.length;
+    if (months.length >= 12) totals.annualized_rate = totals.rate;
+
+    function breakdown_(dim) {
+      var names = {};
+      monthly.forEach(function (row) { Object.keys(row[dim]).forEach(function (n) { names[n] = true; }); });
+      return Object.keys(names).map(function (name) {
+        var s = summarize_(monthly.map(function (row) { return row[dim][name] || newBucket_(); }));
+        s[dim] = name;
+        return s;
+      }).filter(function (s) { return s.avg_headcount > 0 || s.separations > 0; })
+        .sort(function (a, b) { return (b.rate - a.rate) || String(a[dim]).localeCompare(String(b[dim]), 'ar'); });
+    }
+    var sections = breakdown_('section');
+    var titles = breakdown_('title');
+
+    var byType = {};
+    separations.forEach(function (s) {
+      var t = byType[s.status_type] || (byType[s.status_type] = { status_type: s.status_type, category: s.category, count: 0 });
+      t.count++;
+    });
+    var typeRows = Object.keys(byType).map(function (k) {
+      var t = byType[k];
+      t.share = totals.separations ? hrTurnoverRound_(t.count / totals.separations * 100) : 0;
+      return t;
+    }).sort(function (a, b) { return b.count - a.count; });
+
+    separations.sort(function (a, b) { return a.status_date < b.status_date ? -1 : a.status_date > b.status_date ? 1 : 0; });
+
+    return {
+      status: 'success',
+      year: pop.year,
+      employee_type: pop.typeFilter,
+      section: pop.sectionFilter,
+      title: pop.titleFilter,
+      today: hrTurnoverDateText_(pop.todayKey),
+      years: pop.options.years,
+      employee_types: pop.options.employee_types,
+      section_options: pop.options.section_options,
+      title_options: pop.options.title_options,
+      months: monthRows,
+      totals: totals,
+      sections: sections,
+      titles: titles,
+      separation_types: typeRows,
+      separations: separations,
+      data_quality: {
+        employees_counted: timelines.length,
+        no_status_count: pop.noStatusCount,
+        implicit_start_count: pop.implicitStartCount,
+        invalid_date_count: pop.invalidDateCount
+      }
+    };
+  }
+
+  function getValleyHrTurnover_(data, user, dbId) {
+    var d = data || {};
+    return hrTurnoverReport_(
+      getAllRecords_(dbId, EMP_INFO_SHEET),
+      getAllRecords_(dbId, EMP_STATUS_SHEET),
+      { year: d.year, employee_type: d.employee_type, section: d.section, title: d.title }
+    );
+  }
+
+  // ===================== HR ANALYSIS — DIRECTOR METRICS =====================
+  /*
+   * Every other card on تحليلات الموارد البشرية, computed in ONE pass over the
+   * HR sheets (plus sales for revenue per employee). The population, the
+   * filters and the status rules are hrPopulation_'s, so all metrics describe
+   * the same group as the turnover card.
+   *
+   * Period = the selected year up to today. Payroll-based metrics (absence,
+   * lateness, overtime, cost) use only employee-months that have a row in
+   * valley_emp_salaries: that row is what was actually paid, and it carries
+   * the denominator (working_days, working_hours) the rate needs.
+   */
+  var HR_DEDUCTION_ABSENCE = 'غياب';
+  var HR_DEDUCTION_PENALTY = 'جزاءات';
+  var HR_DEDUCTION_LATE = 'حضور وانصراف';
+  var HR_RETIREMENT_AGE = 60;
+  var HR_NEAR_RETIREMENT_AGE = 58;
+  var HR_TENURE_BANDS = [
+    { max: 1, label: 'أقل من سنة' }, { max: 3, label: '1 - 3 سنوات' }, { max: 5, label: '3 - 5 سنوات' },
+    { max: 10, label: '5 - 10 سنوات' }, { max: Infinity, label: '10 سنوات فأكثر' }
+  ];
+  var HR_AGE_BANDS = [
+    { max: 25, label: 'أقل من 25' }, { max: 35, label: '25 - 34' }, { max: 45, label: '35 - 44' },
+    { max: 55, label: '45 - 54' }, { max: Infinity, label: '55 فأكثر' }
+  ];
+
+  function hrNum_(v) { var n = Number(v); return isFinite(n) ? n : 0; }
+  function hrRate_(n, d) { return d > 0 ? hrTurnoverRound_(n / d * 100) : 0; }
+  function hrBand_(bands, value) {
+    for (var i = 0; i < bands.length; i++) if (value < bands[i].max) return bands[i].label;
+    return bands[bands.length - 1].label;
+  }
+  /* {label: count} -> [{label, count, share}] in a fixed order or by count. */
+  function hrShares_(counts, order) {
+    var total = 0;
+    Object.keys(counts).forEach(function (k) { total += counts[k]; });
+    var labels = order ? order.filter(function (k) { return counts[k]; }) : Object.keys(counts)
+      .sort(function (a, b) { return (counts[b] - counts[a]) || a.localeCompare(b, 'ar'); });
+    return labels.map(function (k) { return { label: k, count: counts[k], share: hrRate_(counts[k], total) }; });
+  }
+  function hrBump_(map, key, n) { map[key] = (map[key] || 0) + (n == null ? 1 : n); }
+  function hrTruthy_(v) {
+    if (v === true || v === 1) return true;
+    var t = String(v == null ? '' : v).trim().toLowerCase();
+    return t === 'true' || t === 'نعم' || t === 'yes' || t === '1' || t === 'on';
+  }
+
+  /* Egyptian national ID: C YY MM DD … — C = 2 for 1900s, 3 for 2000s. */
+  function hrBirthKeyFromNid_(nid) {
+    var s = String(nid == null ? '' : nid).replace(/\D/g, '');
+    if (s.length !== 14) return null;
+    var century = s.charAt(0) === '2' ? 1900 : s.charAt(0) === '3' ? 2000 : 0;
+    if (!century) return null;
+    var y = century + Number(s.substr(1, 2)), m = Number(s.substr(3, 2)), d = Number(s.substr(5, 2));
+    var dt = new Date(y, m - 1, d);
+    if (dt.getFullYear() !== y || dt.getMonth() !== m - 1 || dt.getDate() !== d) return null;
+    return y * 10000 + m * 100 + d;
+  }
+  /* Whole years from birth to `key`. */
+  function hrAgeAt_(birthKey, key) {
+    var age = Math.floor(key / 10000) - Math.floor(birthKey / 10000);
+    if (key % 10000 < birthKey % 10000) age--;
+    return age;
+  }
+
+  /* Pure: src = { employees, statuses, salaries, deductions, deduction_roles,
+     vacations, allocations, vacation_types, contracts, contract_types,
+     invoices, sales_lines, sales_returns }; opts as hrPopulation_. */
+  function hrMetricsReport_(src, opts) {
+    var S = src || {};
+    var pop = hrPopulation_(S.employees, S.statuses, opts);
+    var todayKey = pop.todayKey;
+    var year = pop.year;
+    var months = hrPeriodMonths_(year, todayKey);
+    var fromKey = year * 10000 + 101;
+    var toKey = Math.min(year * 10000 + 1231, todayKey);
+    var hasPeriod = months.length > 0;
+
+    /* A transactional row belongs to the population when its employee does;
+       a row for someone missing from valley_employee_info counts only when
+       no employee filter is active. */
+    function scoped_(empId) {
+      var key = monthlySalaryEmployeeKey_(empId);
+      if (!key) return null;
+      var emp = pop.employeeByKey[key];
+      if (!emp) return pop.filtered ? null : { key: key, emp: {} };
+      return pop.inScope(emp) ? { key: key, emp: emp } : null;
+    }
+    function person_(t) {
+      return { emp_id: t.key, name_ar: t.name, section: t.section, title: t.title };
+    }
+    /* Start of the active stint that covers `key` (0 when unknown). */
+    function stintStart_(events, key) {
+      var start = null;
+      for (var i = 0; i < events.length && events[i].date <= key; i++) {
+        if (events[i].active) { if (start === null) start = events[i].date; }
+        else start = null;
+      }
+      return start;
+    }
+
+    /* ── headcount, retention, hires ─────────────────────────────────────── */
+    var avgSum = 0;
+    months.forEach(function (mo) {
+      var b = 0, e = 0;
+      pop.timelines.forEach(function (t) {
+        if (hrActiveAfter_(t.events, mo.start_key, false)) b++;
+        if (hrActiveAfter_(t.events, mo.end_key, true)) e++;
+      });
+      avgSum += (b + e) / 2;
+    });
+    var avgHeadcount = months.length ? avgSum / months.length : 0;
+
+    var startCount = 0, endCount = 0, retained = 0, hires = 0, separations = 0;
+    var notRetained = [];
+    var hireEvents = [];
+    var activeAtEnd = [];
+    pop.timelines.forEach(function (t) {
+      if (!hasPeriod) return;
+      var atStart = hrActiveAfter_(t.events, fromKey, false);
+      var atEnd = hrActiveAfter_(t.events, toKey, true);
+      if (atStart) startCount++;
+      if (atEnd) { endCount++; activeAtEnd.push(t); }
+      var leftOn = null;
+      for (var i = 0; i < t.events.length; i++) {
+        var ev = t.events[i];
+        if (ev.date < fromKey) continue;
+        if (ev.date > toKey) break;
+        var wasActive = i > 0 && t.events[i - 1].active;
+        if (!ev.active && wasActive) { separations++; if (leftOn === null) leftOn = ev; }
+        if (ev.active && !wasActive) { hires++; hireEvents.push({ t: t, index: i }); }
+      }
+      if (atStart) {
+        if (leftOn === null) retained++;
+        else notRetained.push(Object.assign(person_(t), { status_type: leftOn.status_type, status_date: hrTurnoverDateText_(leftOn.date) }));
+      }
+    });
+
+    var workforce = {
+      headcount_start: startCount,
+      headcount_end: endCount,
+      growth: startCount ? hrTurnoverRound_((endCount - startCount) / startCount * 100) : 0,
+      avg_headcount: hrTurnoverRound_(avgHeadcount),
+      hires: hires,
+      separations: separations,
+      net_change: endCount - startCount
+    };
+    var retention = {
+      start: startCount,
+      retained: retained,
+      rate: hrRate_(retained, startCount),
+      left: notRetained
+    };
+
+    /* ── early (new-hire) turnover: matured cohorts only ─────────────────── */
+    function cohort_(days) {
+      var c = { days: days, cohort: 0, left: 0, rate: 0, pending: 0 };
+      hireEvents.forEach(function (h) {
+        var hireKey = h.t.events[h.index].date;
+        var sep = null;
+        for (var j = h.index + 1; j < h.t.events.length; j++) {
+          if (!h.t.events[j].active) { sep = h.t.events[j]; break; }
+        }
+        var served = sep ? hrTurnoverDays_(hireKey, sep.date) + 1 : null;
+        if (sep && served <= days && sep.date <= todayKey) { c.cohort++; c.left++; return; }
+        if (hrTurnoverDays_(hireKey, todayKey) + 1 >= days) c.cohort++;
+        else c.pending++;
+      });
+      c.rate = hrRate_(c.left, c.cohort);
+      return c;
+    }
+    var earlyList = [];
+    hireEvents.forEach(function (h) {
+      var hireKey = h.t.events[h.index].date;
+      for (var j = h.index + 1; j < h.t.events.length; j++) {
+        var ev = h.t.events[j];
+        if (ev.active) continue;
+        var served = hrTurnoverDays_(hireKey, ev.date) + 1;
+        if (served <= 365 && ev.date <= todayKey) {
+          earlyList.push(Object.assign(person_(h.t), {
+            hire_date: hrTurnoverDateText_(hireKey), status_date: hrTurnoverDateText_(ev.date),
+            status_type: ev.status_type, days: served
+          }));
+        }
+        break;
+      }
+    });
+    earlyList.sort(function (a, b) { return a.days - b.days; });
+    var earlyTurnover = { d90: cohort_(90), d365: cohort_(365), hires: hires, list: earlyList };
+
+    /* ── tenure, mix and age of the workforce at period end ──────────────── */
+    var tenureSum = 0, tenureCount = 0, tenureUnknown = 0;
+    var tenureBands = {};
+    var tenureBySection = {};
+    var gender = {}, empType = {}, category = {}, sectionMix = {};
+    var insured = 0;
+    var ageSum = 0, ageCount = 0, ageUnknown = 0;
+    var ageBands = {};
+    var nearRetirement = [];
+    activeAtEnd.forEach(function (t) {
+      var emp = t.emp || {};
+      var start = stintStart_(t.events, toKey);
+      if (start) {
+        var yrs = (hrTurnoverDays_(start, toKey) + 1) / 365.25;
+        tenureSum += yrs; tenureCount++;
+        hrBump_(tenureBands, hrBand_(HR_TENURE_BANDS, yrs));
+        var ts = tenureBySection[t.section] || (tenureBySection[t.section] = { sum: 0, count: 0 });
+        ts.sum += yrs; ts.count++;
+      } else {
+        tenureUnknown++;
+      }
+      hrBump_(gender, hrTurnoverText_(emp.gender));
+      hrBump_(empType, hrTurnoverText_(emp.employee_type));
+      hrBump_(category, hrTurnoverText_(emp.category));
+      hrBump_(sectionMix, t.section);
+      if (hrTruthy_(emp.insurance)) insured++;
+      var birth = hrBirthKeyFromNid_(emp.national_id);
+      if (birth) {
+        var age = hrAgeAt_(birth, toKey);
+        ageSum += age; ageCount++;
+        hrBump_(ageBands, hrBand_(HR_AGE_BANDS, age));
+        if (age >= HR_NEAR_RETIREMENT_AGE) {
+          nearRetirement.push(Object.assign(person_(t), {
+            age: age,
+            birth_date: hrTurnoverDateText_(birth),
+            retirement_date: hrTurnoverDateText_(birth + HR_RETIREMENT_AGE * 10000)
+          }));
+        }
+      } else {
+        ageUnknown++;
+      }
+    });
+    nearRetirement.sort(function (a, b) { return a.retirement_date < b.retirement_date ? -1 : 1; });
+    var tenure = {
+      count: tenureCount,
+      unknown: tenureUnknown,
+      avg_years: tenureCount ? hrTurnoverRound_(tenureSum / tenureCount) : 0,
+      bands: hrShares_(tenureBands, HR_TENURE_BANDS.map(function (b) { return b.label; })),
+      by_section: Object.keys(tenureBySection).map(function (k) {
+        var x = tenureBySection[k];
+        return { label: k, count: x.count, avg_years: hrTurnoverRound_(x.sum / x.count) };
+      }).sort(function (a, b) { return b.avg_years - a.avg_years; })
+    };
+    var mix = {
+      total: activeAtEnd.length,
+      gender: hrShares_(gender),
+      employee_type: hrShares_(empType),
+      category: hrShares_(category),
+      section: hrShares_(sectionMix),
+      insured: insured,
+      insured_rate: hrRate_(insured, activeAtEnd.length)
+    };
+    var ageReport = {
+      count: ageCount,
+      unknown: ageUnknown,
+      avg: ageCount ? hrTurnoverRound_(ageSum / ageCount) : 0,
+      bands: hrShares_(ageBands, HR_AGE_BANDS.map(function (b) { return b.label; })),
+      near_retirement: nearRetirement,
+      near_retirement_age: HR_NEAR_RETIREMENT_AGE
+    };
+
+    /* ── payroll rows of the period (the paid employee-months) ────────────── */
+    var paid = {};          /* emp key|month -> true */
+    var payMonths = {};     /* month -> bucket */
+    var paySections = {};   /* section -> bucket */
+    function payBucket_() {
+      return { rows: 0, net: 0, gross: 0, working_days: 0, regular_hours: 0, overtime_hours: 0, overtime_value: 0, absence_days: 0, late: 0 };
+    }
+    var payTotal = payBucket_();
+    var lastMonth = months.length ? months[months.length - 1].month : 0;
+    (S.salaries || []).forEach(function (r) {
+      if (hrNum_(r.year) !== year) return;
+      var m = hrNum_(r.month);
+      if (m < 1 || m > lastMonth) return;
+      var sc = scoped_(r.emp_id);
+      if (!sc) return;
+      var section = hrTurnoverText_(sc.emp.section);
+      var wd = hrNum_(r.working_days);
+      var hoursPerDay = hrNum_(r.working_hours) > 0 ? hrNum_(r.working_hours) : 8;
+      var gross = hrNum_(r.working_days_value) + hrNum_(r.overtime_days_value) +
+        hrNum_(r.vacation_days_value) + hrNum_(r.other_addition);
+      paid[sc.key + '|' + m] = section;
+      [payTotal, payMonths[m] || (payMonths[m] = payBucket_()), paySections[section] || (paySections[section] = payBucket_())]
+        .forEach(function (b) {
+          b.rows++;
+          b.net += hrNum_(r.net_salary);
+          b.gross += gross;
+          b.working_days += wd;
+          b.regular_hours += wd * hoursPerDay;
+          b.overtime_hours += hrNum_(r.overtime_days);
+          b.overtime_value += hrNum_(r.overtime_days_value);
+        });
+    });
+
+    /* ── deductions: absence, lateness, penalties ────────────────────────── */
+    var roleCategory = {};
+    (S.deduction_roles || []).forEach(function (r) {
+      var id = String(r.rule_unique_id == null ? '' : r.rule_unique_id).trim();
+      if (id) roleCategory[id] = String(r.deduction_category || '').trim();
+    });
+    var penalties = { incidents: 0, days: 0, by_section: {} };
+    var unpaidAbsence = 0;
+    var lateTotal = 0;
+    (S.deductions || []).forEach(function (r) {
+      var dateKey = monthlySalaryDateKey_(r.date);
+      if (!dateKey || dateKey < fromKey || dateKey > toKey) return;
+      var sc = scoped_(r.emp_id);
+      if (!sc) return;
+      var cat = roleCategory[String(r.deduction_type == null ? '' : r.deduction_type).trim()] || '';
+      var m = Math.floor(dateKey / 100) % 100;
+      var section = paid[sc.key + '|' + m];
+      var days = hrNum_(r.number_of_days);
+      if (cat === HR_DEDUCTION_PENALTY) {
+        penalties.incidents++;
+        penalties.days += days;
+        hrBump_(penalties.by_section, hrTurnoverText_(sc.emp.section));
+        return;
+      }
+      if (cat === HR_DEDUCTION_ABSENCE) {
+        if (section === undefined) { unpaidAbsence += days; return; }
+        [payTotal, payMonths[m], paySections[section]].forEach(function (b) { b.absence_days += days; });
+        return;
+      }
+      if (cat === HR_DEDUCTION_LATE && section !== undefined) {
+        lateTotal++;
+        [payTotal, payMonths[m], paySections[section]].forEach(function (b) { b.late++; });
+      }
+    });
+
+    function payRow_(label, b) {
+      return {
+        label: label,
+        employee_months: b.rows,
+        net: hrTurnoverRound_(b.net),
+        per_employee: b.rows ? hrTurnoverRound_(b.net / b.rows) : 0,
+        absence_days: b.absence_days,
+        working_days: b.working_days,
+        absence_rate: hrRate_(b.absence_days, b.working_days),
+        late: b.late,
+        late_per_employee: b.rows ? hrTurnoverRound_(b.late / b.rows) : 0,
+        overtime_hours: hrTurnoverRound_(b.overtime_hours),
+        overtime_ratio: hrRate_(b.overtime_hours, b.regular_hours),
+        overtime_value: hrTurnoverRound_(b.overtime_value),
+        overtime_share: hrRate_(b.overtime_value, b.gross)
+      };
+    }
+    var monthRows = Object.keys(payMonths).map(Number).sort(function (a, b) { return a - b; }).map(function (m) {
+      var row = payRow_(HR_TURNOVER_MONTHS[m - 1], payMonths[m]);
+      row.month = m;
+      return row;
+    });
+    var sectionRows = Object.keys(paySections).map(function (k) { return payRow_(k, paySections[k]); })
+      .sort(function (a, b) { return b.net - a.net; });
+    var payrollTotals = payRow_('الإجمالي', payTotal);
+    payrollTotals.months = monthRows.length;
+
+    /* ── leave: allocated vs used, and days taken in the period ──────────── */
+    var typeName = {};
+    (S.vacation_types || []).forEach(function (r) { typeName[String(r.id)] = r.vacation_name_ar || String(r.id); });
+    var allocIds = {};
+    var leaveByType = {};
+    function leaveType_(t) {
+      var k = String(t == null ? '' : t);
+      return leaveByType[k] || (leaveByType[k] = { label: typeName[k] || k || HR_TURNOVER_UNSET, allocated: 0, used: 0, taken: 0 });
+    }
+    var allocated = 0, used = 0, taken = 0;
+    (S.allocations || []).forEach(function (r) {
+      var a = monthlySalaryDateKey_(r.vacation_alloc_start_Date);
+      var b = monthlySalaryDateKey_(r.vacation_alloc_end_Date);
+      if (!a || !b || a > toKey || b < fromKey || !hasPeriod) return;
+      if (!scoped_(r.emp_id)) return;
+      var id = String(r.unique_id == null ? '' : r.unique_id).trim();
+      if (!id) return;
+      allocIds[id] = r.vacation_type;
+      allocated += hrNum_(r.number_of_days);
+      leaveType_(r.vacation_type).allocated += hrNum_(r.number_of_days);
+    });
+    (S.vacations || []).forEach(function (r) {
+      var allocId = String(r.allocation_id == null ? '' : r.allocation_id).trim();
+      var d = hrNum_(r.duration_days);
+      if (allocId && Object.prototype.hasOwnProperty.call(allocIds, allocId)) {
+        used += d;
+        leaveType_(allocIds[allocId]).used += d;
+      }
+      var startKey = monthlySalaryDateKey_(r.start_date);
+      if (!startKey || startKey < fromKey || startKey > toKey) return;
+      if (!scoped_(r.emp_id)) return;
+      taken += d;
+      leaveType_(r.vacation_type).taken += d;
+    });
+    var leave = {
+      allocated: hrTurnoverRound_(allocated),
+      used: hrTurnoverRound_(used),
+      usage_rate: hrRate_(used, allocated),
+      taken: hrTurnoverRound_(taken),
+      per_employee: avgHeadcount ? hrTurnoverRound_(taken / avgHeadcount) : 0,
+      by_type: Object.keys(leaveByType).map(function (k) {
+        var x = leaveByType[k];
+        return { label: x.label, allocated: hrTurnoverRound_(x.allocated), used: hrTurnoverRound_(x.used),
+          usage_rate: hrRate_(x.used, x.allocated), taken: hrTurnoverRound_(x.taken) };
+      }).sort(function (a, b) { return b.taken - a.taken; })
+    };
+
+    /* ── revenue per employee (company-wide only) ────────────────────────── */
+    var revenue = { available: !pop.filtered, net: 0, per_employee: 0, labor_cost_ratio: 0, paid_months_revenue: 0 };
+    if (!pop.filtered && hasPeriod) {
+      var invDate = {};
+      (S.invoices || []).forEach(function (r) {
+        var k = String(r.invoice_unique_id == null ? '' : r.invoice_unique_id).trim();
+        if (k && !invDate[k]) invDate[k] = monthlySalaryDateKey_(r['تاريخ الفاتورة']);
+      });
+      var revByMonth = {};
+      (S.sales_lines || []).forEach(function (r) {
+        var d = invDate[String(r.valley_sales_header_id == null ? '' : r.valley_sales_header_id).trim()];
+        if (!d || d < fromKey || d > toKey) return;
+        hrBump_(revByMonth, Math.floor(d / 100) % 100, hrNum_(r.product_net_value));
+      });
+      (S.sales_returns || []).forEach(function (r) {
+        var d = monthlySalaryDateKey_(r.valley_return_date);
+        if (!d || d < fromKey || d > toKey) return;
+        hrBump_(revByMonth, Math.floor(d / 100) % 100, -hrNum_(r.valley_return_value));
+      });
+      var paidMonthsRevenue = 0;
+      Object.keys(revByMonth).forEach(function (m) {
+        revenue.net += revByMonth[m];
+        if (payMonths[m]) paidMonthsRevenue += revByMonth[m];
+      });
+      revenue.net = hrTurnoverRound_(revenue.net);
+      revenue.per_employee = avgHeadcount ? hrTurnoverRound_(revenue.net / avgHeadcount) : 0;
+      revenue.paid_months_revenue = hrTurnoverRound_(paidMonthsRevenue);
+      /* payroll ÷ revenue over the SAME months: only months that have payroll */
+      revenue.labor_cost_ratio = hrRate_(payTotal.net, paidMonthsRevenue);
+    }
+
+    /* ── contracts of the people active today ────────────────────────────── */
+    var contractTypes = {};
+    (S.contract_types || []).forEach(function (r) { contractTypes[String(r.id)] = r.contract_name_ar || String(r.id); });
+    var latestContract = {};
+    (S.contracts || []).forEach(function (r) {
+      var key = monthlySalaryEmployeeKey_(r.emp_id);
+      var start = monthlySalaryDateKey_(r.contract_start_Date) || 0;
+      if (!key) return;
+      var cur = latestContract[key];
+      if (!cur || start >= cur.start) latestContract[key] = { start: start, end: monthlySalaryDateKey_(r.contract_end_Date), type: r.contract_Type };
+    });
+    var contracts = { as_of: hrTurnoverDateText_(todayKey), active: 0, d30: 0, d60: 0, d90: 0, expired: 0, open_ended: 0, none: 0, list: [] };
+    pop.timelines.forEach(function (t) {
+      if (!hrActiveAfter_(t.events, todayKey, true)) return;
+      contracts.active++;
+      var c = latestContract[t.key];
+      if (!c) { contracts.none++; contracts.list.push(Object.assign(person_(t), { state: 'none', days_left: null, end_date: '', type: '' })); return; }
+      if (!c.end) { contracts.open_ended++; return; }
+      var left = hrTurnoverDays_(todayKey, c.end);
+      var state = left < 0 ? 'expired' : left <= 30 ? 'd30' : left <= 60 ? 'd60' : left <= 90 ? 'd90' : '';
+      if (!state) return;
+      contracts[state]++;
+      contracts.list.push(Object.assign(person_(t), {
+        state: state, days_left: left, end_date: hrTurnoverDateText_(c.end),
+        type: contractTypes[String(c.type)] || String(c.type == null ? '' : c.type)
+      }));
+    });
+    contracts.list.sort(function (a, b) {
+      return (a.days_left === null ? -1e9 : a.days_left) - (b.days_left === null ? -1e9 : b.days_left);
+    });
+
+    return {
+      status: 'success',
+      year: year,
+      today: hrTurnoverDateText_(todayKey),
+      period: { from: hrTurnoverDateText_(fromKey), to: hrTurnoverDateText_(toKey), months: months.length },
+      filtered: pop.filtered,
+      workforce: workforce,
+      retention: retention,
+      early_turnover: earlyTurnover,
+      tenure: tenure,
+      mix: mix,
+      age: ageReport,
+      payroll: { totals: payrollTotals, by_month: monthRows, by_section: sectionRows },
+      absence: { unpaid_absence_days: unpaidAbsence },
+      penalties: {
+        incidents: penalties.incidents,
+        days: penalties.days,
+        per_100: avgHeadcount ? hrTurnoverRound_(penalties.incidents / avgHeadcount * 100) : 0,
+        by_section: hrShares_(penalties.by_section)
+      },
+      lateness: { incidents: lateTotal },
+      leave: leave,
+      revenue: revenue,
+      contracts: contracts,
+      data_quality: {
+        no_status_count: pop.noStatusCount,
+        implicit_start_count: pop.implicitStartCount,
+        invalid_date_count: pop.invalidDateCount
+      }
+    };
+  }
+
+  function getValleyHrMetrics_(data, user, dbId) {
+    var d = data || {};
+    function read_(sheet) { try { return getAllRecords_(dbId, sheet); } catch (e) { return []; } }
+    return hrMetricsReport_({
+      employees: getAllRecords_(dbId, EMP_INFO_SHEET),
+      statuses: getAllRecords_(dbId, EMP_STATUS_SHEET),
+      salaries: read_(EMP_MONTHLY_SALARIES_SHEET),
+      deductions: read_(EMP_DEDUCTIONS_SHEET),
+      deduction_roles: read_(DEDUCTION_ROLES_SHEET),
+      vacations: read_(VACATIONS_SHEET),
+      allocations: read_(VACATION_ALLOC_SHEET),
+      vacation_types: read_(VACATIONS_INDEX_SHEET),
+      contracts: read_(EMP_CONTRACTS_SHEET),
+      contract_types: read_(CONTRACTS_INDEX_SHEET),
+      invoices: read_('valley_sales_invoices'),
+      sales_lines: read_('valley_sales_products'),
+      sales_returns: read_('valley_sales_returns')
+    }, { year: d.year, employee_type: d.employee_type, section: d.section, title: d.title });
   }
 
   function getDeductionRoles_(dbId) {
@@ -6280,7 +7149,14 @@ const ValleyFoodsHRModules = (function () {
      row's own cells, so they are rebuilt per row from live header positions. */
   function formulaCols_(lineHeaders) {
     function col(name) { var i = (lineHeaders || []).findIndex(function (h) { return String(h).trim().toLowerCase() === name; }); if (i < 0) return null; var n = i + 1, s = ''; while (n) { var m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; }
-    return { id: col('id'), code: col('code'), product: col('product'), receipt: col('receipt_date') };
+    return { id: col('id'), code: col('code'), product: col('product'), receipt: col('receipt_date'), qty: col('qty'), totalCost: col('total_cost') };
+  }
+  /* unit_cost is a sheet formula — total_cost / qty of the same row (=N2/K2 on
+     the standard layout) — so it follows manual edits to either column. Column
+     letters come from the live headers; null leaves the plain value in place. */
+  function purchasingUnitCostFormula_(lineHeaders, row) {
+    var cc = formulaCols_(lineHeaders);
+    return cc.qty && cc.totalCost ? '=' + cc.totalCost + row + '/' + cc.qty + row : null;
   }
   function canFormulaFor_(lineHeaders) {
     var cc = formulaCols_(lineHeaders);
@@ -6613,7 +7489,7 @@ const ValleyFoodsHRModules = (function () {
       if (stagedDone.length !== maps.length) {
         purchasingDeleteStaged_(lineSheet, lineHeaders, code, generation);
         var startId = getNextIdBatch_(dbId, PURCHASING_LINE_SHEET, maps.length), startRow = lineSheet.getLastRow() + 1;
-        var matrix = maps.map(function (m, i) { var row = startRow + i; if (canFormulaFor_(lineHeaders)) { var cc = formulaCols_(lineHeaders); m.movement_code = '=CONCATENATE(' + cc.id + row + ',"-",' + cc.code + row + ',"-",vlookup(' + cc.product + row + ',valley_products!$A:$F,2,0),"-",TEXT(' + cc.receipt + row + ',"DD/MM/YYYY"))'; m.product_category = '=vlookup(VLOOKUP(' + cc.product + row + ',valley_products!A:N,14,0),valley_categories!A:B,2,0)'; } return lineHeaders.map(function (h) { var n = String(h).trim(); if (n.toLowerCase() === 'id') return startId + i; if (m[n] !== undefined) return m[n]; var low = n.toLowerCase(); return m[low] !== undefined ? m[low] : ''; }); });
+        var matrix = maps.map(function (m, i) { var row = startRow + i; var ucF = purchasingUnitCostFormula_(lineHeaders, row); if (ucF) m.unit_cost = ucF; if (canFormulaFor_(lineHeaders)) { var cc = formulaCols_(lineHeaders); m.movement_code = '=CONCATENATE(' + cc.id + row + ',"-",' + cc.code + row + ',"-",vlookup(' + cc.product + row + ',valley_products!$A:$F,2,0),"-",TEXT(' + cc.receipt + row + ',"DD/MM/YYYY"))'; m.product_category = '=vlookup(VLOOKUP(' + cc.product + row + ',valley_products!A:N,14,0),valley_categories!A:B,2,0)'; } return lineHeaders.map(function (h) { var n = String(h).trim(); if (n.toLowerCase() === 'id') return startId + i; if (m[n] !== undefined) return m[n]; var low = n.toLowerCase(); return m[low] !== undefined ? m[low] : ''; }); });
         lineSheet.getRange(startRow, 1, matrix.length, lineHeaders.length).setValues(matrix); noteMutation_(lineSheet);
         var stagedVerify = purchasingStagedRows_(dbId, code, generation);
         var stagedOk = stagedVerify.length === maps.length;
@@ -6628,7 +7504,7 @@ const ValleyFoodsHRModules = (function () {
     var lineHeaders = getHeaders_(lineSheet), startId = getNextIdBatch_(dbId, PURCHASING_LINE_SHEET, maps.length), startRow = lineSheet.getLastRow() + 1;
     function col(name) { var i = lineHeaders.findIndex(function (h) { return String(h).trim().toLowerCase() === name; }); if (i < 0) return null; var n = i + 1, s = ''; while (n) { var m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; }
     var CL = { id: col('id'), code: col('code'), product: col('product'), receipt: col('receipt_date') }, canFormula = CL.id && CL.code && CL.product && CL.receipt;
-    var matrix = maps.map(function (m, i) { var row = startRow + i; if (canFormula) { m.movement_code = '=CONCATENATE(' + CL.id + row + ',"-",' + CL.code + row + ',"-",vlookup(' + CL.product + row + ',valley_products!$A:$F,2,0),"-",TEXT(' + CL.receipt + row + ',"DD/MM/YYYY"))'; m.product_category = '=vlookup(VLOOKUP(' + CL.product + row + ',valley_products!A:N,14,0),valley_categories!A:B,2,0)'; } return lineHeaders.map(function (h) { var n = String(h).trim(); if (n.toLowerCase() === 'id') return startId + i; if (m[n] !== undefined) return m[n]; var low = n.toLowerCase(); return m[low] !== undefined ? m[low] : ''; }); });
+    var matrix = maps.map(function (m, i) { var row = startRow + i; var ucF = purchasingUnitCostFormula_(lineHeaders, row); if (ucF) m.unit_cost = ucF; if (canFormula) { m.movement_code = '=CONCATENATE(' + CL.id + row + ',"-",' + CL.code + row + ',"-",vlookup(' + CL.product + row + ',valley_products!$A:$F,2,0),"-",TEXT(' + CL.receipt + row + ',"DD/MM/YYYY"))'; m.product_category = '=vlookup(VLOOKUP(' + CL.product + row + ',valley_products!A:N,14,0),valley_categories!A:B,2,0)'; } return lineHeaders.map(function (h) { var n = String(h).trim(); if (n.toLowerCase() === 'id') return startId + i; if (m[n] !== undefined) return m[n]; var low = n.toLowerCase(); return m[low] !== undefined ? m[low] : ''; }); });
     lineSheet.getRange(startRow, 1, matrix.length, lineHeaders.length).setValues(matrix); noteMutation_(lineSheet); vfFlush_();
     try { logHistory_(dbId, PURCHASING_LINE_SHEET, 'checkpoint_lines_' + code, code, (user && user.email) || '', 'update', { code: code, line_count: matrix.length }, null); } catch (e) {}
     return { status: 'success', message: 'تم حفظ الأصناف', code: code, checkpoint: 'lines', line_count: matrix.length };
@@ -6921,6 +7797,8 @@ const ValleyFoodsHRModules = (function () {
         var sStartId = getNextIdBatch_(dbId, PURCHASING_LINE_SHEET, lineMaps.length), sStartRow = lineSheet.getLastRow() + 1;
         var sMatrix = lineMaps.map(function (lm, i) {
           var rowNo = sStartRow + i;
+          var ucF = purchasingUnitCostFormula_(lineHeadersLive, rowNo);
+          if (ucF) lm.unit_cost = ucF;
           if (canFormulaFor_(lineHeadersLive)) {
             var cc = formulaCols_(lineHeadersLive);
             lm.movement_code = '=CONCATENATE(' + cc.id + rowNo + ',"-",' + cc.code + rowNo +
@@ -6998,6 +7876,8 @@ const ValleyFoodsHRModules = (function () {
 
       var matrix = lineMaps.map(function (lm, i) {
         var rowNo = startRow + i;
+        var ucF = purchasingUnitCostFormula_(lineHeaders, rowNo);
+        if (ucF) lm.unit_cost = ucF;
         if (canFormula) {
           lm.movement_code = '=CONCATENATE(' + CL.id + rowNo + ',"-",' + CL.code + rowNo +
             ',"-",vlookup(' + CL.product + rowNo + ',valley_products!$A:$F,2,0),"-",TEXT(' +
@@ -7929,6 +8809,31 @@ const ValleyFoodsHRModules = (function () {
     });
   }
 
+  /* The same convenience for the by-product grid's «رقم التشغيلة الداخلية»:
+     values already used in valley_manufacture_by_product.manufacture_internal_batch,
+     most recent first, capped. Only that one column is read — the by-product
+     sheet is never needed in full for a datalist. */
+  function mfgByproductBatchOptions_(dbId) {
+    return finRefsCached_(dbId, 'vf_mfg_bp_batch_options', function () {
+      var values = [];
+      try {
+        var sheet = getSheet_(MFG_BYPRODUCT_SHEET, dbId);
+        var col = getHeaders_(sheet).indexOf('manufacture_internal_batch') + 1;
+        var last = sheet.getLastRow();
+        if (col < 1 || last < 2) return [];
+        values = sheet.getRange(2, col, last - 1, 1).getDisplayValues();
+      } catch (e) { return []; }
+      var seen = {}, out = [];
+      for (var i = values.length - 1; i >= 0 && out.length < MFG_BATCH_OPTIONS_LIMIT_; i--) {
+        var v = String(values[i][0] == null ? '' : values[i][0]).trim();
+        if (!v || seen[v]) continue;
+        seen[v] = true;
+        out.push(v);
+      }
+      return out;
+    });
+  }
+
   function getValleyMfgOrderDetail_(data, user, dbId) {
     /* MO reads are schema-read-only. Opening an order must never append a
        missing column and turn a pre-existing layout problem into a different
@@ -7938,7 +8843,7 @@ const ValleyFoodsHRModules = (function () {
     var opts = getValleyOptionSets_(dbId);
     var moUid = String((data && data.mo_uid) || '').trim();
     if (!moUid) {
-      return { status: 'success', is_new: true, recipe_options: opts.recipe_options, product_options: opts.product_options, work_center_options: opts.work_center_options, enums: opts.enums, batch_options: mfgBatchOptions_(dbId), can_see_cost: vfCanSeeCost_(user), fast_save_v2: mfgPlannedSaveOn_(), edit_token: '', edit_tokens_v2: {}, save_scope: MFG_DETAIL_SCOPE_.slice() };
+      return { status: 'success', is_new: true, recipe_options: opts.recipe_options, product_options: opts.product_options, work_center_options: opts.work_center_options, enums: opts.enums, batch_options: mfgBatchOptions_(dbId), byproduct_batch_options: mfgByproductBatchOptions_(dbId), can_see_cost: vfCanSeeCost_(user), fast_save_v2: mfgPlannedSaveOn_(), edit_token: '', edit_tokens_v2: {}, save_scope: MFG_DETAIL_SCOPE_.slice() };
     }
     var full = getValleyMfgOrderFull_(data, user, dbId);
     if (full && full.order) { try { full.order.shift_name = mfgShiftName_(dbId, full.order.shift); } catch (eShiftName) {} }
@@ -7958,6 +8863,7 @@ const ValleyFoodsHRModules = (function () {
       status: 'success', is_new: false,
       recipe_options: opts.recipe_options, product_options: opts.product_options, work_center_options: opts.work_center_options, enums: opts.enums,
       batch_options: mfgBatchOptions_(dbId),
+      byproduct_batch_options: mfgByproductBatchOptions_(dbId),
       order: full.order, outputs: outputs, workops: ops.workops || [], byproducts: bps.byproducts || [],
       /* Schema-free edit token for this editor's scope (detail page). The
          client returns both as base_token/save_scope on edit. */
@@ -8009,17 +8915,29 @@ const ValleyFoodsHRModules = (function () {
   }
 
   /* ---------- Client manufacturing report (vf_mfg_client_report) ----------
-   * Read-only period summary for one RPC: per (client, produced product) MO
-   * counts and produced quantities pivoted by operation_type, materials used
-   * (valley_manufacture_header_products) and by-products
-   * (valley_manufacture_by_product) summed per item. All reads are single
-   * getAllRecords_ calls (request-memoised); joins are exact in-memory maps.
+   * Read-only period summary of everything the line produced — finished or
+   * work-in-progress — per (client, item). Every item counts for the client
+   * that owns it in valley_products.client_id, so one shift MO can feed
+   * several clients:
+   *   - main output: header.produced_product, actual_qty;
+   *   - by-products: valley_manufacture_by_product.item / qty, on a row of
+   *     their own under the item's client (not the MO's client);
+   *   - bulk drawn from earlier production: a material line
+   *     (valley_manufacture_header_products) whose product is in a bulk
+   *     category (BULK_CATEGORIES) and belongs to the same client as the
+   *     MO's produced product. That bulk was counted when it was made, so it
+   *     is subtracted from the produced product's row — e.g. a 5 t MO that
+   *     drew 3 t of fridge bulk nets 2 t of new production.
+   * Net produced = main + by-products − bulk drawn. Repacking (اعادة تعبئة)
+   * only reshapes stock already made: it is reported per op for reference
+   * but never enters row totals, grand totals or the KPIs.
    *
    * Filters (all optional; empty = all): client_ids[], product_ids[],
    * op_types[], statuses[] (default ['Locked']), from/to (ISO date-only,
-   * inclusive, on manufacture_date). Unknown ids never match. Rows with a
-   * blank/unparseable manufacture_date are excluded — they cannot belong to
-   * any period. Money is rounded once at the end (qty 3dp, cost 2dp); cost
+   * inclusive, on manufacture_date). Status/date/op select MOs; client and
+   * product apply to each line's own item and its owner. Unknown ids never
+   * match. Rows with a blank/unparseable manufacture_date are excluded —
+   * they cannot belong to any period. Qty rounds to 3dp, cost to 2dp; cost
    * keys are stripped server-side for users without the valley_cost_view
    * grant (VF_COST_KEYS.mfg_output / mfg_bp — deleted, never zeroed). */
   function getValleyMfgClientReport_(data, user, dbId) {
@@ -8027,6 +8945,10 @@ const ValleyFoodsHRModules = (function () {
     /* Local mirror of the save flow's BP_SHEET (function-local there):
        by-products live in valley_manufacture_by_product. */
     var BP_SHEET_R = 'valley_manufacture_by_product';
+    /* valley_products.category ids of bulk / work-in-progress items. */
+    var BULK_CATEGORIES = { '4': true, '9': true, '10': true, '11': true, '23': true };
+    /* Operations that make new product; repacking only reshapes stock. */
+    var COUNTED_OPS = ['تصنيع وتعبئة', 'تصنيع (كميات)'];
     function idSet(v) {
       var out = {};
       ((Array.isArray(v) ? v : (v == null || v === '' ? [] : [v])) || []).forEach(function (x) {
@@ -8052,7 +8974,8 @@ const ValleyFoodsHRModules = (function () {
         products[pid] = {
           name: String(p.name_ar || ('#' + pid)),
           unit: String(p.unit || '').trim(),
-          client_id: String(p.client_id == null ? '' : p.client_id).trim()
+          client_id: String(p.client_id == null ? '' : p.client_id).trim(),
+          category: String(p.category == null ? '' : p.category).trim()
         };
       });
     } catch (e) {}
@@ -8066,20 +8989,27 @@ const ValleyFoodsHRModules = (function () {
         partyDir[pid] = String(p.customer_direction || '').trim();
       });
     } catch (e) {}
-    /* Filter dropdowns list only what actually exists in the manufacture
-       header table — not every master product/client. Distinct produced
-       products across ALL header rows (any status/date), so the lists are
-       stable while the user changes period/status filters. */
     var hdrRows = [];
     try { hdrRows = getAllRecords_(dbId, MFG_ORDER_SHEET); } catch (e) {}
-    var headerPids = {};
+    var bpRows = [];
+    try { bpRows = getAllRecords_(dbId, BP_SHEET_R); } catch (e) {}
+
+    /* Filter dropdowns list only items that actually came off the line —
+       produced products in the header plus known by-product items — across
+       ALL rows (any status/date), so the lists stay stable while the user
+       changes period/status filters. */
+    var lineItems = {};
     hdrRows.forEach(function (r) {
       var pid = String(r.produced_product == null ? '' : r.produced_product).trim();
-      if (pid) headerPids[pid] = true;
+      if (pid) lineItems[pid] = true;
+    });
+    bpRows.forEach(function (b) {
+      var item = String(b.item == null ? '' : b.item).trim();
+      if (item && products[item]) lineItems[item] = true;
     });
     var clientOptions = [];
     var seenClients = {};
-    Object.keys(headerPids).forEach(function (pid) {
+    Object.keys(lineItems).forEach(function (pid) {
       var cid = products[pid] ? products[pid].client_id : '';
       if (!cid || seenClients[cid]) return;
       if (partyDir[cid] !== 'عميل') return;
@@ -8087,7 +9017,7 @@ const ValleyFoodsHRModules = (function () {
       clientOptions.push({ value: cid, label: partyNames[cid] || ('#' + cid) });
     });
     clientOptions.sort(function (a, b) { return String(a.label).localeCompare(String(b.label), 'ar'); });
-    var productOptions = Object.keys(headerPids).map(function (pid) {
+    var productOptions = Object.keys(lineItems).map(function (pid) {
       var pr = products[pid] || { name: '#' + pid, unit: '', client_id: '' };
       return { value: pid, label: pr.name, unit: pr.unit, client_id: pr.client_id };
     }).sort(function (a, b) { return String(a.label).localeCompare(String(b.label), 'ar'); });
@@ -8102,141 +9032,164 @@ const ValleyFoodsHRModules = (function () {
       if (to && dt > to) return false;
       return true;
     }
+    function lineVisible(cid, pid) {
+      if (Object.keys(fClients).length && !fClients[cid]) return false;
+      if (Object.keys(fProducts).length && !fProducts[pid]) return false;
+      return true;
+    }
 
-    /* MOs in scope, keyed by unique_id. hdrRows was already read above. */
+    /* MOs in scope (status, period, op), keyed by unique_id. */
     var moByUid = {};
     var moList = [];
-    try {
-      hdrRows.forEach(function (r) {
-        var uid = String(r.unique_id || '').trim();
-        if (!uid || moByUid[uid]) return;
-        var st = String(r.mo_status || 'Draft').trim() || 'Draft';
-        if (!fStatus[st]) return;
-        if (!inPeriod(r.manufacture_date)) return;
-        var pid = String(r.produced_product == null ? '' : r.produced_product).trim();
-        var prod = products[pid] || { name: pid ? ('#' + pid) : '-', unit: '', client_id: '' };
-        if (Object.keys(fProducts).length && !fProducts[pid]) return;
-        if (Object.keys(fClients).length && !fClients[prod.client_id]) return;
-        var op = String(r.operation_type || '').trim();
-        if (Object.keys(fOps).length && !fOps[op]) return;
-        var mo = { uid: uid, op: op, status: st, pid: pid, client_id: prod.client_id,
-          qty: Math.round((Number(r.actual_qty) || 0) * 1000) / 1000,
-          cost: Math.round((Number(r.total_batch_cost) || 0) * 100) / 100 };
-        moByUid[uid] = mo;
-        moList.push(mo);
-      });
-    } catch (e) {}
+    hdrRows.forEach(function (r) {
+      var uid = String(r.unique_id || '').trim();
+      if (!uid || moByUid[uid]) return;
+      var st = String(r.mo_status || 'Draft').trim() || 'Draft';
+      if (!fStatus[st]) return;
+      if (!inPeriod(r.manufacture_date)) return;
+      var op = String(r.operation_type || '').trim();
+      if (Object.keys(fOps).length && !fOps[op]) return;
+      var pid = String(r.produced_product == null ? '' : r.produced_product).trim();
+      var prod = products[pid] || { client_id: '' };
+      var mo = { uid: uid, op: op, status: st, pid: pid, client_id: prod.client_id,
+        qty: Math.round((Number(r.actual_qty) || 0) * 1000) / 1000,
+        cost: Math.round((Number(r.total_batch_cost) || 0) * 100) / 100, row: null };
+      moByUid[uid] = mo;
+      moList.push(mo);
+    });
 
     function roundQty(n) { return Math.round((Number(n) || 0) * 1000) / 1000; }
     function roundMoney(n) { return Math.round((Number(n) || 0) * 100) / 100; }
-    function blankOpSplit() {
+    function blankSlot() {
+      return { mo_count: 0, main_qty: 0, byproduct_qty: 0, bulk_used_qty: 0, produced_qty: 0, batch_cost: 0 };
+    }
+    function blankOpSplit(ops) {
       var o = {};
-      MFG_OP_TYPES.forEach(function (t) { o[t] = { mo_count: 0, produced_qty: 0, batch_cost: 0 }; });
+      ops.forEach(function (t) { o[t] = blankSlot(); });
       return o;
     }
-    /* Headline KPIs intentionally exclude repacking.  The detail/export
-       tables below still expose every filtered operation type. */
-    var KPI_OP_TYPES = ['تصنيع وتعبئة', 'تصنيع (كميات)'];
     var rows = {};
-    function rowFor(mo) {
-      var key = mo.client_id + '|' + mo.pid;
+    function rowFor(cid, pid) {
+      var key = cid + '|' + pid;
       var row = rows[key];
       if (!row) {
-        var prod = products[mo.pid] || { name: mo.pid ? ('#' + mo.pid) : '-', unit: '' };
-        row = { client_id: mo.client_id, client_name: partyNames[mo.client_id] || (mo.client_id ? ('#' + mo.client_id) : 'بدون عميل'),
-          product_id: mo.pid, product_name: prod.name, unit: prod.unit,
-          mo_count: 0, produced_qty: 0, batch_cost: 0, by_op: blankOpSplit(), materials: {}, byproducts: {}, byproducts_by_op: {} };
+        var prod = products[pid] || { name: pid ? ('#' + pid) : '-', unit: '' };
+        row = { client_id: cid, client_name: partyNames[cid] || (cid ? ('#' + cid) : 'بدون عميل'),
+          product_id: pid, product_name: prod.name, unit: prod.unit,
+          mo_count: 0, main_qty: 0, byproduct_qty: 0, bulk_used_qty: 0, produced_qty: 0, batch_cost: 0,
+          by_op: blankOpSplit(MFG_OP_TYPES), materials: {}, byproducts_by_op: {}, bulk_used_by_op: {} };
         rows[key] = row;
       }
       return row;
     }
+    function opSlot(row, op) { return row.by_op[op] || (row.by_op[op] = blankSlot()); }
+    function groupLine(row, field, op, key, init) {
+      var g = row[field][op] || (row[field][op] = {});
+      return g[key] || (g[key] = init);
+    }
+
+    /* Main output: the produced product's row, under its own client. */
     moList.forEach(function (mo) {
-      var row = rowFor(mo);
-      row.mo_count++;
-      row.produced_qty = roundQty(row.produced_qty + mo.qty);
-      row.batch_cost = roundMoney(row.batch_cost + mo.cost);
-      if (!row.by_op[mo.op]) row.by_op[mo.op] = { mo_count: 0, produced_qty: 0, batch_cost: 0 };
-      row.by_op[mo.op].mo_count++;
-      row.by_op[mo.op].produced_qty = roundQty(row.by_op[mo.op].produced_qty + mo.qty);
-      row.by_op[mo.op].batch_cost = roundMoney(row.by_op[mo.op].batch_cost + mo.cost);
+      if (!lineVisible(mo.client_id, mo.pid)) return;
+      var row = rowFor(mo.client_id, mo.pid);
+      mo.row = row;
+      var s = opSlot(row, mo.op);
+      s.mo_count++;
+      s.main_qty = roundQty(s.main_qty + mo.qty);
+      s.batch_cost = roundMoney(s.batch_cost + mo.cost);
     });
 
-    /* Materials used, per (client, product, material item). Unit resolves via
-       the products map when the material is a known product, else blank. */
+    /* Materials used, on the MO's produced-product row. A line drawing the
+       same client's bulk is also subtracted from that row (bulk_used). */
     try {
       getAllRecords_(dbId, MFG_ORDER_PRODUCTS_SHEET).forEach(function (l) {
         var mo = moByUid[String(l.valley_manufacture_header_id || '').trim()];
-        if (!mo) return;
+        if (!mo || !mo.row) return;
         var itemPid = String(l.product_id == null ? '' : l.product_id).trim();
         var itemKey = itemPid || String(l.product_name || '').trim() || '-';
-        var row = rowFor(mo);
+        var meta = products[itemPid];
+        var q = roundQty(Number(l.product_qty));
+        var row = mo.row;
         var m = row.materials[itemKey] || { item: String(l.product_name || itemKey),
-          unit: (products[itemPid] && products[itemPid].unit) || '', qty: 0, total_cost: 0 };
-        m.qty = roundQty(m.qty + Number(l.product_qty));
+          unit: (meta && meta.unit) || '', qty: 0, total_cost: 0 };
+        m.qty = roundQty(m.qty + q);
         m.total_cost = roundMoney(m.total_cost + Number(l.total_cost));
         row.materials[itemKey] = m;
-      });
-    } catch (e) {}
-    /* By-products, per (client, product, item) — kept both as a flat list
-       and grouped by the parent MO's operation_type, so each op-type section
-       renders its own by-products directly under its production table.
-       The by-product qty is also added to the parent MO's operation_type
-       produced sum (row split + row total; grand totals derive from rows),
-       so each op-type total reflects everything that op produced. */
-    try {
-      getAllRecords_(dbId, BP_SHEET_R).forEach(function (b) {
-        var mo = moByUid[String(b.valley_manufacture_header_id || '').trim()];
-        if (!mo) return;
-        var itemKey = String(b.item || '').trim() || '-';
-        var bq = roundQty(Number(b.qty));
-        /* itemKey is a valley_products numeric id — resolve its name_ar here;
-           unknown/deleted products fall back to the raw id. */
-        var bpName = (products[itemKey] && products[itemKey].name) || itemKey;
-        var row = rowFor(mo);
-        var m = row.byproducts[itemKey] || { item: itemKey, product_name: bpName, qty: 0, total_cost: 0 };
-        m.qty = roundQty(m.qty + bq);
-        m.total_cost = roundMoney(m.total_cost + Number(b.total_cost));
-        row.byproducts[itemKey] = m;
-        var ob = row.byproducts_by_op[mo.op] || (row.byproducts_by_op[mo.op] = {});
-        var g = ob[itemKey] || (ob[itemKey] = { item: itemKey, product_name: bpName, qty: 0, total_cost: 0 });
-        g.qty = roundQty(g.qty + bq);
-        g.total_cost = roundMoney(g.total_cost + Number(b.total_cost));
-        if (!row.by_op[mo.op]) row.by_op[mo.op] = { mo_count: 0, produced_qty: 0, batch_cost: 0 };
-        row.by_op[mo.op].produced_qty = roundQty(row.by_op[mo.op].produced_qty + bq);
-        row.produced_qty = roundQty(row.produced_qty + bq);
+        if (!meta || !BULK_CATEGORIES[meta.category] || meta.client_id !== mo.client_id) return;
+        var s = opSlot(row, mo.op);
+        s.bulk_used_qty = roundQty(s.bulk_used_qty + q);
+        var g = groupLine(row, 'bulk_used_by_op', mo.op, itemPid,
+          { item: itemPid, product_name: meta.name, unit: meta.unit, qty: 0, total_cost: 0 });
+        g.qty = roundQty(g.qty + q);
+        g.total_cost = roundMoney(g.total_cost + Number(l.total_cost));
       });
     } catch (e) {}
 
+    /* By-products: a row of their own under the item's client, grouped per
+       op and per source (the MO's produced product). Items with no client
+       land on the «بدون عميل» row. */
+    bpRows.forEach(function (b) {
+      var mo = moByUid[String(b.valley_manufacture_header_id || '').trim()];
+      if (!mo) return;
+      var item = String(b.item == null ? '' : b.item).trim() || '-';
+      var meta = products[item];
+      var cid = meta ? meta.client_id : '';
+      if (!lineVisible(cid, item)) return;
+      var bq = roundQty(Number(b.qty));
+      var row = rowFor(cid, item);
+      var s = opSlot(row, mo.op);
+      s.byproduct_qty = roundQty(s.byproduct_qty + bq);
+      var src = products[mo.pid];
+      var g = groupLine(row, 'byproducts_by_op', mo.op, mo.pid,
+        { item: item, product_name: row.product_name, source_product_id: mo.pid,
+          source_product_name: src ? src.name : (mo.pid ? ('#' + mo.pid) : '-'), qty: 0, total_cost: 0 });
+      g.qty = roundQty(g.qty + bq);
+      g.total_cost = roundMoney(g.total_cost + Number(b.total_cost));
+    });
+
     var canCost = vfCanSeeCost_(user);
     var outRows = Object.keys(rows).map(function (k) { return rows[k]; }).sort(function (a, b) {
+      /* «بدون عميل» rows go last, on their own. */
+      if (!a.client_id !== !b.client_id) return a.client_id ? -1 : 1;
       var c = String(a.client_name).localeCompare(String(b.client_name), 'ar');
       return c !== 0 ? c : String(a.product_name).localeCompare(String(b.product_name), 'ar');
     });
-    var totals = { mo_count: 0, produced_qty: 0, batch_cost: 0, by_op: blankOpSplit() };
+    function byItem(a, b) { return String(a.product_name || a.item).localeCompare(String(b.product_name || b.item), 'ar'); }
+    function groupedToLists(obj) {
+      Object.keys(obj).forEach(function (t) {
+        obj[t] = Object.keys(obj[t]).map(function (k) { return obj[t][k]; }).sort(byItem);
+      });
+    }
+    var SUM_KEYS = ['main_qty', 'byproduct_qty', 'bulk_used_qty', 'produced_qty'];
+    function addSlot(into, s) {
+      into.mo_count += Number(s.mo_count) || 0;
+      SUM_KEYS.forEach(function (k) { into[k] = roundQty(into[k] + (Number(s[k]) || 0)); });
+      into.batch_cost = roundMoney(into.batch_cost + (Number(s.batch_cost) || 0));
+    }
+    var totals = blankSlot();
+    totals.by_op = blankOpSplit(MFG_OP_TYPES);
+    var kpiTotals = blankSlot();
+    kpiTotals.by_op = blankOpSplit(COUNTED_OPS);
     outRows.forEach(function (row) {
+      Object.keys(row.by_op).forEach(function (t) {
+        var s = row.by_op[t];
+        s.produced_qty = roundQty(s.main_qty + s.byproduct_qty - s.bulk_used_qty);
+        if (!totals.by_op[t]) totals.by_op[t] = blankSlot();
+        addSlot(totals.by_op[t], s);
+        if (COUNTED_OPS.indexOf(t) === -1) return;
+        addSlot(row, s);
+        addSlot(kpiTotals.by_op[t], s);
+      });
+      addSlot(totals, row);
+      addSlot(kpiTotals, row);
       row.materials = Object.keys(row.materials).map(function (k) { return row.materials[k]; })
         .sort(function (a, b) { return String(a.item).localeCompare(String(b.item), 'ar'); });
-      row.byproducts = Object.keys(row.byproducts).map(function (k) { return row.byproducts[k]; })
-        .sort(function (a, b) { return String(a.item).localeCompare(String(b.item), 'ar'); });
-      Object.keys(row.byproducts_by_op).forEach(function (t) {
-        row.byproducts_by_op[t] = Object.keys(row.byproducts_by_op[t]).map(function (k) { return row.byproducts_by_op[t][k]; })
-          .sort(function (a, b) { return String(a.item).localeCompare(String(b.item), 'ar'); });
-      });
-      totals.mo_count += row.mo_count;
-      totals.produced_qty = roundQty(totals.produced_qty + row.produced_qty);
-      totals.batch_cost = roundMoney(totals.batch_cost + row.batch_cost);
-      Object.keys(row.by_op).forEach(function (t) {
-        if (!totals.by_op[t]) totals.by_op[t] = { mo_count: 0, produced_qty: 0, batch_cost: 0 };
-        totals.by_op[t].mo_count += row.by_op[t].mo_count;
-        totals.by_op[t].produced_qty = roundQty(totals.by_op[t].produced_qty + row.by_op[t].produced_qty);
-        totals.by_op[t].batch_cost = roundMoney(totals.by_op[t].batch_cost + (Number(row.by_op[t].batch_cost) || 0));
-      });
+      groupedToLists(row.byproducts_by_op);
+      groupedToLists(row.bulk_used_by_op);
       if (!canCost) {
         vfStripCostAll_(row.materials, VF_COST_KEYS.mfg_output);
-        vfStripCostAll_(row.byproducts, VF_COST_KEYS.mfg_bp);
-        Object.keys(row.byproducts_by_op).forEach(function (t) {
-          vfStripCostAll_(row.byproducts_by_op[t], VF_COST_KEYS.mfg_bp);
-        });
+        Object.keys(row.byproducts_by_op).forEach(function (t) { vfStripCostAll_(row.byproducts_by_op[t], VF_COST_KEYS.mfg_bp); });
+        Object.keys(row.bulk_used_by_op).forEach(function (t) { vfStripCostAll_(row.bulk_used_by_op[t], VF_COST_KEYS.mfg_output); });
         /* total_batch_cost is a cost field: without the grant it must not
            reach the client at all (deleted, never zeroed). */
         delete row.batch_cost;
@@ -8244,30 +9197,10 @@ const ValleyFoodsHRModules = (function () {
       }
     });
     if (!canCost) {
-      delete totals.batch_cost;
-      Object.keys(totals.by_op).forEach(function (t) { delete totals.by_op[t].batch_cost; });
-    }
-
-    /* Calculate the KPI view only after the period/client/product/status and
-       operation filters, plus by-product attribution, have been applied. */
-    var kpiTotals = { mo_count: 0, produced_qty: 0, batch_cost: 0, by_op: {} };
-    KPI_OP_TYPES.forEach(function (t) {
-      kpiTotals.by_op[t] = { mo_count: 0, produced_qty: 0, batch_cost: 0 };
-    });
-    outRows.forEach(function (row) {
-      KPI_OP_TYPES.forEach(function (t) {
-        var s = (row.by_op && row.by_op[t]) || { mo_count: 0, produced_qty: 0, batch_cost: 0 };
-        kpiTotals.mo_count += Number(s.mo_count) || 0;
-        kpiTotals.produced_qty = roundQty(kpiTotals.produced_qty + (Number(s.produced_qty) || 0));
-        kpiTotals.batch_cost = roundMoney(kpiTotals.batch_cost + (Number(s.batch_cost) || 0));
-        kpiTotals.by_op[t].mo_count += Number(s.mo_count) || 0;
-        kpiTotals.by_op[t].produced_qty = roundQty(kpiTotals.by_op[t].produced_qty + (Number(s.produced_qty) || 0));
-        kpiTotals.by_op[t].batch_cost = roundMoney(kpiTotals.by_op[t].batch_cost + (Number(s.batch_cost) || 0));
+      [totals, kpiTotals].forEach(function (tt) {
+        delete tt.batch_cost;
+        Object.keys(tt.by_op).forEach(function (t) { delete tt.by_op[t].batch_cost; });
       });
-    });
-    if (!canCost) {
-      delete kpiTotals.batch_cost;
-      KPI_OP_TYPES.forEach(function (t) { delete kpiTotals.by_op[t].batch_cost; });
     }
 
     return {
@@ -8281,9 +9214,12 @@ const ValleyFoodsHRModules = (function () {
         statuses: ['Draft', 'In Progress', 'Locked']
       },
       rows: outRows,
+      /* totals.by_op covers every op (repack included, for reference);
+         the totals' own fields, like kpi_totals, cover COUNTED_OPS only. */
       totals: totals,
-      kpi_operation_types: KPI_OP_TYPES.slice(),
-      kpi_totals: kpiTotals
+      kpi_operation_types: COUNTED_OPS.slice(),
+      kpi_totals: kpiTotals,
+      bulk_category_ids: Object.keys(BULK_CATEGORIES)
     };
   }
 
@@ -8667,11 +9603,19 @@ const ValleyFoodsHRModules = (function () {
   }
 
   /**
-   * Phase 8 (F-04). The sheet-computed columns of a consumption row, extracted
-   * VERBATIM from the two writeFormula_ calls that ran per row.
+   * Phase 8 (F-04). The sheet-computed columns of a consumption row. item_code
+   * and total_cost were extracted VERBATIM from the writeFormula_ calls that
+   * ran per row; cost_unit was added later.
    */
   function mfgConsumptionFormulaMap_(cRow) {
+    var d = 'D' + cRow;
     return {
+      /* Batch unit cost by the batch uid in item (D): a purchase line's
+         unit_cost (S), else an MO's total_batch_cost / actual_qty (K/Q), else a
+         by-product's value / qty (I/H). Overrides the server-resolved value. */
+      'cost_unit': '=IFERROR(VLOOKUP(' + d + ', valley_product_purchasing!A:Z, 19, 0), ' +
+        'IFERROR(VLOOKUP(' + d + ', valley_manufacture_header!A:Y, 11, 0)/VLOOKUP(' + d + ', valley_manufacture_header!A:Y, 17, 0), ' +
+        'IFERROR(VLOOKUP(' + d + ', valley_manufacture_by_product!A:Z, 9, 0)/VLOOKUP(' + d + ', valley_manufacture_by_product!A:Z, 8, 0), 0)))',
       'item_code': '=IFERROR(VLOOKUP(D' + cRow + ', valley_product_purchasing!A:C,3,0), IFERROR(VLOOKUP(D' + cRow + ', valley_manufacture_header!A:C,3,0), IFERROR(INDEX(valley_manufacture_by_product!F:F,MATCH(D' + cRow + ',valley_manufacture_by_product!A:A,0)),"")))',
       'total_cost': '=G' + cRow + '*F' + cRow
     };
@@ -20751,6 +21695,8 @@ map['actual_hours'] = Math.round(totalHours * 100) / 100;
     ValleyFoods.register('get_monthly_salaries_data', getMonthlySalariesData_);
     ValleyFoods.register('add_monthly_salary',        addMonthlySalary_);
     ValleyFoods.register('generate_monthly_salaries',  generateMonthlySalaries_);
+    ValleyFoods.register('get_valley_hr_turnover',    getValleyHrTurnover_);
+    ValleyFoods.register('get_valley_hr_metrics',     getValleyHrMetrics_);
     ValleyFoods.register('get_attendance_sessions',   getAttendanceSessions_);
     ValleyFoods.register('add_attendance_session',    addAttendanceSession_);
     ValleyFoods.register('get_attendance_data',       getAttendanceData_);
@@ -21602,6 +22548,259 @@ function vfValleyPayrollDocument_(body, title) {
     '</style></head><body>' + body + '<script>window.onload=function(){setTimeout(function(){window.print();},300);};</script></body></html>';
 }
 
+/* ---------------- Month-over-month comparison (type=compare) ----------------
+ * Reconciles last month's net total to this month's:
+ *   previous total + new employees − employees no longer paid
+ *   + Σ component changes of continuing employees = current total.
+ * Component changes follow the valley_emp_salaries net formula
+ * (working_days_value + overtime + vacation + other − loans − absence −
+ * penalties − delays, then CEILING 5). Working-days value is split into a
+ * days effect (at last month's rate) and a basic+allowance rate effect; the
+ * rounding line is the exact residual, so every employee and the total
+ * always reconcile to the cent even if a row was hand-edited. */
+const VF_PAYROLL_COMPARE_PARTS_ = [
+  { key: 'days', label: 'تغير أيام العمل' },
+  { key: 'rate', label: 'تغير الراتب الأساسي والبدلات' },
+  { key: 'overtime_days_value', label: 'الإضافي', sign: 1, qty: 'overtime_days', unit: 'ساعة' },
+  { key: 'vacation_days_value', label: 'عمل أيام الإجازات', sign: 1, qty: 'vacation_days', unit: 'يوم' },
+  { key: 'other_addition', label: 'إضافات أخرى', sign: 1 },
+  { key: 'loans_value_deductions', label: 'السلف والخصومات', sign: -1 },
+  { key: 'deduction_day_value', label: 'الغياب', sign: -1, qty: 'deduction_day', unit: 'يوم' },
+  { key: 'penalty_deduction_days_value', label: 'الجزاءات', sign: -1, qty: 'penalty_deduction_days', unit: 'يوم' },
+  { key: 'delay_deductions_value', label: 'التأخيرات', sign: -1, qty: 'delay_deductions', unit: 'دقيقة' },
+  { key: 'rounding', label: 'فرق التقريب وتعديلات أخرى' }
+];
+
+const VF_PAYROLL_COMPARE_SUM_KEYS_ = [
+  'working_days', 'working_days_value', 'overtime_days', 'overtime_days_value',
+  'vacation_days', 'vacation_days_value', 'other_addition', 'loans_value_deductions',
+  'deduction_day', 'deduction_day_value', 'penalty_deduction_days', 'penalty_deduction_days_value',
+  'delay_deductions', 'delay_deductions_value'
+];
+
+function vfPayrollCompareIndex_(rows) {
+  var map = {};
+  (rows || []).forEach(function (row) {
+    var raw = vfPayrollRawValue_(row, 'emp_id');
+    if (!vfPayrollHasValue_(raw)) return;
+    var id = isFinite(Number(raw)) ? String(Number(raw)) : String(raw).trim();
+    var netRaw = vfPayrollHasValue_(vfPayrollRawValue_(row, 'net_salary_nearest'))
+      ? vfPayrollRawValue_(row, 'net_salary_nearest') : vfPayrollRawValue_(row, 'net_salary');
+    var e = map[id];
+    if (!e) {
+      e = map[id] = {
+        emp_id: id,
+        name: String(vfPayrollRawValue_(row, 'name_ar') || '').trim(),
+        section: String(vfPayrollRawValue_(row, 'section') || '').trim() || 'غير محدد',
+        rate: vfPayrollNumber_(vfPayrollRawValue_(row, 'basic_salary')) + vfPayrollNumber_(vfPayrollRawValue_(row, 'allow')),
+        net: 0, v: {}
+      };
+      VF_PAYROLL_COMPARE_SUM_KEYS_.forEach(function (k) { e.v[k] = 0; });
+    }
+    VF_PAYROLL_COMPARE_SUM_KEYS_.forEach(function (k) {
+      e.v[k] += vfPayrollNumber_(vfPayrollRawValue_(row, k));
+    });
+    if (!vfPayrollHasValue_(vfPayrollRawValue_(row, 'working_days_value'))) {
+      e.v.working_days_value += e.rate / 30 * vfPayrollNumber_(vfPayrollRawValue_(row, 'working_days'));
+    }
+    e.net += vfPayrollNumber_(netRaw);
+  });
+  return map;
+}
+
+function vfPayrollCompareParts_(cur, prev) {
+  var parts = {};
+  var days = (cur.v.working_days - prev.v.working_days) * prev.rate / 30;
+  parts.days = days;
+  parts.rate = (cur.v.working_days_value - prev.v.working_days_value) - days;
+  var explained = parts.days + parts.rate;
+  VF_PAYROLL_COMPARE_PARTS_.forEach(function (p) {
+    if (!p.sign) return;
+    parts[p.key] = p.sign * (cur.v[p.key] - prev.v[p.key]);
+    explained += parts[p.key];
+  });
+  parts.rounding = (cur.net - prev.net) - explained;
+  return parts;
+}
+
+function vfPayrollSigned_(n) {
+  var r = Math.round(n * 100) / 100;
+  if (r === 0) return '0.00';
+  return (r > 0 ? '+' : '-') + vfPayrollMoney_(Math.abs(r));
+}
+
+function vfPayrollSignedHtml_(n) {
+  var r = Math.round(n * 100) / 100;
+  return '<span dir="ltr" class="' + (r > 0 ? 'pos' : r < 0 ? 'neg' : '') + '">' + vfPayrollSigned_(n) + '</span>';
+}
+
+function vfPayrollQty_(n) {
+  var r = Math.round(n * 100) / 100;
+  return r === Math.round(r) ? String(r) : r.toFixed(2);
+}
+
+function vfPayrollCompareReason_(cur, prev, parts) {
+  var reasons = [];
+  VF_PAYROLL_COMPARE_PARTS_.forEach(function (p) {
+    var impact = parts[p.key];
+    if (Math.abs(impact) < 0.005) return;
+    var text;
+    if (p.key === 'days') {
+      text = 'أيام العمل من ' + vfPayrollQty_(prev.v.working_days) + ' إلى ' + vfPayrollQty_(cur.v.working_days);
+    } else if (p.key === 'rate') {
+      text = Math.abs(cur.rate - prev.rate) >= 0.005
+        ? 'الأساسي والبدلات من ' + vfPayrollMoney_(prev.rate) + ' إلى ' + vfPayrollMoney_(cur.rate)
+        : 'تعديل في راتب أيام العمل';
+    } else if (p.key === 'rounding') {
+      text = p.label;
+    } else if (p.qty) {
+      text = p.label + ' من ' + vfPayrollQty_(prev.v[p.qty]) + ' إلى ' + vfPayrollQty_(cur.v[p.qty]) + ' ' + p.unit;
+    } else {
+      text = p.label + ' من ' + vfPayrollMoney_(prev.v[p.key]) + ' إلى ' + vfPayrollMoney_(cur.v[p.key]);
+    }
+    reasons.push(vfPayrollEsc_(text) + ' (' + vfPayrollSignedHtml_(impact) + ')');
+  });
+  return reasons.length ? reasons.join('<br>') : 'لا تغيير';
+}
+
+function buildValleyPayrollCompareHtml_(curRows, prevRows, monthName, year, prevMonthName, prevYear) {
+  var cur = vfPayrollCompareIndex_(curRows);
+  var prev = vfPayrollCompareIndex_(prevRows);
+  var curLabel = monthName + ' ' + year;
+  var prevLabel = prevMonthName + ' ' + prevYear;
+  var totals = { cur: 0, prev: 0, newNet: 0, goneNet: 0 };
+  var bridge = {};
+  VF_PAYROLL_COMPARE_PARTS_.forEach(function (p) { bridge[p.key] = 0; });
+  var details = [], newList = [], goneList = [];
+
+  Object.keys(cur).forEach(function (id) {
+    var c = cur[id];
+    totals.cur += c.net;
+    if (!prev[id]) {
+      totals.newNet += c.net;
+      newList.push(c);
+      details.push({ status: 'new', e: c, prevNet: 0, curNet: c.net, diff: c.net,
+        reason: 'موظف جديد — لم يُصرف له راتب في ' + vfPayrollEsc_(prevLabel) + ' (أيام العمل ' + vfPayrollQty_(c.v.working_days) + ')' });
+      return;
+    }
+    var p = prev[id];
+    var parts = vfPayrollCompareParts_(c, p);
+    Object.keys(parts).forEach(function (k) { bridge[k] += parts[k]; });
+    var diff = c.net - p.net;
+    details.push({ status: Math.abs(diff) < 0.005 ? 'same' : 'changed', e: c, prevNet: p.net, curNet: c.net, diff: diff,
+      reason: vfPayrollCompareReason_(c, p, parts) });
+  });
+  Object.keys(prev).forEach(function (id) {
+    var p = prev[id];
+    totals.prev += p.net;
+    if (cur[id]) return;
+    totals.goneNet += p.net;
+    goneList.push(p);
+    details.push({ status: 'gone', e: p, prevNet: p.net, curNet: 0, diff: -p.net,
+      reason: 'غير موجود في رواتب ' + vfPayrollEsc_(curLabel) + ' — كان صافيه ' + vfPayrollMoney_(p.net) });
+  });
+
+  var diffTotal = totals.cur - totals.prev;
+  var pct = totals.prev ? (diffTotal / totals.prev * 100) : 0;
+  var curCount = Object.keys(cur).length, prevCount = Object.keys(prev).length;
+
+  /* Bridge lines: new hires, leavers, then each continuing-employee component. */
+  var lines = [];
+  if (newList.length) lines.push({ label: 'موظفون جدد (' + newList.length + ')', value: totals.newNet });
+  if (goneList.length) lines.push({ label: 'موظفون غير موجودين هذا الشهر (' + goneList.length + ')', value: -totals.goneNet });
+  VF_PAYROLL_COMPARE_PARTS_.forEach(function (p) {
+    if (Math.abs(bridge[p.key]) >= 0.005) lines.push({ label: p.label + ' (للموظفين المستمرين)', value: bridge[p.key] });
+  });
+
+  /* Plain-language explanation: biggest drivers first. */
+  var narrative;
+  if (!prevCount) {
+    narrative = 'لا توجد رواتب مسجلة لشهر ' + vfPayrollEsc_(prevLabel) + '، لذلك يظهر جميع الموظفين كموظفين جدد.';
+  } else if (Math.abs(diffTotal) < 0.005) {
+    narrative = 'إجمالي صافي الرواتب لم يتغير عن شهر ' + vfPayrollEsc_(prevLabel) + '.';
+  } else {
+    var drivers = lines.slice().sort(function (a, b) { return Math.abs(b.value) - Math.abs(a.value); });
+    var top = drivers.slice(0, 5).map(function (l) { return vfPayrollEsc_(l.label) + ' ' + vfPayrollSignedHtml_(l.value); });
+    narrative = (diffTotal > 0 ? 'ارتفع' : 'انخفض') + ' إجمالي صافي الرواتب من <b dir="ltr">' + vfPayrollMoney_(totals.prev) +
+      '</b> في ' + vfPayrollEsc_(prevLabel) + ' إلى <b dir="ltr">' + vfPayrollMoney_(totals.cur) + '</b> في ' + vfPayrollEsc_(curLabel) +
+      ' بفرق ' + vfPayrollSignedHtml_(diffTotal) + (totals.prev ? ' (<span dir="ltr">' + vfPayrollSigned_(pct).replace(/,/g, '') + '%</span>)' : '') +
+      '. أسباب الفرق: ' + top.join('، ') + (drivers.length > 5 ? '، وبنود أخرى أصغر موضحة بالجدول.' : '.');
+  }
+
+  var html = '<style>' +
+    '.pos{color:#1a7f37;font-weight:700;}.neg{color:#c62828;font-weight:700;}' +
+    '.vf-cmp-cards{display:grid;grid-template-columns:repeat(4,1fr);gap:3mm;margin-bottom:5mm;}' +
+    '.vf-cmp-card{border:1px solid #111;padding:2.5mm;text-align:center;}' +
+    '.vf-cmp-card .t{font-size:8.5pt;color:#444;}.vf-cmp-card .v{font-size:12pt;font-weight:800;margin-top:1mm;}' +
+    '.vf-cmp-narr{border:1px solid #111;background:#f6f8fa;padding:3mm;font-size:10pt;line-height:1.7;margin-bottom:5mm;}' +
+    '.vf-cmp-h{font-size:11pt;font-weight:800;margin:4mm 0 2mm;}' +
+    '.vf-summary tr.sub td{background:#f6f6f6;font-weight:700;}' +
+    '.vf-cmp-detail td{font-size:7pt;}' +
+    '.vf-cmp-detail td.reason{font-size:6.8pt;line-height:1.5;}' +
+    '.vf-cmp-detail tr.st-new td{background:#eaf6ec;}.vf-cmp-detail tr.st-gone td{background:#fdecea;}' +
+    '</style>';
+
+  html += '<section class="vf-section-page"><div class="vf-print-heading">مقارنة الرواتب — ' + vfPayrollEsc_(curLabel) +
+    ' مقابل ' + vfPayrollEsc_(prevLabel) + '<span>Valley Foods</span></div>';
+  html += '<div class="vf-cmp-cards">' +
+    '<div class="vf-cmp-card"><div class="t">إجمالي ' + vfPayrollEsc_(prevLabel) + '</div><div class="v" dir="ltr">' + vfPayrollMoney_(totals.prev) + '</div><div class="t">' + prevCount + ' موظف</div></div>' +
+    '<div class="vf-cmp-card"><div class="t">إجمالي ' + vfPayrollEsc_(curLabel) + '</div><div class="v" dir="ltr">' + vfPayrollMoney_(totals.cur) + '</div><div class="t">' + curCount + ' موظف</div></div>' +
+    '<div class="vf-cmp-card"><div class="t">الفرق</div><div class="v">' + vfPayrollSignedHtml_(diffTotal) + '</div><div class="t" dir="ltr">' + (totals.prev ? vfPayrollSigned_(pct).replace(/,/g, '') + '%' : '-') + '</div></div>' +
+    '<div class="vf-cmp-card"><div class="t">حركة الموظفين</div><div class="v">' + newList.length + ' جديد / ' + goneList.length + ' غير موجود</div><div class="t">' + (curCount - newList.length) + ' مستمر</div></div>' +
+    '</div>';
+  html += '<div class="vf-cmp-narr">' + narrative + '</div>';
+
+  html += '<div class="vf-cmp-h">تفسير الفرق بين الإجماليين</div><table class="vf-summary"><thead><tr><th>البند</th><th>القيمة</th></tr></thead><tbody>' +
+    '<tr class="sub"><td>إجمالي صافي ' + vfPayrollEsc_(prevLabel) + '</td><td class="num">' + vfPayrollMoney_(totals.prev) + '</td></tr>';
+  lines.forEach(function (l) {
+    html += '<tr><td>' + vfPayrollEsc_(l.label) + '</td><td class="num">' + vfPayrollSignedHtml_(l.value) + '</td></tr>';
+  });
+  html += '<tr class="grand"><td>إجمالي صافي ' + vfPayrollEsc_(curLabel) + '</td><td class="num">' + vfPayrollMoney_(totals.cur) + '</td></tr></tbody></table>';
+
+  function peopleTable(title, list) {
+    if (!list.length) return '';
+    var t = '<div class="vf-cmp-h">' + title + ' (' + list.length + ')</div><table class="vf-summary"><thead><tr><th>الكود</th><th>الاسم</th><th>القسم</th><th>أيام العمل</th><th>الصافي</th></tr></thead><tbody>';
+    vfPayrollCompareSort_(list).forEach(function (e) {
+      t += '<tr><td>' + vfPayrollEsc_(e.emp_id) + '</td><td>' + vfPayrollEsc_(e.name || '-') + '</td><td>' + vfPayrollEsc_(e.section) +
+        '</td><td class="num">' + vfPayrollQty_(e.v.working_days) + '</td><td class="num">' + vfPayrollMoney_(e.net) + '</td></tr>';
+    });
+    return t + '</tbody></table>';
+  }
+  html += peopleTable('موظفون جدد في ' + vfPayrollEsc_(curLabel), newList);
+  html += peopleTable('موظفون كانوا في ' + vfPayrollEsc_(prevLabel) + ' وغير موجودين هذا الشهر', goneList);
+  html += '</section>';
+
+  /* Detail: biggest absolute change first; unchanged employees last. */
+  var statusLabel = { 'new': 'جديد', gone: 'غير موجود', changed: 'تغير', same: 'بدون تغيير' };
+  details.sort(function (a, b) {
+    var d = Math.abs(b.diff) - Math.abs(a.diff);
+    if (Math.abs(d) >= 0.005) return d;
+    return vfPayrollNumber_(a.e.emp_id) - vfPayrollNumber_(b.e.emp_id);
+  });
+  html += '<section class="vf-section-page last"><div class="vf-print-heading">تفاصيل مقارنة رواتب الموظفين — ' +
+    vfPayrollEsc_(curLabel) + ' مقابل ' + vfPayrollEsc_(prevLabel) + '<span>Valley Foods</span></div>' +
+    '<table class="vf-sections-table vf-cmp-detail"><thead><tr><th>الكود</th><th>الاسم</th><th>القسم</th><th>صافي ' + vfPayrollEsc_(prevLabel) +
+    '</th><th>صافي ' + vfPayrollEsc_(curLabel) + '</th><th>الفرق</th><th>الحالة</th><th>تبرير الفرق</th></tr></thead><tbody>';
+  details.forEach(function (d) {
+    html += '<tr class="st-' + d.status + '"><td>' + vfPayrollEsc_(d.e.emp_id) + '</td><td>' + vfPayrollEsc_(d.e.name || '-') + '</td><td>' +
+      vfPayrollEsc_(d.e.section) + '</td><td class="num">' + vfPayrollMoney_(d.prevNet) + '</td><td class="num">' + vfPayrollMoney_(d.curNet) +
+      '</td><td class="num">' + vfPayrollSignedHtml_(d.diff) + '</td><td>' + statusLabel[d.status] + '</td><td class="reason">' + d.reason + '</td></tr>';
+  });
+  if (!details.length) html += '<tr><td colspan="8" style="text-align:center;">لا توجد رواتب للشهرين</td></tr>';
+  html += '<tr><td colspan="3"><b>الإجمالي</b></td><td class="num"><b>' + vfPayrollMoney_(totals.prev) + '</b></td><td class="num"><b>' +
+    vfPayrollMoney_(totals.cur) + '</b></td><td class="num">' + vfPayrollSignedHtml_(diffTotal) + '</td><td colspan="2"></td></tr>';
+  html += '</tbody></table></section>';
+
+  return vfValleyPayrollDocument_(html, 'مقارنة الرواتب');
+}
+
+function vfPayrollCompareSort_(list) {
+  return list.slice().sort(function (a, b) {
+    if (a.section !== b.section) return a.section.localeCompare(b.section, 'ar');
+    return vfPayrollNumber_(a.emp_id) - vfPayrollNumber_(b.emp_id);
+  });
+}
+
 function serveValleyPayrollReport_(params) {
   authorizeArtifact_(params, { company: '9940659bd83035d7', page: 'vf_hr_monthly_salaries', access: 'read' });
   var month = Number(params.month);
@@ -21609,19 +22808,34 @@ function serveValleyPayrollReport_(params) {
   if (!Number.isInteger(month) || month < 1 || month > 12) return ContentService.createTextOutput('Invalid month');
   if (!Number.isInteger(year) || year < 2000) return ContentService.createTextOutput('Invalid year');
   var type = String(params.type || 'cards').trim();
-  if (type !== 'cards' && type !== 'sections') return ContentService.createTextOutput('Invalid type');
+  if (type !== 'cards' && type !== 'sections' && type !== 'compare') return ContentService.createTextOutput('Invalid type');
 
   var dbId = getCompanySpreadsheetId_('9940659bd83035d7');
   var sheet = getSheet_('valley_emp_salaries', dbId);
   var headers = getHeaders_(sheet);
-  var rows = getAllRecords_(dbId, 'valley_emp_salaries').filter(function (row) {
-    return Number(vfPayrollRawValue_(row, 'month')) === month && Number(vfPayrollRawValue_(row, 'year')) === year;
-  });
+  var allRows = getAllRecords_(dbId, 'valley_emp_salaries');
+  var inMonth = function (m, y) {
+    return allRows.filter(function (row) {
+      return Number(vfPayrollRawValue_(row, 'month')) === m && Number(vfPayrollRawValue_(row, 'year')) === y;
+    });
+  };
+  var rows = inMonth(month, year);
   var monthName = VF_PAYROLL_MONTH_NAMES_[month] || String(month);
-  var html = type === 'cards'
-    ? buildValleyPayrollCardsHtml_(rows, monthName, year)
-    : buildValleyPayrollSectionsHtml_(rows, headers, monthName, year);
+  var html, title;
+  if (type === 'compare') {
+    var prevMonth = month === 1 ? 12 : month - 1;
+    var prevYear = month === 1 ? year - 1 : year;
+    html = buildValleyPayrollCompareHtml_(rows, inMonth(prevMonth, prevYear), monthName, year,
+      VF_PAYROLL_MONTH_NAMES_[prevMonth] || String(prevMonth), prevYear);
+    title = 'مقارنة الرواتب';
+  } else if (type === 'cards') {
+    html = buildValleyPayrollCardsHtml_(rows, monthName, year);
+    title = 'كشف كروت الرواتب';
+  } else {
+    html = buildValleyPayrollSectionsHtml_(rows, headers, monthName, year);
+    title = 'كشف الأقسام';
+  }
   return HtmlService.createHtmlOutput(html)
-    .setTitle((type === 'cards' ? 'كشف كروت الرواتب' : 'كشف الأقسام') + ' - ' + monthName + ' ' + year)
+    .setTitle(title + ' - ' + monthName + ' ' + year)
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }

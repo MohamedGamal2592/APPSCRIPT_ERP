@@ -1470,6 +1470,18 @@ UIC.TableRefresh = (function () {
   };
 })();
 
+/* Redraws a list through `render` and, when the table was already on screen,
+ * puts back the search, sort, page and scroll the user had — the same
+ * snapshot/restore et_products and et_customers use when their stock and
+ * balances fill in. A table not in the document (first load, or coming back
+ * from a form) is drawn fresh. */
+UIC.keepTableView = function (tableId, render) {
+  var snap = null;
+  try { if (document.getElementById(tableId)) snap = UIC.TableRefresh.snapshot(tableId); } catch (e) {}
+  render();
+  try { if (snap) UIC.TableRefresh.restore(tableId, snap); } catch (e) {}
+};
+
 /* ══ [Phase F] The request-coordinator switch — OFF until measured ═════════
  *
  * Client_Helpers.API.call consults this constant on every call. The shipped
@@ -2793,7 +2805,7 @@ UIC._dtCellText = function (v) {
     .replace(/&quot;/g, '"').replace(/&#39;/g, '\'').trim();
 };
 
-UIC.exportExcel = function (id) {
+UIC.exportExcel = function (id, opts) {
   var st = (window.__dtStore || {})[id];
   if (!st) return;
   var rows = st.filtered || st.rows;
@@ -2812,7 +2824,22 @@ UIC.exportExcel = function (id) {
       });
       return obj;
     });
-    var ws = XLSX.utils.json_to_sheet(data);
+    /* opts.header = the filters the report was run with, written above the
+       column header so a downloaded file still says what it covers (date
+       range, and client / product when one was selected). Without opts the
+       sheet starts at the column header, exactly as it always did. */
+    var ws;
+    var headLines = (opts && opts.header) || [];
+    if (!headLines.length) {
+      ws = XLSX.utils.json_to_sheet(data);
+    } else {
+      var labels = cols.map(function (c) { return c.h.label; });
+      var aoa = headLines.map(function (line) { return [line]; });
+      aoa.push([]);
+      aoa.push(labels);
+      data.forEach(function (obj) { aoa.push(labels.map(function (l) { return obj[l]; })); });
+      ws = XLSX.utils.aoa_to_sheet(aoa);
+    }
     var wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
     var from = st.dateFrom || '';

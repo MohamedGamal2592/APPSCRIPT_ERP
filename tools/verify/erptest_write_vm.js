@@ -136,12 +136,15 @@ function runScript(DB) {
   call('add_et_transfer', { from_box: '111101', to_box: '111104', amount: 10, transfer_date: '2025-03-03', details: 'تحويل' });
   call('delete_et_cash', { unique_id: cash[1].transaction_id });
   // 3. purchasing
-  const pur = call('add_et_purchasing', { header: { code: 'PU-1', receipt_date: '2025-02-01', type: 'تصنيع', shipping_type: 'محلي', supplier_name: C[1], currency: 'EGP', exchange_rate: 1, value: 150 },
-    lines: [{ product: P[0], qty: 10, unit_price: 10 }, { product: P[1], qty: 10, unit_price: 5 }] });
-  call('edit_et_purchasing', { header: { unique_id: pur.unique_id, version: 0, code: 'PU-1', receipt_date: '2025-02-01', type: 'تصنيع', shipping_type: 'محلي', supplier_name: C[1], currency: 'EGP', exchange_rate: 1, value: 200 },
-    lines: [{ product: P[0], qty: 15, unit_price: 10 }, { product: P[1], qty: 10, unit_price: 5 }] });
+  // every cost field and line column is mandatory (0 counts as entered)
+  const PC = { cif_insurance_value: 0, importation_reprice: 0, tax_declared_value: 0, administrative_expenses: 0, customs_expenses: 0, unloading_expenses: 0, bank_commission: 0, customs_clearance: 0, additional_fees: 0, clearance_expenses: 0, other_expenses: 0, internal_cost_adjustment: 0 };
+  const PL = { other_cost: 0, sales_value: 0, movement_type: 'شراء' };
+  const pur = call('add_et_purchasing', { header: { code: 'PU-1', receipt_date: '2025-02-01', type: 'تصنيع', shipping_type: 'محلي', supplier_name: C[1], currency: 'EGP', exchange_rate: 1, value: 150, ...PC },
+    lines: [{ product: P[0], qty: 10, unit_price: 10, ...PL }, { product: P[1], qty: 10, unit_price: 5, ...PL }] });
+  call('edit_et_purchasing', { header: { unique_id: pur.unique_id, version: 0, code: 'PU-1', receipt_date: '2025-02-01', type: 'تصنيع', shipping_type: 'محلي', supplier_name: C[1], currency: 'EGP', exchange_rate: 1, value: 200, ...PC },
+    lines: [{ product: P[0], qty: 15, unit_price: 10, ...PL }, { product: P[1], qty: 10, unit_price: 5, ...PL }] });
   call('approve_et_purchasing', { unique_id: pur.unique_id, version: 1 });
-  const pur2 = call('add_et_purchasing', { header: { code: 'PU-2', receipt_date: '2025-02-02', type: 'تصنيع', shipping_type: 'محلي', supplier_name: C[1], currency: 'EGP', exchange_rate: 1, value: 10 }, lines: [{ product: P[2], qty: 1, unit_price: 10 }] });
+  const pur2 = call('add_et_purchasing', { header: { code: 'PU-2', receipt_date: '2025-02-02', type: 'تصنيع', shipping_type: 'محلي', supplier_name: C[1], currency: 'EGP', exchange_rate: 1, value: 10, ...PC }, lines: [{ product: P[2], qty: 1, unit_price: 10, ...PL }] });
   call('delete_et_purchasing', { unique_id: pur2.unique_id });
   // 4. sales + returns
   const s1 = call('add_et_sales', { header: { customer_id: C[0], invoice_date: '2025-03-01', discount_percent: 0 }, lines: [{ product_id: P[0], product_tax: 0, product_qty: 4, product_price: 30, product_discount: 0 }] });

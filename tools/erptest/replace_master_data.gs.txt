@@ -1,0 +1,314 @@
+// OWNER RUNS in the Apps Script editor (scratch file, then delete it).
+// Replaces the real data in erp_test_products and erp_test_customer_vendor with
+// generic test data (a public catalogue of common industrial / cleaning
+// chemicals, and invented company names).
+//
+// 1. Run etReplaceMasterDataDryRun  -> logs what would change, writes nothing.
+// 2. Run etReplaceMasterDataWrite   -> writes it.
+//
+// What it keeps, so nothing that points at these rows breaks:
+//   - every row's id, and every row's position
+//   - products: category, unit, carton, concentration, sales_tax, asset_code,
+//     GPC, cost_allocation_percentage, user, audit columns
+//   - parties: customer_direction, type, country, region, user, audit columns
+// What it replaces:
+//   - products: name_ar, name_en
+//   - parties:  name, name_en, registration_number, tax_id, telephone, address
+//   - erp_test_sales_invoices / erp_test_sales_offer: tax_id, which is a copy of
+//     the client's tax_id, is re-copied from the new party row (matched on client_id)
+// It bumps `version` on every changed row, so a form still open on an old copy
+// is refused on save instead of writing the real data back.
+// The output is the same on every run (seeded), so running it twice is harmless.
+// It does NOT touch ERP_Record_History: older history entries still hold the
+// old values.
+
+var ET_RMD_SS_ID = '1rdnnP3rMZTnoyyfG5V3X6w62AXatgIisZljkg0izJzE';
+
+function etReplaceMasterDataDryRun() { return etReplaceMasterData_(false); }
+function etReplaceMasterDataWrite() { return etReplaceMasterData_(true); }
+
+function etReplaceMasterData_(write) {
+  var ss = SpreadsheetApp.openById(ET_RMD_SS_ID);
+  var report = { write: write };
+
+  // ---- products ----
+  var prod = etRmdRead_(ss, 'erp_test_products');
+  var prodNew = etRmdProducts_(prod.rows.length);
+  report.products = etRmdApply_(prod, prodNew, ['name_ar', 'name_en'], [], write);
+
+  // ---- customers / vendors ----
+  var party = etRmdRead_(ss, 'erp_test_customer_vendor');
+  var regionCol = party.headers.indexOf('region');
+  var partyNew = etRmdParties_(party.rows.map(function (r) { return regionCol === -1 ? '' : String(r.values[regionCol] || '').trim(); }));
+  var textCols = ['registration_number', 'tax_id', 'telephone'];
+  report.parties = etRmdApply_(party, partyNew, ['name', 'name_en', 'registration_number', 'tax_id', 'telephone', 'address'], textCols, write);
+
+  // ---- tax_id copies on invoice / offer headers ----
+  var taxById = {};
+  var idCol = party.headers.indexOf('id');
+  party.rows.forEach(function (r, i) { taxById[String(r.values[idCol]).trim()] = partyNew[i].tax_id; });
+  report.sales_invoices_tax_id = etRmdSyncTax_(ss, 'erp_test_sales_invoices', taxById, write);
+  report.sales_offer_tax_id = etRmdSyncTax_(ss, 'erp_test_sales_offer', taxById, write);
+
+  if (write) {
+    SpreadsheetApp.flush();
+    report.caches = etRmdBustCaches_();
+  }
+  console.log(JSON.stringify(report, null, 1));
+  return report;
+}
+
+// Header row + every data row that has an id. Rows without an id are left alone.
+function etRmdRead_(ss, name) {
+  var sh = ss.getSheetByName(name);
+  if (!sh) throw new Error('missing tab: ' + name);
+  var lr = sh.getLastRow(), lc = sh.getLastColumn();
+  var all = lr ? sh.getRange(1, 1, lr, lc).getValues() : [[]];
+  var headers = all[0].map(function (h) { return String(h).trim(); });
+  var idCol = headers.indexOf('id');
+  if (idCol === -1) throw new Error(name + ': no id column');
+  var rows = [];
+  for (var i = 1; i < all.length; i++) {
+    if (String(all[i][idCol]).trim() === '') continue;
+    rows.push({ rowNum: i + 1, values: all[i] });
+  }
+  return { name: name, sheet: sh, headers: headers, rows: rows };
+}
+
+// Writes each target column as one contiguous block from row 2 to the last
+// data row, carrying the existing value through for rows without an id.
+function etRmdApply_(tab, newRecs, cols, textCols, write) {
+  var out = { tab: tab.name, rows: tab.rows.length, columns: [], sample: [] };
+  if (!tab.rows.length) return out;
+  var first = 2, last = tab.rows[tab.rows.length - 1].rowNum;
+  var byRow = {};
+  tab.rows.forEach(function (r, i) { byRow[r.rowNum] = newRecs[i]; });
+  var present = cols.filter(function (c) { return tab.headers.indexOf(c) !== -1; });
+  out.columns = present;
+  out.missing_columns = cols.filter(function (c) { return tab.headers.indexOf(c) === -1; });
+
+  tab.rows.slice(0, 5).forEach(function (r, i) {
+    var s = { id: r.values[tab.headers.indexOf('id')] };
+    present.forEach(function (c) { s[c] = String(r.values[tab.headers.indexOf(c)]) + '  ->  ' + newRecs[i][c]; });
+    out.sample.push(s);
+  });
+  if (!write) return out;
+
+  var current = tab.sheet.getRange(first, 1, last - first + 1, tab.headers.length).getValues();
+  present.forEach(function (c) {
+    var col = tab.headers.indexOf(c);
+    var block = current.map(function (row, k) {
+      var rec = byRow[first + k];
+      return [rec ? rec[c] : row[col]];
+    });
+    var range = tab.sheet.getRange(first, col + 1, block.length, 1);
+    if (textCols.indexOf(c) !== -1) range.setNumberFormat('@');
+    range.setValues(block);
+  });
+
+  var vCol = tab.headers.indexOf('version');
+  if (vCol !== -1) {
+    var vBlock = current.map(function (row, k) {
+      if (!byRow[first + k]) return [row[vCol]];
+      return [(Number(row[vCol]) || 0) + 1];
+    });
+    tab.sheet.getRange(first, vCol + 1, vBlock.length, 1).setValues(vBlock);
+  }
+  return out;
+}
+
+function etRmdSyncTax_(ss, name, taxById, write) {
+  var sh = ss.getSheetByName(name);
+  if (!sh) return { tab: name, skipped: 'missing tab' };
+  var lr = sh.getLastRow(), lc = sh.getLastColumn();
+  if (lr < 2) return { tab: name, changed: 0 };
+  var headers = sh.getRange(1, 1, 1, lc).getValues()[0].map(function (h) { return String(h).trim(); });
+  var cCol = headers.indexOf('client_id'); if (cCol === -1) cCol = headers.indexOf('اسم العميل');
+  var tCol = headers.indexOf('tax_id'); if (tCol === -1) tCol = headers.indexOf('رقم التسجيل الضريبي للعميل');
+  if (cCol === -1 || tCol === -1) return { tab: name, skipped: 'no client_id / tax_id column' };
+  var clients = sh.getRange(2, cCol + 1, lr - 1, 1).getValues();
+  var taxes = sh.getRange(2, tCol + 1, lr - 1, 1).getValues();
+  var changed = 0, unmatched = 0;
+  var block = clients.map(function (c, i) {
+    var key = String(c[0]).trim();
+    if (key === '') return [taxes[i][0]];
+    if (!(key in taxById)) { unmatched++; return [taxes[i][0]]; }
+    if (String(taxes[i][0]) !== taxById[key]) changed++;
+    return [taxById[key]];
+  });
+  if (write && changed) {
+    var range = sh.getRange(2, tCol + 1, block.length, 1);
+    range.setNumberFormat('@');
+    range.setValues(block);
+  }
+  return { tab: name, changed: changed, unmatched_client_ids: unmatched };
+}
+
+// Same keys bustTopLightCaches_ / invalidateRefsCache_ clear after a normal save.
+function etRmdBustCaches_() {
+  var id = ET_RMD_SS_ID, done = [];
+  try { CacheService.getScriptCache().put('et_refs_ver_' + id, String(new Date().getTime()), 21600); done.push('et_refs_ver'); } catch (e) {}
+  ['et_dashboard_kpis_', 'et_cust_sales_opts_', 'et_qty_map_', 'et_price_map_', 'et_cat_opts_'].forEach(function (k) {
+    try { CacheService.getScriptCache().remove(k + id); removeChunkedCache_(k + id); done.push(k); } catch (e) {}
+  });
+  ['products', 'parties', 'categories'].forEach(function (k) {
+    try { invalidateRefsCache_(id, k); done.push('refs_' + k); } catch (e) {}
+  });
+  ['erp_test_products', 'erp_test_customer_vendor', 'erp_test_sales_invoices', 'erp_test_sales_offer'].forEach(function (t) {
+    try { noteTableChange_(id, t); done.push('stamp_' + t); } catch (e) {}
+  });
+  return done;
+}
+
+// ---------- generators ----------
+
+// Small seeded PRNG (mulberry32) so every run produces the same data.
+function etRmdRng_(seed) {
+  var a = seed >>> 0;
+  return function () {
+    a = (a + 0x6D2B79F5) >>> 0;
+    var t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function etRmdShuffle_(arr, rnd) {
+  for (var i = arr.length - 1; i > 0; i--) {
+    var j = Math.floor(rnd() * (i + 1));
+    var t = arr[i]; arr[i] = arr[j]; arr[j] = t;
+  }
+  return arr;
+}
+function etRmdPad_(n, w) { var s = String(n); while (s.length < w) s = '0' + s; return s; }
+
+function etRmdProducts_(n) {
+  var CATALOG = [
+    ['صودا كاوية', 'Caustic Soda Flakes'],
+    ['بيروكسيد الهيدروجين', 'Hydrogen Peroxide'],
+    ['حمض الستريك', 'Citric Acid Monohydrate'],
+    ['حمض السلفونيك', 'Linear Alkyl Benzene Sulfonic Acid'],
+    ['سليكات الصوديوم', 'Sodium Silicate'],
+    ['صودا آش خفيفة', 'Soda Ash Light'],
+    ['بيكربونات الصوديوم', 'Sodium Bicarbonate'],
+    ['هيبوكلوريت الصوديوم', 'Sodium Hypochlorite'],
+    ['ملح صناعي', 'Industrial Salt'],
+    ['كبريتات الصوديوم اللامائية', 'Sodium Sulphate Anhydrous'],
+    ['سلفات لوريل إيثر الصوديوم', 'Sodium Lauryl Ether Sulfate'],
+    ['جليسرين', 'Glycerine'],
+    ['بروبيلين جليكول', 'Propylene Glycol'],
+    ['إيثانول', 'Ethanol'],
+    ['كحول أيزوبروبيلي', 'Isopropyl Alcohol'],
+    ['حمض الفوسفوريك', 'Phosphoric Acid'],
+    ['حمض الهيدروكلوريك', 'Hydrochloric Acid'],
+    ['حمض الكبريتيك', 'Sulphuric Acid'],
+    ['حمض الأسيتيك الثلجي', 'Glacial Acetic Acid'],
+    ['حمض النيتريك', 'Nitric Acid'],
+    ['هيدروكسيد البوتاسيوم', 'Potassium Hydroxide'],
+    ['كلوريد الكالسيوم', 'Calcium Chloride'],
+    ['كلوريد البنزالكونيوم', 'Benzalkonium Chloride'],
+    ['كربوكسي ميثيل سليلوز', 'Carboxymethyl Cellulose'],
+    ['ثلاثي بولي فوسفات الصوديوم', 'Sodium Tripolyphosphate'],
+    ['EDTA ثنائي الصوديوم', 'Disodium EDTA'],
+    ['كوكاميدوبروبيل بيتايين', 'Cocamidopropyl Betaine'],
+    ['كوكونت دايثانول أميد', 'Coconut Diethanolamide'],
+    ['كحول دهني إيثوكسيلات', 'Fatty Alcohol Ethoxylate'],
+    ['زيت البارافين', 'Liquid Paraffin'],
+    ['شمع البارافين', 'Paraffin Wax'],
+    ['ثاني أكسيد التيتانيوم', 'Titanium Dioxide'],
+    ['كربونات الكالسيوم', 'Calcium Carbonate'],
+    ['بودرة التلك', 'Talc Powder'],
+    ['كاولين', 'Kaolin'],
+    ['بنتونيت', 'Bentonite'],
+    ['سلفات الألومنيوم', 'Aluminium Sulphate'],
+    ['كلوريد الحديديك', 'Ferric Chloride'],
+    ['بولي ألومنيوم كلوريد', 'Poly Aluminium Chloride'],
+    ['هيبوكلوريت الكالسيوم', 'Calcium Hypochlorite'],
+    ['حمض ثلاثي كلورو أيزوسيانوريك', 'Trichloroisocyanuric Acid'],
+    ['محلول الفورمالدهيد', 'Formaldehyde Solution'],
+    ['ميثانول', 'Methanol'],
+    ['أسيتون', 'Acetone'],
+    ['تولوين', 'Toluene'],
+    ['زيلين', 'Xylene'],
+    ['وايت سبيريت', 'White Spirit'],
+    ['بيوتيل جليكول', 'Butyl Glycol'],
+    ['بولي إيثيلين جليكول 400', 'Polyethylene Glycol 400'],
+    ['سوربيتول', 'Sorbitol'],
+    ['بنزوات الصوديوم', 'Sodium Benzoate'],
+    ['سوربات البوتاسيوم', 'Potassium Sorbate'],
+    ['حمض الأسكوربيك', 'Ascorbic Acid'],
+    ['جلوكوز سائل', 'Liquid Glucose'],
+    ['نشا الذرة', 'Corn Starch'],
+    ['صمغ الزانثان', 'Xanthan Gum'],
+    ['زيت عطري - ليمون', 'Fragrance Oil - Lemon'],
+    ['زيت عطري - لافندر', 'Fragrance Oil - Lavender'],
+    ['صبغة منظفات زرقاء', 'Detergent Dye - Blue'],
+    ['مادة حافظة أيزوثيازولينون', 'Isothiazolinone Preservative'],
+    ['كبريتات الماغنيسيوم', 'Magnesium Sulphate'],
+    ['كبريتات الزنك', 'Zinc Sulphate'],
+    ['يوريا', 'Urea'],
+    ['جير مطفأ', 'Hydrated Lime'],
+    ['كحول السيتيل', 'Cetyl Alcohol'],
+    ['حمض الستياريك', 'Stearic Acid'],
+    ['زيت السيليكون', 'Silicone Oil'],
+    ['بولي فينيل الكحول', 'Polyvinyl Alcohol']
+  ];
+  var GRADES = [['', ''], [' - درجة صناعية', ' - Industrial Grade'], [' - درجة غذائية', ' - Food Grade'],
+                [' - درجة معملية', ' - Lab Grade'], [' - درجة دوائية', ' - Pharma Grade']];
+  var base = etRmdShuffle_(CATALOG.slice(), etRmdRng_(20261002));
+  var out = [];
+  for (var i = 0; i < n; i++) {
+    var item = base[i % base.length];
+    var round = Math.floor(i / base.length);
+    var g = GRADES[round % GRADES.length];
+    var extra = round >= GRADES.length ? ' ' + (Math.floor(round / GRADES.length) + 1) : '';
+    out.push({ name_ar: item[0] + g[0] + extra, name_en: item[1] + g[1] + extra });
+  }
+  return out;
+}
+
+function etRmdParties_(regions) {
+  var WORDS = [
+    ['النور', 'Al Nour'], ['الأمل', 'Al Amal'], ['الفجر', 'Al Fajr'], ['الصفوة', 'Al Safwa'],
+    ['الرواد', 'Al Rowad'], ['النخبة', 'Al Nokhba'], ['المستقبل', 'Al Mostakbal'], ['الوادي', 'Al Wadi'],
+    ['الشروق', 'Al Shorouk'], ['الهدى', 'Al Hoda'], ['الريادة', 'Al Reyada'], ['الاتحاد', 'Al Ittihad'],
+    ['الدلتا', 'Delta'], ['السلام', 'Al Salam'], ['الكوثر', 'Al Kawthar'], ['الياسمين', 'Yasmine'],
+    ['الواحة', 'Al Waha'], ['القمة', 'Al Qemma'], ['المنار', 'Al Manar'], ['الرحاب', 'Al Rehab'],
+    ['الأفق', 'Al Ofok'], ['الإيمان', 'Al Eman'], ['الضياء', 'Al Diaa'], ['الندى', 'Al Nada']
+  ];
+  var ACTS = [
+    ['للتجارة والتوزيع', 'Trading & Distribution'], ['للصناعات الكيماوية', 'Chemical Industries'],
+    ['للمنظفات', 'Detergents'], ['للاستيراد والتصدير', 'Import & Export'],
+    ['للتوريدات العمومية', 'General Supplies'], ['للصناعات الغذائية', 'Food Industries'],
+    ['للدهانات', 'Paints'], ['لمستحضرات التجميل', 'Cosmetics'],
+    ['للمعدات الصناعية', 'Industrial Equipment'], ['للخدمات اللوجستية', 'Logistics'],
+    ['لمعالجة المياه', 'Water Treatment'], ['للبلاستيك والتعبئة', 'Plastics & Packaging']
+  ];
+  var FORMS = [
+    ['شركة {w} {a}', '{w} {a} Co.'], ['مؤسسة {w} {a}', '{w} {a} Est.'],
+    ['مجموعة {w} {a}', '{w} {a} Group'], ['شركة {w} {a} ش.م.م', '{w} {a} LLC']
+  ];
+  var STREETS = ['شارع التحرير', 'شارع الجمهورية', 'شارع النصر', 'شارع الثورة', 'شارع 26 يوليو', 'شارع الجلاء',
+                 'شارع البحر', 'شارع المحطة', 'شارع الجيش', 'شارع السوق', 'المنطقة الصناعية الأولى', 'المنطقة الصناعية الثانية'];
+  var CITIES = ['القاهرة', 'الجيزة', 'الإسكندرية', 'العاشر من رمضان', 'السادس من أكتوبر', 'المنصورة', 'طنطا', 'بورسعيد'];
+
+  var combos = [];
+  FORMS.forEach(function (f) { ACTS.forEach(function (a) { WORDS.forEach(function (w) { combos.push([w, a, f]); }); }); });
+  var rnd = etRmdRng_(1002026);
+  etRmdShuffle_(combos, rnd);
+
+  return regions.map(function (region, i) {
+    var c = combos[i % combos.length];
+    var extra = i >= combos.length ? ' ' + (Math.floor(i / combos.length) + 1) : '';
+    var seq = i + 1;
+    var city = region || CITIES[i % CITIES.length];
+    return {
+      name: c[2][0].replace('{w}', c[0][0]).replace('{a}', c[1][0]) + extra,
+      name_en: c[2][1].replace('{w}', c[0][1]).replace('{a}', c[1][1]) + extra,
+      registration_number: String(900000 + seq),
+      tax_id: '900-' + etRmdPad_(Math.floor(seq / 1000), 3) + '-' + etRmdPad_(seq % 1000, 3),
+      telephone: '0100000' + etRmdPad_(seq, 4),
+      address: (1 + Math.floor(rnd() * 120)) + ' ' + STREETS[Math.floor(rnd() * STREETS.length)] + '، ' + city
+    };
+  });
+}

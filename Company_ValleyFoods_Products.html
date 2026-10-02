@@ -337,9 +337,6 @@
          or the actual record id (edit). Server always decides the final id. */
       var idValue = row ? row.id : NEXT_ID;
       /* UIC.field select expects an ARRAY of {value,label} — not HTML */
-      var withEmpty = function (arr) {
-        return [{ value: '', label: '—' }].concat(arr || []);
-      };
       var TAX_OPTIONS = [
         { value: 0, label: '0%' },
         { value: 0.05, label: '5%' },
@@ -364,7 +361,7 @@
         UIC.combo({ key: 'f-asset', label: 'كود الأصل', required: true, options: ACCOUNT_OPTIONS, value: row ? String(row.asset_code || '') : '', placeholder: 'اكتب للبحث…' }) +
         UIC.combo({ key: 'f-category', label: 'التصنيف', required: true, options: CATEGORY_OPTIONS, value: row ? String(row.category || '') : '', placeholder: 'اكتب للبحث…' }) +
         UIC.combo({ key: 'f-tax', label: 'نسبة ضريبة المبيعات %', required: true, options: TAX_OPTIONS, value: row != null && row.sales_tax !== '' && row.sales_tax != null ? Number(row.sales_tax) : 0, placeholder: 'اكتب للبحث…' }) +
-        UIC.combo({ key: 'f-quality', label: 'رقابة الجودة', required: true, options: withEmpty(ENUMS.quality_controlled), value: row ? String(row.quality_controlled || '') : '', placeholder: 'اكتب للبحث…' }) +
+        UIC.combo({ key: 'f-quality', label: 'رقابة الجودة', required: true, options: (ENUMS.quality_controlled || []).map(function (v) { return { value: v, label: v }; }), value: row ? String(row.quality_controlled || '') : '', placeholder: 'اختر رقابة الجودة…' }) +
       '</form>';
 
       UIC.openModal('product-modal', {

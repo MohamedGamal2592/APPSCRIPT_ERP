@@ -67,6 +67,7 @@ const STEPS = [
   ['s25_stock_authority.js', 'S25 — رصيد الدفعات: one stock authority — available = current_qty + held(this document)'],
   ['s26_party_agreements.js', 'S26 — vf_parties كشف حساب: factory/agreements/packaging + balance-once'],
   ['s27_mfg_client_report.js', 'S27 — vf_mfg_client_report: client manufacturing pivot, filters, cost gating'],
+  ['s28_hr_turnover.js', 'S28 — vf_hr_analysis: SHRM turnover and the director HR metrics'],
   ['vf_financial_reporting.js', 'Valley Foods IFRS income-statement financial acceptance groups'],
   /* ── UI/UX programme (branch ui/odoo-parity) ── */
   ['ui1_anchor.js', 'UI-1.2 — popups escape the table clip box (U-01)'],

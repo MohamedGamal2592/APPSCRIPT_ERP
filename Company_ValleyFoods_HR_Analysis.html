@@ -1,0 +1,989 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Valley Foods — تحليلات الموارد البشرية</title>
+  <?!= include('CSS_Tokens'); ?>
+  <?!= include('UI_Components'); ?>
+  <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_ValleyFoods_Nav'); ?>
+  <?!= getCompanyThemeCSS_('9940659bd83035d7') ?>
+  <style>
+    .hra-filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin-bottom: 18px; }
+    .hra-filters .form-field { margin: 0; min-width: 160px; flex: 0 1 200px; }
+
+    /* ── Director view: one card per metric ─────────────────────────────── */
+    .hra-metrics { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
+    .hra-metric {
+      display: flex; flex-direction: column; gap: 6px; width: 100%; text-align: right;
+      padding: 16px 18px; border: 1px solid var(--border-color, #e5e7eb); border-radius: 12px;
+      background: var(--bg-card, #fff); color: inherit; font: inherit; cursor: pointer;
+      transition: border-color .15s, box-shadow .15s;
+    }
+    .hra-metric:hover, .hra-metric:focus-visible { border-color: var(--brand-primary, #1d6f42); box-shadow: 0 2px 10px rgba(0,0,0,.06); outline: none; }
+    .hra-metric[disabled] { cursor: default; }
+    .hra-metric-title { font-size: 14px; font-weight: 700; }
+    .hra-metric-period { font-size: 11px; color: var(--text-muted, #64748b); }
+    .hra-metric-value { direction: ltr; text-align: right; font-size: 34px; font-weight: 800; line-height: 1.1; font-variant-numeric: tabular-nums; }
+    .hra-metric-sub { font-size: 12px; color: var(--text-muted, #64748b); }
+    .hra-metric-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 4px; font-size: 12px; color: var(--text-muted, #64748b); }
+    .hra-metric-link { color: var(--brand-primary, #1d6f42); font-weight: 700; }
+    .hra-group { font-size: 14px; font-weight: 800; margin: 22px 0 10px; color: var(--text-muted, #475569); }
+    .hra-group:first-of-type { margin-top: 4px; }
+    .hra-period { font-size: 12px; color: var(--text-muted, #64748b); margin: -6px 0 6px; }
+    .hra-metric-unit { font-size: 13px; font-weight: 600; color: var(--text-muted, #64748b); margin-inline-start: 6px; }
+    .hra-metric-error { color: var(--danger, #dc2626); font-size: 12px; }
+    /* sparkline: decorative trend only — the numbers are in the details */
+    .hra-spark { display: flex; align-items: flex-end; gap: 2px; height: 28px; margin-top: 4px; }
+    .hra-spark i { flex: 1; min-height: 2px; background: var(--brand-primary, #1d6f42); opacity: .8; border-radius: 2px 2px 0 0; }
+    .hra-spark i.is-empty { background: var(--border-color, #e5e7eb); opacity: 1; }
+    .hra-spark i.is-partial { opacity: .45; }
+
+    /* ── Details modal ──────────────────────────────────────────────────── */
+    .hra-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; border-bottom: 1px solid var(--border-color, #e5e7eb); }
+    .hra-tab { background: none; border: 0; border-bottom: 2px solid transparent; padding: 8px 12px; font: inherit; font-size: 13px; cursor: pointer; color: var(--text-muted, #64748b); }
+    .hra-tab.is-active { color: inherit; font-weight: 700; border-bottom-color: var(--brand-primary, #1d6f42); }
+    .hra-panel { display: none; }
+    .hra-panel.is-active { display: block; }
+    .hra-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 14px; }
+    .hra-kpi { padding: 10px 12px; border: 1px solid var(--border-color, #e5e7eb); border-radius: 10px; background: var(--bg-muted, #f8fafc); }
+    .hra-kpi-label { color: var(--text-muted, #64748b); font-size: 12px; margin-bottom: 2px; }
+    .hra-kpi-value { direction: ltr; text-align: right; font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums; }
+    .hra-kpi-sub { color: var(--text-muted, #64748b); font-size: 11px; margin-top: 2px; }
+    .hra-note { margin: 12px 0 0; color: var(--text-muted, #64748b); font-size: 12px; line-height: 1.7; }
+    .hra-warn { color: #92400e; }
+
+    /* Monthly rate chart: one series, so no legend — the title names it.
+       The value lives in a hover/focus tooltip and in the monthly tab. */
+    .hra-chart { border: 1px solid var(--border-color, #e5e7eb); border-radius: 10px; padding: 12px 14px 8px; }
+    .hra-chart-title { font-size: 13px; font-weight: 700; margin-bottom: 8px; }
+    .hra-chart-plot { position: relative; height: 170px; display: flex; align-items: flex-end; gap: 2px;
+      border-bottom: 1px solid var(--border-color, #cbd5e1); }
+    .hra-chart-grid { position: absolute; inset: 0; pointer-events: none; }
+    .hra-chart-grid div { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--border-color, #e5e7eb); }
+    .hra-chart-grid span { position: absolute; left: 0; top: -9px; font-size: 10px; color: var(--text-muted, #94a3b8); direction: ltr; background: var(--bg-card, #fff); padding-right: 3px; }
+    .hra-col { position: relative; flex: 1; height: 100%; display: flex; align-items: flex-end; justify-content: center; outline: none; }
+    .hra-bar { width: 60%; max-width: 34px; background: var(--brand-primary, #1d6f42); border-radius: 4px 4px 0 0; }
+    .hra-col.is-partial .hra-bar { opacity: .55; }
+    .hra-col:hover .hra-bar, .hra-col:focus .hra-bar { filter: brightness(1.15); }
+    .hra-tip { display: none; position: absolute; top: 0; left: 50%; transform: translateX(-50%);
+      background: #111827; color: #fff; font-size: 11px; line-height: 1.6; padding: 6px 8px; border-radius: 6px;
+      white-space: nowrap; z-index: 5; pointer-events: none; }
+    .hra-col:hover .hra-tip, .hra-col:focus .hra-tip { display: block; }
+    .hra-chart-labels { display: flex; gap: 2px; margin-top: 4px; }
+    .hra-chart-labels span { flex: 1; text-align: center; font-size: 10px; color: var(--text-muted, #64748b); overflow: hidden; white-space: nowrap; }
+    .hra-badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11px; font-weight: 700; }
+    .hra-badge-voluntary { background: #fef3c7; color: #92400e; }
+    .hra-badge-involuntary { background: #fee2e2; color: #991b1b; }
+    .hra-badge-other { background: #e5e7eb; color: #374151; }
+  </style>
+</head>
+<body>
+<div id="vf-root"></div>
+
+<script>
+  var params = new URLSearchParams(window.location.search);
+  var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
+  var scriptUrl = window.scriptUrl || '/';
+  var PAGE_PARAMS = <?!= pageParams ?>;
+  var IS_SUPER_ADMIN = <?!= user && user.isSuperAdmin ? 'true' : 'false' ?>;
+  var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
+  var COMPANY_LOGO_URL = '<?!= getCompanyLogoUrl_('9940659bd83035d7') ?>';
+  var COMPANY_PAGES = <?!= companyPages ?>;
+  var CURRENT_ACTION = '<?!= currentAction ?>';
+
+  /* [live-notice D6] list replies from the device cache, trusted by the stamps */
+  if (window.UIC && UIC.Live && UIC.Live.viewCache) companyCall = UIC.Live.viewCache(companyCall, { company: '9940659bd83035d7', page: 'vf_hr_analysis', view: 'report', lists: ['get_valley_hr_turnover', 'get_valley_hr_metrics'] });
+  function companyCall(moduleAction, data) {
+    return API.call('company_action', {
+      target_system: '9940659bd83035d7',
+      module_action: moduleAction,
+      data: data || {}
+    }, SESSION_TOKEN);
+  }
+  function esc(v) { return FMT.escape(v); }
+  function pct(v, digits) {
+    var d = digits == null ? 2 : digits;
+    return Number(v || 0).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }) + '%';
+  }
+  function num(v, digits) {
+    return Number(v || 0).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: digits || 0 });
+  }
+</script>
+
+<script>
+(function () {
+  var YEAR = String((PAGE_PARAMS && PAGE_PARAMS.year) || '');
+  var EMP_TYPE = String((PAGE_PARAMS && PAGE_PARAMS.employee_type) || '');
+  var SECTION = String((PAGE_PARAMS && PAGE_PARAMS.section) || '');
+  var TITLE = String((PAGE_PARAMS && PAGE_PARAMS.title) || '');
+  var CATEGORY_LABEL = { voluntary: 'طوعي', involuntary: 'غير طوعي', other: 'أخرى' };
+  var MONTHS = ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو',
+    'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];
+  var MODAL_ID = 'hra-detail-modal';
+
+  /* ══ Sources and metric registry ═══════════════════════════════════════
+     A SOURCE is one server read (every source gets the same filters). A
+     METRIC is one card: which source it reads, which group it sits in, a
+     card() that returns { value, unit, sub, spark } and an optional detail()
+     for the popup. Adding a metric is adding an entry here. */
+  var SOURCES = {
+    turnover: 'get_valley_hr_turnover',
+    metrics: 'get_valley_hr_metrics'
+  };
+  var GROUPS = [
+    { id: 'workforce', label: 'القوى العاملة والاستبقاء' },
+    { id: 'time', label: 'الحضور والوقت' },
+    { id: 'cost', label: 'التكلفة والإنتاجية' },
+    { id: 'compliance', label: 'الامتثال' }
+  ];
+  var METRICS = [
+    { id: 'turnover', group: 'workforce', title: 'معدل دوران الموظفين', source: 'turnover', card: turnoverCard, detail: turnoverDetail, excel: turnoverExcel },
+    { id: 'headcount', group: 'workforce', title: 'عدد الموظفين', source: 'metrics', card: headcountCard, detail: headcountDetail },
+    { id: 'retention', group: 'workforce', title: 'معدل الاستبقاء', source: 'metrics', card: retentionCard, detail: retentionDetail },
+    { id: 'early', group: 'workforce', title: 'دوران المعيَّنين الجدد', source: 'metrics', card: earlyCard, detail: earlyDetail },
+    { id: 'tenure', group: 'workforce', title: 'متوسط مدة الخدمة', source: 'metrics', card: tenureCard, detail: tenureDetail },
+    { id: 'diversity', group: 'workforce', title: 'تركيبة القوى العاملة', source: 'metrics', card: diversityCard, detail: diversityDetail },
+    { id: 'age', group: 'workforce', title: 'متوسط العمر', source: 'metrics', card: ageCard, detail: ageDetail },
+    { id: 'absence', group: 'time', title: 'نسبة الغياب', source: 'metrics', card: absenceCard, detail: absenceDetail },
+    { id: 'lateness', group: 'time', title: 'التأخير', source: 'metrics', card: latenessCard, detail: latenessDetail },
+    { id: 'overtime', group: 'time', title: 'العمل الإضافي', source: 'metrics', card: overtimeCard, detail: overtimeDetail },
+    { id: 'leave', group: 'time', title: 'استخدام الإجازات', source: 'metrics', card: leaveCard, detail: leaveDetail },
+    { id: 'penalties', group: 'time', title: 'الجزاءات', source: 'metrics', card: penaltiesCard, detail: penaltiesDetail },
+    { id: 'payroll', group: 'cost', title: 'تكلفة الموظف الشهرية', source: 'metrics', card: payrollCard, detail: payrollDetail },
+    { id: 'revenue', group: 'cost', title: 'الإيراد لكل موظف', source: 'metrics', card: revenueCard, detail: revenueDetail },
+    { id: 'contracts', group: 'compliance', title: 'العقود المنتهية قريباً', source: 'metrics', card: contractsCard, detail: contractsDetail }
+  ];
+  var RESULTS = {};   /* source id -> last reply */
+  var ERRORS = {};    /* source id -> error message */
+  var OPEN = null;    /* { id, tab } of the open details modal */
+
+  function filters() {
+    return { year: YEAR, employee_type: EMP_TYPE, section: SECTION, title: TITLE };
+  }
+  function metricById(id) { return METRICS.filter(function (m) { return m.id === id; })[0]; }
+  /* Filter options come from the first reply that carries them. */
+  function optionSource() {
+    var keys = Object.keys(SOURCES);
+    for (var i = 0; i < keys.length; i++) {
+      var r = RESULTS[keys[i]];
+      if (r && r.years) return r;
+    }
+    return null;
+  }
+
+  function renderApp() {
+    UIC.appShell('vf-root', {
+      companyLogoUrl: COMPANY_LOGO_URL,
+      companyLogoHref: scriptUrl + '?action=vf_dashboard&sessionToken=' + encodeURIComponent(SESSION_TOKEN),
+      companyLogoTitle: 'Valley Foods',
+      breadcrumb: 'Valley Foods / الموارد البشرية / تحليلات الموارد البشرية',
+      contentId: 'vf-hra-content',
+      menuGroups: (window.VALLEYFOODS_MENU || [])
+    });
+    document.getElementById('vf-hra-content').innerHTML =
+      '<div class="vf-card">' +
+        '<div class="vf-card-header"><h3>تحليلات الموارد البشرية</h3></div>' +
+        '<div class="vf-card-body">' +
+          '<div id="hra-filter"></div>' +
+          '<div id="hra-body"></div>' +
+        '</div>' +
+      '</div>';
+    renderFilter();
+    load();
+  }
+
+  /* ── filters ─────────────────────────────────────────────────────────── */
+  function renderFilter() {
+    var host = document.getElementById('hra-filter');
+    if (!host) return;
+    var src = optionSource() || {};
+    var years = src.years || [YEAR ? Number(YEAR) : new Date().getFullYear()];
+    var selectedYear = String(YEAR || src.year || years[0]);
+    var titles = [];
+    (src.title_options || []).forEach(function (o) {
+      if ((!SECTION || o.section === SECTION) && titles.indexOf(o.title) === -1) titles.push(o.title);
+    });
+    function opt(v, selected) {
+      return '<option value="' + esc(v) + '"' + (String(v) === String(selected) ? ' selected' : '') + '>' + esc(v) + '</option>';
+    }
+    function select(id, label, handler, allLabel, values, selected) {
+      return '<div class="form-field">' +
+        '<label class="form-label" for="' + id + '">' + label + '</label>' +
+        '<select id="' + id + '" class="input" onchange="HR_ANALYSIS.' + handler + '(this.value)">' +
+          (allLabel ? '<option value="">' + allLabel + '</option>' : '') +
+          values.map(function (v) { return opt(v, selected); }).join('') +
+        '</select></div>';
+    }
+    host.innerHTML = '<div class="hra-filters">' +
+      select('hra-year', 'السنة', 'setYear', '', years, selectedYear) +
+      select('hra-section', 'القسم', 'setSection', 'كل الأقسام', src.section_options || [], SECTION) +
+      select('hra-title', 'المسمى الوظيفي', 'setTitle', 'كل المسميات', titles, TITLE) +
+      select('hra-type', 'نوع الموظف', 'setType', 'كل الأنواع', src.employee_types || [], EMP_TYPE) +
+      ((EMP_TYPE || SECTION || TITLE)
+        ? '<button class="btn btn-outline" onclick="HR_ANALYSIS.clearFilters()">✕ مسح الفلاتر</button>' : '') +
+    '</div>';
+  }
+
+  function setYear(v) { YEAR = String(v || ''); load(); }
+  function setType(v) { EMP_TYPE = String(v || ''); load(); }
+  function setSection(v) {
+    SECTION = String(v || '');
+    /* a title outside the new department would silently empty every metric */
+    var src = optionSource() || {};
+    if (TITLE && SECTION && !(src.title_options || []).some(function (o) {
+      return o.section === SECTION && o.title === TITLE;
+    })) TITLE = '';
+    load();
+  }
+  function setTitle(v) { TITLE = String(v || ''); load(); }
+  function clearFilters() { EMP_TYPE = ''; SECTION = ''; TITLE = ''; load(); }
+
+  function filterLabel(r) {
+    var label = String((r && r.year) || YEAR || '');
+    var today = r && r.today;
+    var partial = r && ((r.totals && r.totals.months && r.totals.months < 12) || (r.period && r.period.months < 12));
+    if (partial && today) label += ' — حتى ' + today;
+    if (SECTION) label += ' — ' + SECTION;
+    if (TITLE) label += ' — ' + TITLE;
+    if (EMP_TYPE) label += ' — ' + EMP_TYPE;
+    return label;
+  }
+
+  /* ── loading ─────────────────────────────────────────────────────────── */
+  function load(quiet) {
+    if (!quiet) UIC.readSkeleton('hra-body', { message: ['جاري حساب المؤشرات...'] });
+    var f = filters();
+    return Promise.all(Object.keys(SOURCES).map(function (sid) {
+      return companyCall(SOURCES[sid], f).then(function (r) {
+        RESULTS[sid] = r || {};
+        delete ERRORS[sid];
+      }).catch(function (e) {
+        ERRORS[sid] = (e && e.message) || 'تعذر التحميل';
+      });
+    })).then(function () {
+      var src = optionSource();
+      if (src && src.year) YEAR = String(src.year);
+      renderFilter();
+      renderMetrics();
+      /* a refresh keeps an open details modal current; one closed by any
+         route (×, overlay, Escape) is no longer in the DOM and stays closed */
+      if (OPEN && document.getElementById(MODAL_ID)) openDetail(OPEN.id, OPEN.tab);
+      else OPEN = null;
+    }).finally(function () { if (!quiet) UI.hideSpinner(); });
+  }
+
+  function sparkHtml(values) {
+    if (!values) return '';
+    var max = 0;
+    values.forEach(function (v) { if (v != null) max = Math.max(max, Number(v) || 0); });
+    return '<div class="hra-spark" aria-hidden="true">' + values.map(function (v) {
+      if (v == null) return '<i class="is-empty"></i>';
+      var h = max ? Math.max(4, (Number(v) || 0) / max * 100) : 4;
+      return '<i style="height:' + h.toFixed(1) + '%"></i>';
+    }).join('') + '</div>';
+  }
+  /* 12 slots from a by_month list: null where the month has no data */
+  function monthSlots(rows, key) {
+    var out = [];
+    for (var m = 1; m <= 12; m++) {
+      var row = (rows || []).filter(function (x) { return x.month === m; })[0];
+      out.push(row ? Number(row[key]) || 0 : null);
+    }
+    return out;
+  }
+
+  function renderMetrics() {
+    var body = document.getElementById('hra-body');
+    if (!body) return;
+    var periodSrc = RESULTS.metrics || RESULTS.turnover;
+    var html = periodSrc ? '<div class="hra-period">الفترة: ' + esc(filterLabel(periodSrc)) + '</div>' : '';
+    GROUPS.forEach(function (g) {
+      var cards = METRICS.filter(function (m) { return m.group === g.id; }).map(function (m) {
+        var r = RESULTS[m.source];
+        var err = ERRORS[m.source];
+        var c = null;
+        if (!err && r) { try { c = m.card(r); } catch (e) { err = 'تعذر عرض المؤشر'; } }
+        var inner = '<div class="hra-metric-title">' + esc(m.title) + '</div>';
+        if (err || !c) {
+          inner += '<div class="hra-metric-error">' + esc(err || 'لا توجد بيانات') + '</div>';
+        } else {
+          inner += '<div class="hra-metric-value">' + esc(c.value) +
+              (c.unit ? '<span class="hra-metric-unit">' + esc(c.unit) + '</span>' : '') + '</div>' +
+            (c.sub ? '<div class="hra-metric-sub">' + esc(c.sub) + '</div>' : '') +
+            sparkHtml(c.spark) +
+            (m.detail ? '<div class="hra-metric-foot"><span>' + esc(c.tag || '') + '</span><span class="hra-metric-link">التفاصيل ←</span></div>' : '');
+        }
+        var clickable = !err && c && m.detail;
+        return '<button type="button" class="hra-metric" data-metric="' + esc(m.id) + '"' +
+          (clickable ? ' onclick="HR_ANALYSIS.openDetail(\'' + m.id + '\')"' : ' disabled') + '>' + inner + '</button>';
+      }).join('');
+      html += '<h4 class="hra-group">' + esc(g.label) + '</h4><div class="hra-metrics">' + cards + '</div>';
+    });
+    body.innerHTML = html;
+  }
+
+  /* ── details modal (shared) ──────────────────────────────────────────── */
+  function openDetail(id, tab) {
+    var m = metricById(id);
+    if (!m || !m.detail || !RESULTS[m.source]) return;
+    var d = m.detail(RESULTS[m.source]);
+    var active = tab && d.tabs.some(function (t) { return t.id === tab; }) ? tab : d.tabs[0].id;
+    OPEN = { id: id, tab: active };
+    var tabs = d.tabs.length > 1 ? '<div class="hra-tabs" role="tablist">' + d.tabs.map(function (t) {
+      return '<button type="button" role="tab" class="hra-tab' + (t.id === active ? ' is-active' : '') +
+        '" data-tab="' + t.id + '" onclick="HR_ANALYSIS.tab(\'' + t.id + '\')">' + esc(t.label) + '</button>';
+    }).join('') + '</div>' : '';
+    var panels = d.tabs.map(function (t) {
+      return '<div class="hra-panel' + (t.id === active ? ' is-active' : '') + '" data-panel="' + t.id + '">' + t.html + '</div>';
+    }).join('');
+    UIC.openModal(MODAL_ID, {
+      title: esc(d.title),
+      size: 'xl',
+      body: tabs + panels + (d.note ? (d.note.indexOf('<p') === 0 ? d.note : '<p class="hra-note">' + d.note + '</p>') : ''),
+      footer: (m.excel ? '<button class="btn btn-outline" onclick="HR_ANALYSIS.exportExcel(\'' + id + '\')">⬇ تحميل Excel</button> ' : '') +
+        '<button class="btn" onclick="HR_ANALYSIS.closeDetail()">إغلاق</button>'
+    });
+    (d.sortable || []).forEach(function (tid) { try { UIC.initTableSort(tid); } catch (e) {} });
+  }
+  function closeDetail() { OPEN = null; UIC.closeModal(MODAL_ID); }
+  function tab(id) {
+    var modal = document.getElementById(MODAL_ID);
+    if (!modal) return;
+    if (OPEN) OPEN.tab = id;
+    Array.prototype.forEach.call(modal.querySelectorAll('[data-tab]'), function (b) {
+      b.classList.toggle('is-active', b.getAttribute('data-tab') === id);
+    });
+    Array.prototype.forEach.call(modal.querySelectorAll('[data-panel]'), function (p) {
+      p.classList.toggle('is-active', p.getAttribute('data-panel') === id);
+    });
+  }
+  function exportExcel(id) {
+    var m = metricById(id);
+    if (!m || !m.excel || !RESULTS[m.source]) { UIC.toast('لا توجد بيانات للتصدير', 'error'); return; }
+    UIC.toast('جاري إعداد ملف Excel...', 'info');
+    API.ensureXlsx().then(function () { m.excel(RESULTS[m.source]); }).catch(function (e) {
+      UIC.toast((e && e.message) || 'تعذر إنشاء ملف Excel', 'error');
+    });
+  }
+
+  /* ── shared detail helpers ───────────────────────────────────────────── */
+  function money(v) { return num(v, 0); }
+  function kpis(list) {
+    return '<div class="hra-kpis">' + list.map(function (k) { return kpi(k[0], k[1], k[2]); }).join('') + '</div>';
+  }
+  /* cols: [key, label, kind] — kind: 'num' | 'pct' | 'money' | 'text' (default) */
+  function table(id, cols, rows, emptyText) {
+    return UIC.dataTable(id, {
+      headers: cols.map(function (c) {
+        var h = { key: c[0], label: c[1], sortable: true };
+        if (c[2] && c[2] !== 'text') { h.numeric = true; h.sortKey = c[0] + '__n'; }
+        return h;
+      }),
+      rows: (rows || []).map(function (r) {
+        var out = {};
+        cols.forEach(function (c) {
+          var v = r[c[0]];
+          out[c[0] + '__n'] = Number(v) || 0;
+          out[c[0]] = (v == null || v === '') ? '-' : c[2] === 'pct' ? pct(v) : c[2] === 'money' ? money(v) : c[2] === 'num' ? num(v, 2)
+            : esc(v == null || v === '' ? '-' : v);
+        });
+        return out;
+      }),
+      emptyText: emptyText || 'لا توجد بيانات',
+      searchable: (rows || []).length > 15,
+      autoPage: false
+    });
+  }
+  function noPayroll(r) { return !(r.payroll && r.payroll.totals && r.payroll.totals.employee_months); }
+  var NO_PAYROLL = { value: '—', sub: 'لا توجد رواتب شهرية مسجلة للفترة' };
+  var PAY_NOTE = 'محسوبة من الرواتب الشهرية المسجلة فقط (valley_emp_salaries) — كل صف راتب = موظف/شهر.';
+  var SECTION_NOTE = 'القسم والمسمى من بيانات الموظف الحالية.';
+
+  /* ══ Metric: turnover (SHRM) ═══════════════════════════════════════════ */
+  function turnoverCard(r) {
+    var t = r.totals || {};
+    var partial = t.months && t.months < 12;
+    return {
+      value: pct(t.rate, 1),
+      sub: 'غادر ' + num(t.separations) + ' من متوسط ' + num(t.avg_headcount, 1) + ' موظف' +
+        (partial ? ' — المتوقع سنوياً ' + pct(t.annualized_rate, 1) : ''),
+      spark: monthSlots(r.months, 'rate'),
+      tag: 'SHRM'
+    };
+  }
+
+  function kpi(label, value, sub) {
+    return '<div class="hra-kpi"><div class="hra-kpi-label">' + esc(label) + '</div>' +
+      '<div class="hra-kpi-value">' + esc(value) + '</div>' +
+      (sub ? '<div class="hra-kpi-sub">' + esc(sub) + '</div>' : '') + '</div>';
+  }
+  function badge(category) {
+    return '<span class="hra-badge hra-badge-' + esc(category) + '">' + esc(CATEGORY_LABEL[category] || category) + '</span>';
+  }
+  function tenureText(days) {
+    if (days < 31) return days + ' يوم';
+    var months = Math.floor(days / 30.4375);
+    if (months < 12) return months + ' شهر';
+    var years = Math.floor(months / 12);
+    var rest = months % 12;
+    return years + ' سنة' + (rest ? ' و ' + rest + ' شهر' : '');
+  }
+
+  function chartHtml(months) {
+    var max = 0;
+    months.forEach(function (m) { max = Math.max(max, Number(m.rate) || 0); });
+    /* a round axis top: 1, 2, 5 × 10ⁿ above the largest month */
+    var top = 1;
+    if (max > 0) {
+      var p = Math.pow(10, Math.floor(Math.log(max) / Math.LN10));
+      top = [1, 2, 5, 10].map(function (k) { return k * p; }).filter(function (v) { return v >= max; })[0];
+    }
+    var grid = [0.5, 1].map(function (f) {
+      return '<div style="bottom:' + (f * 100) + '%"><span>' + esc(num(top * f, 2)) + '%</span></div>';
+    }).join('');
+    var cols = '', labels = '';
+    for (var m = 1; m <= 12; m++) {
+      var row = months.filter(function (x) { return x.month === m; })[0];
+      if (!row) {
+        cols += '<div class="hra-col"></div>';
+      } else {
+        var h = Math.max(0, (Number(row.rate) || 0) / top * 100);
+        cols += '<div class="hra-col' + (row.partial ? ' is-partial' : '') + '" tabindex="0" aria-label="' +
+          esc(row.month_name + ': ' + pct(row.rate)) + '">' +
+          '<div class="hra-bar" style="height:' + h.toFixed(2) + '%"></div>' +
+          '<div class="hra-tip"><b>' + esc(row.month_name) + (row.partial ? ' (حتى تاريخه)' : '') + '</b><br>' +
+            'معدل الدوران: ' + esc(pct(row.rate)) + '<br>' +
+            'انتهاء الخدمة: ' + esc(num(row.separations)) + ' — متوسط العدد: ' + esc(num(row.avg_headcount, 1)) +
+          '</div></div>';
+      }
+      labels += '<span>' + esc(MONTHS[m - 1]) + '</span>';
+    }
+    return '<div class="hra-chart"><div class="hra-chart-title">معدل الدوران الشهري %</div>' +
+      '<div class="hra-chart-plot"><div class="hra-chart-grid">' + grid + '</div>' + cols + '</div>' +
+      '<div class="hra-chart-labels">' + labels + '</div></div>';
+  }
+
+  function breakdownTable(id, dimLabel, dimKey, rows) {
+    return UIC.dataTable(id, {
+      headers: [
+        { key: dimKey, label: dimLabel, sortable: true },
+        { key: 'avg_headcount', label: 'متوسط العدد', numeric: true, sortable: true },
+        { key: 'hires', label: 'التعيينات', numeric: true, sortable: true },
+        { key: 'separations', label: 'انتهاء الخدمة', numeric: true, sortable: true },
+        { key: 'voluntary', label: 'طوعي', numeric: true, sortable: true },
+        { key: 'rate', label: 'معدل الدوران', numeric: true, sortable: true, sortKey: 'rate_num' }
+      ],
+      rows: (rows || []).map(function (s) {
+        var out = { avg_headcount: num(s.avg_headcount, 1), hires: s.hires, separations: s.separations,
+          voluntary: s.voluntary, rate: pct(s.rate), rate_num: s.rate };
+        out[dimKey] = esc(s[dimKey]);
+        return out;
+      }),
+      emptyText: 'لا توجد بيانات',
+      searchable: false,
+      autoPage: false
+    });
+  }
+
+  function turnoverDetail(r) {
+    var t = r.totals || {};
+    var months = r.months || [];
+    var dq = r.data_quality || {};
+    var partial = t.months && t.months < 12;
+
+    var summary = '<div class="hra-kpis">' +
+      kpi(partial ? 'حتى تاريخه' : 'المعدل السنوي', pct(t.rate), partial ? 'المتوقع سنوياً ' + pct(t.annualized_rate) : '') +
+      kpi('طوعي', pct(t.voluntary_rate), num(t.voluntary) + ' حالة') +
+      kpi('غير طوعي', pct(t.involuntary_rate), num(t.involuntary) + ' حالة') +
+      kpi('أخرى', pct(t.other_rate), num(t.other) + ' (تقاعد / وفاة / عجز)') +
+      kpi('انتهاء الخدمة / التعيينات', num(t.separations) + ' / ' + num(t.hires)) +
+      kpi('متوسط عدد الموظفين', num(t.avg_headcount, 1), 'من ' + num(t.begin) + ' إلى ' + num(t.end)) +
+    '</div>' + (months.length ? chartHtml(months) : UIC.emptyState({ title: 'لا توجد أشهر منقضية في السنة المختارة' }));
+
+    var monthRows = months.map(function (m) {
+      return {
+        month_name: esc(m.month_name) + (m.partial ? ' <small class="vf-text-muted">(حتى تاريخه)</small>' : ''),
+        begin: m.begin, end: m.end, avg_headcount: num(m.avg_headcount, 1),
+        hires: m.hires, separations: m.separations,
+        voluntary: m.voluntary, involuntary: m.involuntary, other: m.other, rate: pct(m.rate)
+      };
+    });
+    if (monthRows.length) monthRows.push({
+      month_name: '<b>الإجمالي</b>', begin: '<b>' + num(t.begin) + '</b>', end: '<b>' + num(t.end) + '</b>',
+      avg_headcount: '<b>' + num(t.avg_headcount, 1) + '</b>', hires: '<b>' + num(t.hires) + '</b>',
+      separations: '<b>' + num(t.separations) + '</b>', voluntary: '<b>' + num(t.voluntary) + '</b>',
+      involuntary: '<b>' + num(t.involuntary) + '</b>', other: '<b>' + num(t.other) + '</b>', rate: '<b>' + pct(t.rate) + '</b>'
+    });
+    var monthly = UIC.dataTable('hra-months-tbl', {
+      headers: [
+        { key: 'month_name', label: 'الشهر' },
+        { key: 'begin', label: 'أول الشهر', numeric: true },
+        { key: 'end', label: 'آخر الشهر', numeric: true },
+        { key: 'avg_headcount', label: 'المتوسط', numeric: true },
+        { key: 'hires', label: 'تعيينات', numeric: true },
+        { key: 'separations', label: 'انتهاء خدمة', numeric: true },
+        { key: 'voluntary', label: 'طوعي', numeric: true },
+        { key: 'involuntary', label: 'غير طوعي', numeric: true },
+        { key: 'other', label: 'أخرى', numeric: true },
+        { key: 'rate', label: 'المعدل', numeric: true }
+      ],
+      rows: monthRows, emptyText: 'لا توجد بيانات', searchable: false, autoPage: false
+    });
+
+    var reasons = UIC.dataTable('hra-types-tbl', {
+      headers: [
+        { key: 'status_type', label: 'الحالة' },
+        { key: 'category', label: 'التصنيف' },
+        { key: 'count', label: 'العدد', numeric: true },
+        { key: 'share', label: 'النسبة', numeric: true }
+      ],
+      rows: (r.separation_types || []).map(function (x) {
+        return { status_type: esc(x.status_type), category: badge(x.category), count: x.count, share: pct(x.share) };
+      }),
+      emptyText: 'لا توجد حالات انتهاء خدمة في الفترة', searchable: false, autoPage: false
+    });
+
+    var people = UIC.dataTable('hra-separations-tbl', {
+      headers: [
+        { key: 'status_date', label: 'التاريخ', sortable: true },
+        { key: 'name_ar', label: 'الاسم', sortable: true },
+        { key: 'section', label: 'القسم', sortable: true },
+        { key: 'title', label: 'المسمى', sortable: true },
+        { key: 'status_type', label: 'الحالة', sortable: true },
+        { key: 'category', label: 'التصنيف', sortable: true },
+        { key: 'tenure', label: 'مدة الخدمة', sortable: true, sortKey: 'tenure_days' }
+      ],
+      rows: (r.separations || []).map(function (s) {
+        return {
+          status_date: esc(s.status_date), name_ar: esc((s.name_ar || '-') + ' (' + s.emp_id + ')'),
+          section: esc(s.section), title: esc(s.title || '-'), status_type: esc(s.status_type),
+          category: badge(s.category),
+          tenure: s.tenure_days == null ? '-' : esc(tenureText(s.tenure_days)),
+          tenure_days: s.tenure_days == null ? -1 : s.tenure_days
+        };
+      }),
+      emptyText: 'لا توجد حالات انتهاء خدمة في الفترة', autoPage: false
+    });
+
+    var warnings = [];
+    if (dq.no_status_count) warnings.push(num(dq.no_status_count) + ' موظف بلا حالة مسجلة — غير محتسب.');
+    if (dq.implicit_start_count) warnings.push(num(dq.implicit_start_count) + ' موظف بدون «يعمل بالشركة» قبل انتهاء خدمته — اعتُبر يعمل من تاريخ التعيين.');
+    if (dq.invalid_date_count) warnings.push(num(dq.invalid_date_count) + ' سجل حالة بتاريخ غير صالح — مستبعد.');
+
+    return {
+      title: 'معدل دوران الموظفين — ' + filterLabel(r),
+      tabs: [
+        { id: 'summary', label: 'ملخص', html: summary },
+        { id: 'monthly', label: 'شهري', html: monthly },
+        { id: 'reasons', label: 'الأسباب', html: reasons },
+        { id: 'sections', label: 'الأقسام', html: breakdownTable('hra-sections-tbl', 'القسم', 'section', r.sections) },
+        { id: 'titles', label: 'المسميات', html: breakdownTable('hra-titles-tbl', 'المسمى الوظيفي', 'title', r.titles) },
+        { id: 'people', label: 'المغادرون (' + num((r.separations || []).length) + ')', html: people }
+      ],
+      sortable: ['hra-sections-tbl', 'hra-titles-tbl', 'hra-separations-tbl'],
+      note: '<p class="hra-note">SHRM: المعدل الشهري = حالات انتهاء الخدمة ÷ متوسط عدد الموظفين (أول الشهر + آخره ÷ 2) × 100، ' +
+        'والمعدل السنوي = مجموع المعدلات الشهرية. تاريخ أي حالة غير «يعمل بالشركة» هو آخر يوم عمل.</p>' +
+        (warnings.length ? '<p class="hra-note hra-warn">' + warnings.map(esc).join('<br>') + '</p>' : '')
+    };
+  }
+
+  function turnoverExcel(r) {
+    var t = r.totals || {};
+    var aoa = [
+      ['معدل دوران الموظفين (SHRM)'],
+      [filterLabel(r)],
+      [],
+      ['الشهر', 'العدد أول الشهر', 'العدد آخر الشهر', 'متوسط العدد', 'التعيينات', 'انتهاء الخدمة',
+        'طوعي', 'غير طوعي', 'أخرى', 'معدل الدوران %']
+    ];
+    (r.months || []).forEach(function (m) {
+      aoa.push([m.month_name + (m.partial ? ' (حتى تاريخه)' : ''), m.begin, m.end, m.avg_headcount, m.hires,
+        m.separations, m.voluntary, m.involuntary, m.other, m.rate]);
+    });
+    aoa.push(['الإجمالي', t.begin, t.end, t.avg_headcount, t.hires, t.separations, t.voluntary, t.involuntary, t.other, t.rate]);
+    aoa.push([]);
+    aoa.push(['معدل الدوران الطوعي %', t.voluntary_rate]);
+    aoa.push(['معدل الدوران غير الطوعي %', t.involuntary_rate]);
+    aoa.push(['أسباب أخرى %', t.other_rate]);
+    if (t.months && t.months < 12) aoa.push(['المعدل السنوي المتوقع %', t.annualized_rate]);
+    var ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws['!cols'] = [{ wch: 26 }, { wch: 14 }, { wch: 14 }, { wch: 12 }, { wch: 11 }, { wch: 13 },
+      { wch: 9 }, { wch: 11 }, { wch: 9 }, { wch: 14 }];
+
+    function groupSheet(label, key, rows) {
+      var a = [[label, 'متوسط العدد', 'التعيينات', 'انتهاء الخدمة', 'طوعي', 'غير طوعي', 'أخرى', 'معدل الدوران %']];
+      (rows || []).forEach(function (s) {
+        a.push([s[key], s.avg_headcount, s.hires, s.separations, s.voluntary, s.involuntary, s.other, s.rate]);
+      });
+      var sheet = XLSX.utils.aoa_to_sheet(a);
+      sheet['!cols'] = [{ wch: 26 }, { wch: 12 }, { wch: 11 }, { wch: 13 }, { wch: 9 }, { wch: 11 }, { wch: 9 }, { wch: 14 }];
+      return sheet;
+    }
+
+    var sepAoa = [['تاريخ انتهاء الخدمة', 'الكود', 'الاسم', 'القسم', 'المسمى الوظيفي', 'نوع الموظف',
+      'الحالة', 'التصنيف', 'تاريخ بداية الخدمة', 'مدة الخدمة (يوم)']];
+    (r.separations || []).forEach(function (s) {
+      sepAoa.push([s.status_date, s.emp_id, s.name_ar, s.section, s.title, s.employee_type, s.status_type,
+        CATEGORY_LABEL[s.category] || s.category, s.start_date, s.tenure_days == null ? '' : s.tenure_days]);
+    });
+    var wsSep = XLSX.utils.aoa_to_sheet(sepAoa);
+    wsSep['!cols'] = [{ wch: 16 }, { wch: 9 }, { wch: 28 }, { wch: 20 }, { wch: 20 }, { wch: 16 },
+      { wch: 18 }, { wch: 11 }, { wch: 16 }, { wch: 14 }];
+
+    var wb = XLSX.utils.book_new();
+    wb.Workbook = { Views: [{ RTL: true }] };
+    XLSX.utils.book_append_sheet(wb, ws, 'معدل الدوران');
+    XLSX.utils.book_append_sheet(wb, groupSheet('القسم', 'section', r.sections), 'حسب القسم');
+    XLSX.utils.book_append_sheet(wb, groupSheet('المسمى الوظيفي', 'title', r.titles), 'حسب المسمى');
+    XLSX.utils.book_append_sheet(wb, wsSep, 'المنتهية خدمتهم');
+    XLSX.writeFile(wb, 'معدل دوران الموظفين ' + r.year + '.xlsx');
+  }
+
+
+  /* ══ Workforce ══════════════════════════════════════════════════════════ */
+  function headcountCard(r) {
+    var w = r.workforce;
+    var sign = w.net_change > 0 ? '+' : '';
+    return { value: num(w.headcount_end), unit: 'موظف',
+      sub: 'بداية الفترة ' + num(w.headcount_start) + ' — صافي التغير ' + sign + num(w.net_change) + ' (' + sign + pct(w.growth, 1) + ')' };
+  }
+  function headcountDetail(r) {
+    var w = r.workforce;
+    return {
+      title: 'عدد الموظفين — ' + filterLabel(r),
+      tabs: [{ id: 'summary', label: 'ملخص', html:
+        kpis([
+          ['بداية الفترة', num(w.headcount_start)], ['نهاية الفترة', num(w.headcount_end)],
+          ['نسبة النمو', pct(w.growth)], ['متوسط العدد', num(w.avg_headcount, 1)],
+          ['التعيينات', num(w.hires)], ['انتهاء الخدمة', num(w.separations)]
+        ]) +
+        table('hra-hc-sections', [['label', 'القسم'], ['count', 'العدد', 'num'], ['share', 'النسبة', 'pct']], r.mix.section)
+      }],
+      sortable: ['hra-hc-sections'],
+      note: 'العدد = الموظفون بحالة «يعمل بالشركة» في بداية ونهاية الفترة. التوزيع على الأقسام لنهاية الفترة. ' + SECTION_NOTE
+    };
+  }
+
+  function retentionCard(r) {
+    var x = r.retention;
+    return { value: pct(x.rate, 1), sub: 'استمر ' + num(x.retained) + ' من ' + num(x.start) + ' موظف كانوا في بداية الفترة' };
+  }
+  function retentionDetail(r) {
+    var x = r.retention;
+    return {
+      title: 'معدل الاستبقاء — ' + filterLabel(r),
+      tabs: [
+        { id: 'summary', label: 'ملخص', html: kpis([
+          ['معدل الاستبقاء', pct(x.rate)], ['في بداية الفترة', num(x.start)],
+          ['استمروا', num(x.retained)], ['غادروا', num(x.left.length)]
+        ]) },
+        { id: 'left', label: 'من غادر (' + num(x.left.length) + ')', html: table('hra-ret-left', [
+          ['status_date', 'التاريخ'], ['name_ar', 'الاسم'], ['section', 'القسم'], ['title', 'المسمى'], ['status_type', 'الحالة']
+        ], x.left, 'لم يغادر أحد ممن كانوا في بداية الفترة') }
+      ],
+      sortable: ['hra-ret-left'],
+      note: 'SHRM: معدل الاستبقاء = الموظفون الموجودون في بداية الفترة واستمروا حتى نهايتها ÷ عددهم في البداية × 100. ' +
+        'من غادر ثم عاد خلال الفترة لا يُحتسب مستمراً.'
+    };
+  }
+
+  function earlyCard(r) {
+    var e = r.early_turnover;
+    if (!e.d90.cohort) return { value: '—', sub: e.hires ? 'لم يمضِ 90 يوماً على تعيينات الفترة بعد' : 'لا توجد تعيينات في الفترة' };
+    return { value: pct(e.d90.rate, 1), sub: 'غادر ' + num(e.d90.left) + ' من ' + num(e.d90.cohort) + ' معيَّن خلال أول 90 يوماً' +
+      (e.d365.cohort ? ' — خلال سنة: ' + pct(e.d365.rate, 1) : '') };
+  }
+  function earlyDetail(r) {
+    var e = r.early_turnover;
+    return {
+      title: 'دوران المعيَّنين الجدد — ' + filterLabel(r),
+      tabs: [
+        { id: 'summary', label: 'ملخص', html: kpis([
+          ['خلال 90 يوماً', pct(e.d90.rate), num(e.d90.left) + ' من ' + num(e.d90.cohort)],
+          ['خلال سنة', pct(e.d365.rate), num(e.d365.left) + ' من ' + num(e.d365.cohort)],
+          ['تعيينات الفترة', num(e.hires)],
+          ['لم تكتمل 90 يوماً', num(e.d90.pending)]
+        ]) },
+        { id: 'list', label: 'غادروا خلال سنة (' + num(e.list.length) + ')', html: table('hra-early-list', [
+          ['name_ar', 'الاسم'], ['section', 'القسم'], ['title', 'المسمى'], ['hire_date', 'تاريخ التعيين'],
+          ['status_date', 'تاريخ المغادرة'], ['days', 'مدة الخدمة (يوم)', 'num'], ['status_type', 'الحالة']
+        ], e.list, 'لا يوجد') }
+      ],
+      sortable: ['hra-early-list'],
+      note: 'نسبة من عُيِّنوا خلال الفترة ثم غادروا خلال أول 90 يوماً (وخلال أول سنة). ' +
+        'يُحتسب فقط من مضى على تعيينه 90 يوماً (أو سنة) أو غادر قبلها، حتى لا تنخفض النسبة بالتعيينات الحديثة.'
+    };
+  }
+
+  function tenureCard(r) {
+    var t = r.tenure;
+    if (!t.count) return { value: '—', sub: 'لا يوجد موظفون بتاريخ بداية معروف' };
+    return { value: num(t.avg_years, 1), unit: 'سنة', sub: 'لـ ' + num(t.count) + ' موظف على رأس العمل' };
+  }
+  function tenureDetail(r) {
+    var t = r.tenure;
+    return {
+      title: 'مدة الخدمة — ' + filterLabel(r),
+      tabs: [
+        { id: 'bands', label: 'الشرائح', html: kpis([['متوسط مدة الخدمة', num(t.avg_years, 2) + ' سنة'], ['عدد الموظفين', num(t.count)]]) +
+          table('hra-ten-bands', [['label', 'مدة الخدمة'], ['count', 'العدد', 'num'], ['share', 'النسبة', 'pct']], t.bands) },
+        { id: 'sections', label: 'الأقسام', html: table('hra-ten-sec', [['label', 'القسم'], ['count', 'العدد', 'num'], ['avg_years', 'متوسط المدة (سنة)', 'num']], t.by_section) }
+      ],
+      sortable: ['hra-ten-sec'],
+      note: 'مدة الخدمة من بداية آخر فترة عمل متصلة («يعمل بالشركة») حتى نهاية الفترة، للموظفين على رأس العمل.' +
+        (t.unknown ? ' ' + num(t.unknown) + ' موظف بلا تاريخ بداية معروف — غير محتسب.' : '')
+    };
+  }
+
+  function diversityCard(r) {
+    var x = r.mix;
+    var women = (x.gender || []).filter(function (g) { return g.label === 'انثى'; })[0];
+    return { value: pct(women ? women.share : 0, 1), unit: 'إناث',
+      sub: num(x.total) + ' موظف — مؤمَّن عليهم ' + pct(x.insured_rate, 1) };
+  }
+  function diversityDetail(r) {
+    var x = r.mix;
+    var cols = [['label', 'البند'], ['count', 'العدد', 'num'], ['share', 'النسبة', 'pct']];
+    return {
+      title: 'تركيبة القوى العاملة — ' + filterLabel(r),
+      tabs: [
+        { id: 'gender', label: 'النوع', html: table('hra-mix-g', cols, x.gender) },
+        { id: 'type', label: 'نوع الموظف', html: table('hra-mix-t', cols, x.employee_type) },
+        { id: 'category', label: 'الفئة', html: table('hra-mix-c', cols, x.category) },
+        { id: 'section', label: 'القسم', html: table('hra-mix-s', cols, x.section) },
+        { id: 'insurance', label: 'التأمين', html: kpis([
+          ['مؤمَّن عليهم', num(x.insured), pct(x.insured_rate)],
+          ['غير مؤمَّن عليهم', num(x.total - x.insured), pct(x.total ? 100 - x.insured_rate : 0)]
+        ]) }
+      ],
+      note: 'للموظفين على رأس العمل في نهاية الفترة. ' + SECTION_NOTE
+    };
+  }
+
+  function ageCard(r) {
+    var a = r.age;
+    if (!a.count) return { value: '—', sub: 'لا توجد أرقام قومية صالحة' };
+    return { value: num(a.avg, 1), unit: 'سنة', sub: 'قرب سن التقاعد (' + a.near_retirement_age + '+): ' + num(a.near_retirement.length) };
+  }
+  function ageDetail(r) {
+    var a = r.age;
+    return {
+      title: 'الفئات العمرية — ' + filterLabel(r),
+      tabs: [
+        { id: 'bands', label: 'الفئات', html: kpis([['متوسط العمر', num(a.avg, 1) + ' سنة'], ['عدد الموظفين', num(a.count)]]) +
+          table('hra-age-bands', [['label', 'الفئة العمرية'], ['count', 'العدد', 'num'], ['share', 'النسبة', 'pct']], a.bands) },
+        { id: 'retire', label: 'قرب التقاعد (' + num(a.near_retirement.length) + ')', html: table('hra-age-ret', [
+          ['name_ar', 'الاسم'], ['section', 'القسم'], ['title', 'المسمى'], ['age', 'العمر', 'num'],
+          ['birth_date', 'تاريخ الميلاد'], ['retirement_date', 'بلوغ سن 60']
+        ], a.near_retirement, 'لا يوجد') }
+      ],
+      sortable: ['hra-age-ret'],
+      note: 'العمر من الرقم القومي (تاريخ الميلاد مُضمَّن فيه) في نهاية الفترة.' +
+        (a.unknown ? ' ' + num(a.unknown) + ' موظف برقم قومي غير صالح — غير محتسب.' : '')
+    };
+  }
+
+  /* ══ Attendance and time ════════════════════════════════════════════════ */
+  var PAY_MONTH_COLS = [['label', 'الشهر'], ['employee_months', 'موظف/شهر', 'num']];
+  var PAY_SECTION_COLS = [['label', 'القسم'], ['employee_months', 'موظف/شهر', 'num']];
+  function payTabs(r, prefix, cols) {
+    return [
+      { id: 'months', label: 'شهري', html: table('hra-' + prefix + '-m', PAY_MONTH_COLS.concat(cols), r.payroll.by_month) },
+      { id: 'sections', label: 'الأقسام', html: table('hra-' + prefix + '-s', PAY_SECTION_COLS.concat(cols), r.payroll.by_section) }
+    ];
+  }
+
+  function absenceCard(r) {
+    if (noPayroll(r)) return NO_PAYROLL;
+    var t = r.payroll.totals;
+    return { value: pct(t.absence_rate, 1), sub: num(t.absence_days, 1) + ' يوم غياب من ' + num(t.working_days) + ' يوم استحقاق',
+      spark: monthSlots(r.payroll.by_month, 'absence_rate') };
+  }
+  function absenceDetail(r) {
+    var t = r.payroll.totals;
+    var cols = [['absence_days', 'أيام الغياب', 'num'], ['working_days', 'أيام الاستحقاق', 'num'], ['absence_rate', 'نسبة الغياب', 'pct']];
+    return {
+      title: 'نسبة الغياب — ' + filterLabel(r),
+      tabs: [{ id: 'summary', label: 'ملخص', html: kpis([
+        ['نسبة الغياب', pct(t.absence_rate)], ['أيام الغياب', num(t.absence_days, 1)], ['أيام الاستحقاق', num(t.working_days)]
+      ]) }].concat(payTabs(r, 'abs', cols)),
+      sortable: ['hra-abs-s'],
+      note: 'SHRM: نسبة الغياب = أيام الغياب ÷ أيام العمل المتاحة × 100. أيام الغياب = عدد أيام خصومات «غياب» (قبل مضاعف الخصم)، ' +
+        'وأيام الاستحقاق = أيام العمل في الراتب الشهري (نظام 30 يوماً). ' + PAY_NOTE +
+        (r.absence.unpaid_absence_days ? ' ' + num(r.absence.unpaid_absence_days, 1) + ' يوم غياب في أشهر لم تُنشأ رواتبها بعد — غير محتسب.' : '')
+    };
+  }
+
+  function latenessCard(r) {
+    if (noPayroll(r)) return NO_PAYROLL;
+    var t = r.payroll.totals;
+    return { value: num(t.late_per_employee, 2), unit: 'حالة/موظف شهرياً', sub: num(t.late) + ' حالة تأخير',
+      spark: monthSlots(r.payroll.by_month, 'late_per_employee') };
+  }
+  function latenessDetail(r) {
+    var t = r.payroll.totals;
+    var cols = [['late', 'حالات التأخير', 'num'], ['late_per_employee', 'لكل موظف شهرياً', 'num']];
+    return {
+      title: 'التأخير — ' + filterLabel(r),
+      tabs: [{ id: 'summary', label: 'ملخص', html: kpis([
+        ['لكل موظف شهرياً', num(t.late_per_employee, 2)], ['حالات التأخير', num(t.late)], ['موظف/شهر', num(t.employee_months)]
+      ]) }].concat(payTabs(r, 'late', cols)),
+      sortable: ['hra-late-s'],
+      note: 'حالات التأخير = خصومات فئة «حضور وانصراف». ' + PAY_NOTE
+    };
+  }
+
+  function overtimeCard(r) {
+    if (noPayroll(r)) return NO_PAYROLL;
+    var t = r.payroll.totals;
+    return { value: pct(t.overtime_ratio, 1), unit: 'من ساعات العمل',
+      sub: 'قيمته ' + money(t.overtime_value) + ' — ' + pct(t.overtime_share, 1) + ' من إجمالي الأجور',
+      spark: monthSlots(r.payroll.by_month, 'overtime_ratio') };
+  }
+  function overtimeDetail(r) {
+    var t = r.payroll.totals;
+    var cols = [['overtime_hours', 'ساعات إضافية', 'num'], ['overtime_ratio', 'من ساعات العمل', 'pct'],
+      ['overtime_value', 'القيمة', 'money'], ['overtime_share', 'من الأجور', 'pct']];
+    return {
+      title: 'العمل الإضافي — ' + filterLabel(r),
+      tabs: [{ id: 'summary', label: 'ملخص', html: kpis([
+        ['من ساعات العمل', pct(t.overtime_ratio)], ['الساعات الإضافية', num(t.overtime_hours, 1)],
+        ['القيمة', money(t.overtime_value)], ['من إجمالي الأجور', pct(t.overtime_share)]
+      ]) }].concat(payTabs(r, 'ot', cols)),
+      sortable: ['hra-ot-s'],
+      note: 'نسبة العمل الإضافي = الساعات الإضافية المحتسبة ÷ (أيام العمل × ساعات اليوم) × 100، ونسبة التكلفة = قيمة الإضافي ÷ إجمالي الأجور. ' +
+        'الساعات الإضافية كما في الراتب (بعد معامل نوع الإضافي). ' + PAY_NOTE
+    };
+  }
+
+  function leaveCard(r) {
+    var l = r.leave;
+    if (!l.allocated) return { value: '—', sub: 'لا توجد تخصيصات إجازات في الفترة' };
+    return { value: pct(l.usage_rate, 1), sub: 'مستخدم ' + num(l.used, 1) + ' من ' + num(l.allocated, 1) + ' يوم مخصص — ' +
+      num(l.per_employee, 1) + ' يوم/موظف' };
+  }
+  function leaveDetail(r) {
+    var l = r.leave;
+    return {
+      title: 'استخدام الإجازات — ' + filterLabel(r),
+      tabs: [{ id: 'summary', label: 'ملخص', html: kpis([
+        ['نسبة الاستخدام', pct(l.usage_rate)], ['الأيام المخصصة', num(l.allocated, 1)], ['المستخدم', num(l.used, 1)],
+        ['أيام الإجازات في الفترة', num(l.taken, 1)], ['لكل موظف', num(l.per_employee, 1)]
+      ]) + table('hra-leave-types', [['label', 'نوع الإجازة'], ['allocated', 'المخصص', 'num'], ['used', 'المستخدم', 'num'],
+        ['usage_rate', 'نسبة الاستخدام', 'pct'], ['taken', 'أيام في الفترة', 'num']], l.by_type) }],
+      sortable: ['hra-leave-types'],
+      note: 'نسبة الاستخدام = أيام الإجازات المسجلة على تخصيصات تتقاطع مع الفترة ÷ أيام تلك التخصيصات. ' +
+        'أيام الإجازات في الفترة = كل الإجازات التي تبدأ داخل الفترة ÷ متوسط عدد الموظفين.'
+    };
+  }
+
+  function penaltiesCard(r) {
+    var p = r.penalties;
+    return { value: num(p.per_100, 1), unit: 'لكل 100 موظف', sub: num(p.incidents) + ' جزاء — ' + num(p.days, 1) + ' يوم' };
+  }
+  function penaltiesDetail(r) {
+    var p = r.penalties;
+    return {
+      title: 'الجزاءات — ' + filterLabel(r),
+      tabs: [{ id: 'summary', label: 'ملخص', html: kpis([
+        ['لكل 100 موظف', num(p.per_100, 1)], ['عدد الجزاءات', num(p.incidents)], ['أيام الجزاءات', num(p.days, 1)]
+      ]) + table('hra-pen-s', [['label', 'القسم'], ['count', 'عدد الجزاءات', 'num'], ['share', 'النسبة', 'pct']], p.by_section) }],
+      sortable: ['hra-pen-s'],
+      note: 'الجزاءات = خصومات فئة «جزاءات» داخل الفترة ÷ متوسط عدد الموظفين × 100.'
+    };
+  }
+
+  /* ══ Cost ══════════════════════════════════════════════════════════════ */
+  function payrollCard(r) {
+    if (noPayroll(r)) return NO_PAYROLL;
+    var t = r.payroll.totals;
+    return { value: money(t.per_employee), unit: 'ج.م', sub: 'صافي رواتب ' + money(t.net) + ' عن ' + num(t.months) + ' شهر',
+      spark: monthSlots(r.payroll.by_month, 'per_employee') };
+  }
+  function payrollDetail(r) {
+    var t = r.payroll.totals;
+    var cols = [['net', 'صافي الرواتب', 'money'], ['per_employee', 'متوسط للموظف', 'money']];
+    return {
+      title: 'تكلفة الرواتب — ' + filterLabel(r),
+      tabs: [{ id: 'summary', label: 'ملخص', html: kpis([
+        ['متوسط الموظف الشهري', money(t.per_employee)], ['صافي الرواتب', money(t.net)],
+        ['أشهر الرواتب', num(t.months)], ['موظف/شهر', num(t.employee_months)]
+      ]) }].concat(payTabs(r, 'pay', cols)),
+      sortable: ['hra-pay-s'],
+      note: 'متوسط تكلفة الموظف الشهرية = صافي الرواتب ÷ عدد صفوف الرواتب (موظف/شهر). ' + PAY_NOTE
+    };
+  }
+
+  function revenueCard(r) {
+    var v = r.revenue;
+    if (!v.available) return { value: '—', sub: 'على مستوى الشركة فقط — أزل فلاتر القسم/المسمى/النوع' };
+    return { value: money(v.per_employee), unit: 'ج.م', sub: 'نسبة الرواتب إلى الإيراد ' + pct(v.labor_cost_ratio, 1) };
+  }
+  function revenueDetail(r) {
+    var v = r.revenue;
+    return {
+      title: 'الإيراد لكل موظف — ' + filterLabel(r),
+      tabs: [{ id: 'summary', label: 'ملخص', html: v.available ? kpis([
+        ['الإيراد لكل موظف', money(v.per_employee)], ['صافي الإيراد', money(v.net)],
+        ['متوسط عدد الموظفين', num(r.workforce.avg_headcount, 1)],
+        ['نسبة الرواتب إلى الإيراد', pct(v.labor_cost_ratio), 'إيراد أشهر الرواتب ' + money(v.paid_months_revenue)]
+      ]) : UIC.emptyState({ title: 'هذا المؤشر على مستوى الشركة فقط' }) }],
+      note: 'SHRM: الإيراد لكل موظف = صافي المبيعات (بعد المرتجعات، كما في قائمة الدخل) ÷ متوسط عدد الموظفين. ' +
+        'نسبة الرواتب إلى الإيراد = صافي الرواتب ÷ إيراد نفس الأشهر التي لها رواتب مسجلة.'
+    };
+  }
+
+  /* ══ Compliance ════════════════════════════════════════════════════════ */
+  var CONTRACT_STATE = { expired: 'منتهي', d30: 'خلال 30 يوماً', d60: 'خلال 60 يوماً', d90: 'خلال 90 يوماً', none: 'بلا عقد' };
+  function contractsCard(r) {
+    var c = r.contracts;
+    return { value: num(c.d30), unit: 'خلال 30 يوماً',
+      sub: '60 يوماً: ' + num(c.d60) + ' — 90 يوماً: ' + num(c.d90) + ' — منتهية: ' + num(c.expired) + ' — بلا عقد: ' + num(c.none) };
+  }
+  function contractsDetail(r) {
+    var c = r.contracts;
+    var rows = c.list.map(function (x) {
+      return Object.assign({}, x, { state_label: CONTRACT_STATE[x.state] || x.state, days_left: x.days_left == null ? '' : x.days_left });
+    });
+    return {
+      title: 'العقود — حتى ' + c.as_of,
+      tabs: [{ id: 'list', label: 'العقود المطلوب متابعتها (' + num(rows.length) + ')', html: kpis([
+        ['خلال 30 يوماً', num(c.d30)], ['خلال 60 يوماً', num(c.d60)], ['خلال 90 يوماً', num(c.d90)],
+        ['منتهية', num(c.expired)], ['بلا عقد', num(c.none)], ['مفتوحة المدة', num(c.open_ended)]
+      ]) + table('hra-contracts', [['state_label', 'الحالة'], ['end_date', 'تاريخ الانتهاء'], ['days_left', 'الأيام المتبقية', 'num'],
+        ['name_ar', 'الاسم'], ['section', 'القسم'], ['title', 'المسمى'], ['type', 'نوع العقد']], rows, 'لا توجد عقود تحتاج متابعة') }],
+      sortable: ['hra-contracts'],
+      note: 'لكل موظف على رأس العمل اليوم: آخر عقد مسجل له. هذا المؤشر حسب تاريخ اليوم وليس السنة المختارة.'
+    };
+  }
+
+  window.HR_ANALYSIS = {
+    renderApp: renderApp,
+    load: load,
+    setYear: setYear,
+    setType: setType,
+    setSection: setSection,
+    setTitle: setTitle,
+    clearFilters: clearFilters,
+    openDetail: openDetail,
+    closeDetail: closeDetail,
+    tab: tab,
+    exportExcel: exportExcel
+  };
+
+  document.addEventListener('DOMContentLoaded', function () {
+    UIC.Live.watchPage({
+      call: companyCall,
+      page: 'vf_hr_analysis',
+      onChange: function () { UIC.Live.arrive(function () { load(true); }); }
+    });
+    /* [live-notice] the view on screen */
+    if (UIC.Live.setView) UIC.Live.setView('report', { refresh: function () { load(true); } });
+  });
+  document.addEventListener('DOMContentLoaded', renderApp);
+})();
+</script>
+</body>
+</html>

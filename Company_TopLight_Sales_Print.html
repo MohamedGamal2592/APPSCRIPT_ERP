@@ -32,6 +32,7 @@
     .inv-totals { margin-right: auto; width: min(320px, 100%); font-size: 14px; }
     .inv-totals .row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border-color); }
     .inv-totals .row.total { font-weight: 700; font-size: 16px; color: var(--brand-primary); border-bottom: none; }
+    .inv-totals .row.grand { background: #ffeb3b; color: #000; font-weight: 700; padding: 6px 8px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .bal-row { display: flex; justify-content: space-between; align-items: center; padding: 7px 10px; border-radius: 6px; margin-top: 6px; font-size: 13px; font-weight: 700; }
     .bal-row.before { background: var(--bg-subtle); border: 1px dashed var(--border-color); }
     .bal-row.after  { background: var(--brand-primary); color: #fff; border: none; margin-top: 4px; font-size: 14px; }
@@ -147,10 +148,10 @@
 
     var balanceRows =
       '<div class="bal-row before">' +
-      '  <span>الرصيد قبل هذه الفاتورة</span>' + fmtBalance(balanceBefore) +
+      '  <span>الرصيد السابق</span>' + fmtBalance(balanceBefore) +
       '</div>' +
       '<div class="bal-row after">' +
-      '  <span>الرصيد بعد هذه الفاتورة</span>' + fmtBalance(balanceAfter) +
+      '  <span>الرصيد بعد الفاتورة</span>' + fmtBalance(balanceAfter) +
       '</div>' +
       '<div class="bal-note">▪ موجب = مدين على العميل &nbsp;|لصالح العميل = رصيد دائن بين أقواس</div>';
 
@@ -178,7 +179,7 @@
       '<div class="row"><span>المبلغ الصافي</span><span class="num">' + FMT.number(h['المبلغ الصافي']) + '</span></div>' +
       '<div class="row"><span>قيمة الخصم</span><span class="num">' + FMT.number(h['قيمة الخصم']) + '</span></div>' +
       '<div class="row"><span>قيمة الضريبة</span><span class="num">' + FMT.number(h['قيمة الضريبة']) + '</span></div>' +
-      '<div class="row"><span>الإجمالي</span><span class="num">' + FMT.number(h['إجمالي']) + '</span></div>' +
+      '<div class="row grand"><span>الإجمالي</span><span class="num">' + FMT.number(h['إجمالي']) + '</span></div>' +
       returnRows +
       balanceRows +
       '</div>' +

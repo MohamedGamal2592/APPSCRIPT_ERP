@@ -124,13 +124,15 @@ function makeWorld(queueRows) {
   const world = {
     queue: queueRows.map(r => HEAD.map(h => (r[h] === undefined ? '' : r[h]))),
     history: [],
+    rejected: [],
     deletedCalls: 0
   };
 
   function sheetFor(name) {
     const isQueue = name === 'ERP_History_Queue';
-    const data = isQueue ? world.queue : world.history;
-    const head = isQueue ? HEAD : HIST_HEAD;
+    const isReject = name === 'ERP_History_Queue_Rejected';
+    const data = isQueue ? world.queue : (isReject ? world.rejected : world.history);
+    const head = isQueue ? HEAD : (isReject ? HEAD.concat(['reject_reason', 'rejected_at']) : HIST_HEAD);
     return {
       getLastRow: () => data.length + 1,
       getRange: function (row, col, nRows, nCols) {
@@ -160,6 +162,7 @@ function makeWorld(queueRows) {
         };
       },
       deleteRow: function (r) { world.deletedCalls++; data.splice(r - 2, 1); },
+      deleteRows: function (r, n) { world.deletedCalls++; data.splice(r - 2, n); },
       appendRow: function () {},
       setFrozenRows: function () {},
       getName: () => name
@@ -189,6 +192,10 @@ function makeWorld(queueRows) {
     /var HISTORY_QUEUE_SHEET_ = [^;]+;/.exec(DA)[0],
     /var HISTORY_QUEUE_HEADERS_ = \[[\s\S]*?\];/.exec(DA)[0],
     /var HISTORY_CLAIM_STALE_MS_ = [^;]+;/.exec(DA)[0],
+    /var HISTORY_DRAIN_BATCH_ = [^;]+;/.exec(DA)[0],
+    /var HISTORY_REJECT_SHEET_ = [^;]+;/.exec(DA)[0],
+    /var HISTORY_REQUIRED_FIELDS_ = [^;]+;/.exec(DA)[0],
+    fnBody('ensureHistoryRejectSheet_'),
     /var HISTORY_STALE_REPORT_MS_ = [^;]+;/.exec(DA)[0],
     fnBody('ensureHistoryQueueSheet_'),
     fnBody('historyRowKey_'),
@@ -270,6 +277,48 @@ const SAMPLE = [
   const r = w.run();
   check(r.rows === 0 && w.queue.length === 2,
     'rows another drain has just claimed are left alone — two drains cannot write the same row');
+}
+
+/* A backlog drains in batches: each run takes at most HISTORY_DRAIN_BATCH_
+   rows, in a fixed number of sheet calls, and the runs together write every
+   row exactly once. */
+{
+  const BATCH = Number(/var HISTORY_DRAIN_BATCH_ = (\d+);/.exec(DA)[1]);
+  const total = BATCH * 2 + 7;
+  const rows = [];
+  for (let i = 0; i < total; i++) rows.push(Object.assign({}, SAMPLE[0], { record_uid: 'bulk_' + i }));
+  const w = makeWorld(rows);
+  const first = w.run();
+  check(first.rows === BATCH && first.remaining === total - BATCH && w.queue.length === total - BATCH,
+    'a backlog: the first run takes exactly one batch and says how many remain', '        ' + JSON.stringify(first));
+  check(w.deletedCalls === 1, 'and deletes its batch in ONE call, not one per row', '        delete calls: ' + w.deletedCalls);
+  w.run(); w.run();
+  const uids = new Set(w.history.map(h => h[1 + emitted.indexOf('record_uid')]));
+  check(w.queue.length === 0 && w.history.length === total && uids.size === total,
+    'three runs empty it, every row written exactly once', '        queue ' + w.queue.length + ', history ' + w.history.length + ', distinct ' + uids.size);
+}
+
+/* A fresh claim further down is not stolen, and does not block the rows above it. */
+{
+  const rows = SAMPLE.concat([Object.assign({}, SAMPLE[0], { record_uid: 'rec_2', claim_id: 'other-drain', claimed_at: new Date() })]);
+  const w = makeWorld(rows);
+  const r = w.run();
+  check(r.rows === 2 && w.queue.length === 1 && String(w.queue[0][cols.indexOf('claim_id')]) === 'other-drain',
+    'rows above another drain\'s fresh claim are drained; the claimed row is left alone', '        ' + JSON.stringify(r));
+}
+
+/* A row that can never be written (no column_name) does not stop the batch:
+   it is moved to the rejected sheet with its reason, the rest is written, and
+   the queue is cleared. */
+{
+  const bad = Object.assign({}, SAMPLE[0], { record_uid: 'rec_bad', column_name: '' });
+  const w = makeWorld([SAMPLE[0], bad, SAMPLE[1]]);
+  const r = w.run();
+  check(r.status === 'success' && r.written === 2 && r.rejected === 1 && w.history.length === 2,
+    'a row missing column_name is set aside; the two good rows are still written', '        ' + JSON.stringify(r));
+  check(w.rejected.length === 1 && w.rejected[0][cols.indexOf('record_uid')] === 'rec_bad' && /column_name/.test(w.rejected[0][cols.length]),
+    'it is KEPT on the rejected sheet, with the reason', '        ' + JSON.stringify(w.rejected));
+  check(w.queue.length === 0, 'and the queue is cleared, so the next run is not stuck on it');
 }
 
 /* ── 5. A stale row is reported, never dropped ───────────────────────────── */

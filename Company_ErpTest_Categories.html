@@ -7,6 +7,7 @@
   <?!= include('CSS_Tokens'); ?>
   <?!= include('UI_Components'); ?>
   <?!= include('Client_Helpers'); ?>
+  <?!= include('Company_ErpTest_Packs'); ?>
   <?!= include('Company_ErpTest_Nav'); ?>
   <?!= include('ERP_Flow'); ?>
   <?!= include('ERP_Modal'); ?>
@@ -141,6 +142,7 @@
     if (body) body.innerHTML = '<div class="empty-state"><span>' + FMT.escape(e.message || 'خطأ') + '</span></div>';
   }
 
+  if (window.ET_PACKS) companyCall = ET_PACKS.wrapCall(companyCall, { page: 'et_categories', list: 'get_et_categories', refresh: function () { fetchCategories(); } });
   load();
 
   UIC.Live.watchPage({

@@ -14,6 +14,58 @@
       .no-print { display: none !important; }
       body { background: #fff !important; }
     }
+    /* ── A4 landscape print ──────────────────────────────────────────────
+       Printing swaps the screen page for #rep-print: a document built from
+       the same data with fixed-layout, full-width tables (no scroll
+       wrappers), client groups with subtotals, and headers repeated on every
+       page. 15mm side margins keep every column clear of the printer's
+       unprintable edge; 267mm usable width. */
+    #rep-print { display: none; }
+    @page {
+      size: A4 landscape;
+      margin: 12mm 15mm 14mm;
+      @bottom-center { content: "صفحة " counter(page) " من " counter(pages); font-size: 8pt; color: #555; }
+    }
+    @media print {
+      html, body { background: #fff !important; margin: 0 !important; padding: 0 !important; }
+      /* CSS_Tokens gives html and body overflow-x: hidden, which turns body
+         into a scroll container on paper: a scrollbar gets printed down the
+         left edge and anything spilling left (RTL) is clipped. Paper never
+         scrolls, so both go back to plain visible boxes. */
+      html, body {
+        overflow: visible !important; height: auto !important; min-height: 0 !important;
+        width: auto !important; min-width: 0 !important; max-width: none !important;
+      }
+      body > *:not(#rep-print) { display: none !important; }
+      #rep-print { display: block !important; width: 100% !important; max-width: 100%; box-sizing: border-box; overflow: visible; }
+    }
+    #rep-print { direction: rtl; color: #111; font-size: 9pt; line-height: 1.25; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    #rep-print .pr-head { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2px solid #111; padding-bottom: 4mm; margin-bottom: 3mm; }
+    #rep-print .pr-title { font-size: 15pt; font-weight: 800; margin: 0; }
+    #rep-print .pr-company { font-size: 10pt; font-weight: 700; color: #333; }
+    #rep-print .pr-meta { font-size: 8pt; color: #444; text-align: left; direction: rtl; }
+    #rep-print .pr-filters { display: flex; flex-wrap: wrap; gap: 1mm 6mm; font-size: 8.5pt; margin-bottom: 3mm; }
+    #rep-print .pr-filters b { font-weight: 700; }
+    #rep-print .pr-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(40mm, 1fr)); gap: 2mm; margin-bottom: 4mm; }
+    #rep-print .pr-kpi { border: 1px solid #999; border-radius: 1.5mm; padding: 1.5mm 2.5mm; break-inside: avoid; }
+    #rep-print .pr-kpi span { display: block; font-size: 7.5pt; color: #444; }
+    #rep-print .pr-kpi strong { display: block; font-size: 11.5pt; direction: ltr; text-align: right; }
+    #rep-print h2 { font-size: 11pt; margin: 4mm 0 1.5mm; padding: 1mm 2mm; background: #e5e7eb; border-right: 3px solid #111; break-after: avoid; page-break-after: avoid; }
+    #rep-print h3 { font-size: 9.5pt; margin: 3mm 0 1mm; break-after: avoid; page-break-after: avoid; }
+    #rep-print .pr-note { font-size: 8pt; color: #555; margin: 0 0 1.5mm; }
+    #rep-print table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-bottom: 2mm; }
+    #rep-print th, #rep-print td { border: 1px solid #9ca3af; padding: 0.8mm 1.6mm; text-align: right; vertical-align: middle; overflow-wrap: anywhere; }
+    #rep-print th { background: #f3f4f6; font-weight: 700; font-size: 8.5pt; }
+    #rep-print td.n, #rep-print th.n { text-align: left; direction: ltr; white-space: nowrap; font-variant-numeric: tabular-nums; }
+    #rep-print td.i, #rep-print th.i { text-align: center; color: #555; }
+    #rep-print thead { display: table-header-group; }
+    #rep-print tr { break-inside: avoid; page-break-inside: avoid; }
+    #rep-print tr.pr-grp td { background: #f9fafb; font-weight: 700; }
+    #rep-print tr.pr-sub td { font-weight: 700; background: #fafafa; }
+    #rep-print tr.pr-tot td { font-weight: 800; background: #e5e7eb; border-top: 2px solid #111; }
+    #rep-print .pr-neg { color: #b91c1c; }
+    #rep-print .pr-foot { margin-top: 4mm; font-size: 7.5pt; color: #555; border-top: 1px solid #ccc; padding-top: 2mm; }
+    #rep-print .pr-section { break-inside: auto; }
     @media print, (min-width: 600px) {
       .rep-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 14px; table-layout: fixed; }
       .rep-table th, .rep-table td { border: 1px solid var(--border-color, #e5e7eb); padding: 8px 10px; text-align: right; }
@@ -35,6 +87,7 @@
 </head>
 <body>
   <div id="vf-root"></div>
+  <div id="rep-print" aria-hidden="true"></div>
 
   <script>
     var params = new URLSearchParams(window.location.search);
@@ -87,6 +140,9 @@
        destroys the focused input and closes open combo/date popups mid-typing.
        The bar re-renders only when the option lists themselves change. */
     var FILTER_SIG = null;
+    /* Print-only: whether the printed document carries the cost columns.
+       The screen view always shows cost to users who can see it. */
+    var PRINT_COST = true;
 
     function pageParam_(k) {
       try {
@@ -143,6 +199,8 @@
           '<div class="vf-card-header">' +
             '<h3>تقرير تصنيع العملاء — ملخص الفترة</h3>' +
             '<div class="no-print" style="display:flex;gap:8px;align-items:center;">' +
+              '<label id="rep-print-cost-wrap" style="display:none;align-items:center;gap:4px;font-size:13px;cursor:pointer;">' +
+                '<input type="checkbox" id="rep-print-cost" checked onchange="MFGREP_PAGE.setPrintCost(this.checked)"> طباعة التكلفة</label>' +
               '<button class="btn btn-outline" onclick="MFGREP_PAGE.printReport()">🖨 طباعة</button>' +
               '<button class="btn btn-outline" onclick="MFGREP_PAGE.exportExcel()">⬇ تصدير</button>' +
               '<a class="btn btn-outline" href="' + scriptUrl + '?action=vf_mfg_orders&sessionToken=' + SESSION_TOKEN + '" onclick="UIC.navTo(event, this.getAttribute(\'href\'))">↩ أوامر التصنيع</a>' +
@@ -284,6 +342,8 @@
         .then(function (r) {
           if (requestId !== LOAD_SEQ) return;
           DATA = r;
+          var pcw = document.getElementById('rep-print-cost-wrap');
+          if (pcw) pcw.style.display = (r && r.can_see_cost) ? 'inline-flex' : 'none';
           var fo = (r && r.filter_options) || {};
           var sig = JSON.stringify([fo.clients, fo.products, fo.op_types, fo.statuses]);
           if (FILTER_SIG === null || sig !== FILTER_SIG) {
@@ -316,131 +376,151 @@
       '</div>';
     }
 
-    /* By-product slot is always shown under these two production tables,
-       even when empty; other op types get one only when lines exist. */
-    var BP_PINNED_OPS = ['تصنيع وتعبئة', 'تصنيع (كميات)'];
+    /* Operations that make new product. Repacking only reshapes stock that
+       was already counted, so its section is reference-only. */
+    function countedOps() {
+      return (DATA && DATA.kpi_operation_types && DATA.kpi_operation_types.length)
+        ? DATA.kpi_operation_types : ['تصنيع وتعبئة', 'تصنيع (كميات)'];
+    }
+    function isCounted(t) { return countedOps().indexOf(t) !== -1; }
 
     function opTypesInOrder() { return (OPTS.op_types && OPTS.op_types.length ? OPTS.op_types : []); }
 
-    function rowsForOp(t) {
-      return ((DATA && DATA.rows) || []).filter(function (r) {
-        var s = (r.by_op && r.by_op[t]) || { mo_count: 0 };
-        return (Number(s.mo_count) || 0) > 0;
-      });
+    function slotOf(r, t) {
+      return (r && r.by_op && r.by_op[t]) || { mo_count: 0, main_qty: 0, byproduct_qty: 0, bulk_used_qty: 0, produced_qty: 0, batch_cost: 0 };
+    }
+    function slotActive(s) {
+      return (Number(s.mo_count) || 0) > 0 || Number(s.main_qty) || Number(s.byproduct_qty) || Number(s.bulk_used_qty);
     }
 
+    function rowsForOp(t) {
+      return ((DATA && DATA.rows) || []).filter(function (r) { return slotActive(slotOf(r, t)); });
+    }
+
+    function numCell(label, n, fmt) {
+      return '<td class="num" data-label="' + label + '" data-num="' + (Number(n) || 0) + '">' + (fmt || qty)(n) + '</td>';
+    }
+
+    /* One line per (client, item): what the MO made, by-products, minus bulk
+       drawn from earlier production, and the net. */
     function opProductionTable(t, orows) {
       var canCost = !!(DATA && DATA.can_see_cost);
+      var bulkLabel = isCounted(t) ? 'مخصوم: بالك سابق' : 'من بالك';
       var body = orows.map(function (r) {
-        var s = (r.by_op && r.by_op[t]) || { produced_qty: 0, batch_cost: 0 };
+        var s = slotOf(r, t);
         return '<tr>' +
-          '<td class="c-product" data-label="الصنف المنتج">' + esc(r.product_name || '-') + '</td>' +
+          '<td class="c-client" data-label="العميل" title="' + esc(r.client_name || '-') + '">' + esc(r.client_name || '-') + '</td>' +
+          '<td class="c-product" data-label="الصنف">' + esc(r.product_name || '-') + '</td>' +
           '<td class="c-unit" data-label="الوحدة">' + esc(r.unit || '-') + '</td>' +
-          '<td class="num" data-label="منتج" data-num="' + (Number(s.produced_qty) || 0) + '">' + qty(s.produced_qty) + '</td>' +
-          (canCost ? '<td class="num" data-label="التكلفة" data-num="' + (Number(s.batch_cost) || 0) + '">' + money(s.batch_cost) + '</td>' : '') + '</tr>';
+          numCell('إنتاج الأمر', s.main_qty) + numCell('منتج ثانوي', s.byproduct_qty) +
+          numCell(bulkLabel, s.bulk_used_qty) + numCell('صافي الإنتاج', s.produced_qty) +
+          (canCost ? numCell('التكلفة', s.batch_cost, money) : '') + '</tr>';
       }).join('');
-      var tt = ((DATA && DATA.totals && DATA.totals.by_op && DATA.totals.by_op[t]) || { produced_qty: 0, batch_cost: 0 });
-      var foot = '<tr><td colspan="2" data-label="">الإجمالي</td>' +
-        '<td class="num" data-label="منتج" data-num="' + (Number(tt.produced_qty) || 0) + '">' + qty(tt.produced_qty) + '</td>' +
-        (canCost ? '<td class="num" data-label="التكلفة" data-num="' + (Number(tt.batch_cost) || 0) + '">' + money(tt.batch_cost) + '</td>' : '') + '</tr>';
+      var tt = ((DATA && DATA.totals && DATA.totals.by_op && DATA.totals.by_op[t]) || {});
+      var foot = '<tr><td colspan="3" data-label="">الإجمالي</td>' +
+        numCell('إنتاج الأمر', tt.main_qty) + numCell('منتج ثانوي', tt.byproduct_qty) +
+        numCell(bulkLabel, tt.bulk_used_qty) + numCell('صافي الإنتاج', tt.produced_qty) +
+        (canCost ? numCell('التكلفة', tt.batch_cost, money) : '') + '</tr>';
       return '<div class="table-wrap"><table class="table rep-table"><thead><tr>' +
-        '<th class="c-product">الصنف المنتج</th><th class="c-unit">الوحدة</th>' +
-        '<th class="num">منتج</th>' + (canCost ? '<th class="num">التكلفة</th>' : '') + '</tr></thead>' +
+        '<th class="c-client">العميل</th><th class="c-product">الصنف</th><th class="c-unit">الوحدة</th>' +
+        '<th class="num">إنتاج الأمر</th><th class="num">منتج ثانوي</th><th class="num">' + bulkLabel + '</th><th class="num">صافي الإنتاج</th>' +
+        (canCost ? '<th class="num">التكلفة</th>' : '') + '</tr></thead>' +
         '<tbody>' + body + foot + '</tbody></table></div>';
     }
 
-    function opByproductsHtml(t, orows) {
+    /* Detail list under a production table: by-products (with the product
+       whose MO made them) or bulk drawn (with the product that consumed it). */
+    function opDetailHtml(t, field, title, otherHead, otherOf, emptyText) {
       var canCost = !!(DATA && DATA.can_see_cost);
       var lines = [];
-      orows.forEach(function (r) {
-        var grp = (r.byproducts_by_op && r.byproducts_by_op[t]) || [];
-        grp.forEach(function (m) {
-          lines.push({ client: r.client_name, product: r.product_name, item: m.item, item_name: m.product_name || m.item, qty: m.qty, cost: m.total_cost });
+      ((DATA && DATA.rows) || []).forEach(function (r) {
+        ((r[field] && r[field][t]) || []).forEach(function (m) {
+          lines.push({ client: r.client_name, item: m.product_name || m.item, other: otherOf(r, m), qty: m.qty, cost: m.total_cost });
         });
       });
-      var pinned = BP_PINNED_OPS.indexOf(t) !== -1;
-      if (!lines.length && !pinned) return '';
+      if (!lines.length && !emptyText) return '';
       var totQ = 0, totC = 0;
       lines.forEach(function (l) { totQ += Number(l.qty) || 0; totC += Number(l.cost) || 0; });
       var inner = lines.length
         ? '<div class="table-wrap"><table class="table rep-table"><thead><tr>' +
-          '<th class="c-client">العميل</th><th class="c-product">الصنف المنتج</th>' +
-          '<th class="num">الكمية</th>' +
-          (canCost ? '<th class="num">التكلفة</th>' : '') + '</tr></thead><tbody>' +
+          '<th class="c-client">العميل</th><th class="c-product">الصنف</th><th class="c-product">' + otherHead + '</th>' +
+          '<th class="num">الكمية</th>' + (canCost ? '<th class="num">التكلفة</th>' : '') + '</tr></thead><tbody>' +
           lines.map(function (l) {
             return '<tr>' +
               '<td class="c-client" data-label="العميل" title="' + esc(l.client || '-') + '">' + esc(l.client || '-') + '</td>' +
-              '<td class="c-product" data-label="الصنف المنتج">' + esc(l.item_name || l.item || '-') + '</td>' +
-              '<td class="num" data-label="الكمية" data-num="' + (Number(l.qty) || 0) + '">' + qty(l.qty) + '</td>' +
-              (canCost ? '<td class="num" data-label="التكلفة" data-num="' + (Number(l.cost) || 0) + '">' + money(l.cost) + '</td>' : '') +
+              '<td class="c-product" data-label="الصنف">' + esc(l.item || '-') + '</td>' +
+              '<td class="c-product" data-label="' + otherHead + '">' + esc(l.other || '-') + '</td>' +
+              numCell('الكمية', l.qty) + (canCost ? numCell('التكلفة', l.cost, money) : '') +
             '</tr>';
           }).join('') +
-          '<tr><td colspan="2" data-label="">الإجمالي</td>' +
-          '<td class="num" data-label="الكمية" data-num="' + totQ + '">' + qty(totQ) + '</td>' +
-          (canCost ? '<td class="num" data-label="التكلفة" data-num="' + totC + '">' + money(totC) + '</td>' : '') + '</tr>' +
+          '<tr><td colspan="3" data-label="">الإجمالي</td>' +
+          numCell('الكمية', totQ) + (canCost ? numCell('التكلفة', totC, money) : '') + '</tr>' +
           '</tbody></table></div>'
-        : '<p class="vf-text-muted">لا توجد منتجات ثانوية.</p>';
-      return '<div style="margin-top:12px;"><h4 style="margin:0 0 8px;">المنتجات الثانوية — ' + esc(t) + '</h4>' + inner + '</div>';
+        : '<p class="vf-text-muted">' + emptyText + '</p>';
+      return '<div style="margin-top:12px;"><h4 style="margin:0 0 8px;">' + title + '</h4>' + inner + '</div>';
     }
 
-    /* One production table per operation type, each followed by its own
-       by-products table; then the sum of the tables. */
+    /* One production table per operation type, followed by its by-products
+       and the bulk it drew; then the sum of the tables. */
     function opSectionsHtml() {
       var rows = (DATA && DATA.rows) || [];
       if (!rows.length) return '';
       return opTypesInOrder().map(function (t) {
         var orows = rowsForOp(t);
         if (!orows.length) return '';
-        return '<div class="vf-card" style="margin-bottom:14px;"><div class="vf-card-header"><h3>الإنتاج — ' + esc(t) + '</h3></div>' +
-          '<div class="vf-card-body">' + opProductionTable(t, orows) + opByproductsHtml(t, orows) + '</div></div>';
+        var counted = isCounted(t);
+        var head = counted ? 'الإنتاج — ' + esc(t) : esc(t) + ' — للعلم فقط (غير داخل في إجمالي الإنتاج)';
+        return '<div class="vf-card" style="margin-bottom:14px;"><div class="vf-card-header"><h3>' + head + '</h3></div>' +
+          '<div class="vf-card-body">' + opProductionTable(t, orows) +
+          opDetailHtml(t, 'byproducts_by_op', 'المنتجات الثانوية — ' + esc(t), 'ناتج من أمر',
+            function (r, m) { return m.source_product_name; }, counted ? 'لا توجد منتجات ثانوية.' : '') +
+          opDetailHtml(t, 'bulk_used_by_op',
+            counted ? 'بالك مسحوب من إنتاج سابق (مخصوم من الصافي) — ' + esc(t) : 'البالك اللي اتعاد تعبئته — ' + esc(t),
+            counted ? 'استُخدم في' : 'اتعبّى في', function (r) { return r.product_name; }, '') +
+          '</div></div>';
       }).join('');
     }
 
     function tablesSumHtml() {
       var canCost = !!(DATA && DATA.can_see_cost);
       var t = (DATA && DATA.totals) || { produced_qty: 0, batch_cost: 0, by_op: {} };
-      var ops = opTypesInOrder().filter(function (ogn) {
-        var s = (t.by_op && t.by_op[ogn]) || { mo_count: 0 };
-        return (Number(s.mo_count) || 0) > 0;
-      });
+      var ops = opTypesInOrder().filter(function (ogn) { return slotActive((t.by_op && t.by_op[ogn]) || {}); });
       if (!ops.length) return '';
       var body = ops.map(function (ogn) {
-        var s = (t.by_op && t.by_op[ogn]) || { produced_qty: 0, batch_cost: 0 };
-        return '<tr><td data-label="نوع العملية">' + esc(ogn) + '</td>' +
-          '<td class="num" data-label="منتج" data-num="' + (Number(s.produced_qty) || 0) + '">' + qty(s.produced_qty) + '</td>' +
-          (canCost ? '<td class="num" data-label="التكلفة" data-num="' + (Number(s.batch_cost) || 0) + '">' + money(s.batch_cost) + '</td>' : '') + '</tr>';
+        var s = (t.by_op && t.by_op[ogn]) || {};
+        var label = isCounted(ogn) ? esc(ogn) : esc(ogn) + ' <span class="vf-text-muted">(للعلم — غير محسوب)</span>';
+        return '<tr><td data-label="نوع العملية">' + label + '</td>' +
+          numCell('صافي الإنتاج', s.produced_qty) + (canCost ? numCell('التكلفة', s.batch_cost, money) : '') + '</tr>';
       }).join('');
-      var foot = '<tr><td data-label="">الإجمالي العام (مجموع الجداول)</td>' +
-        '<td class="num" data-label="منتج" data-num="' + (Number(t.produced_qty) || 0) + '">' + qty(t.produced_qty) + '</td>' +
-        (canCost ? '<td class="num" data-label="التكلفة" data-num="' + (Number(t.batch_cost) || 0) + '">' + money(t.batch_cost) + '</td>' : '') + '</tr>';
+      var foot = '<tr><td data-label="">إجمالي الإنتاج (' + esc(countedOps().join(' + ')) + ')</td>' +
+        numCell('صافي الإنتاج', t.produced_qty) + (canCost ? numCell('التكلفة', t.batch_cost, money) : '') + '</tr>';
       return '<div class="vf-card" style="margin-bottom:14px;"><div class="vf-card-header"><h3>مجموع الجداول</h3></div>' +
         '<div class="vf-card-body"><div class="table-wrap"><table class="table rep-table"><thead><tr>' +
-        '<th>نوع العملية</th><th class="num">منتج</th>' + (canCost ? '<th class="num">التكلفة</th>' : '') + '</tr></thead>' +
+        '<th>نوع العملية</th><th class="num">صافي الإنتاج</th>' + (canCost ? '<th class="num">التكلفة</th>' : '') + '</tr></thead>' +
         '<tbody>' + body + foot + '</tbody></table></div></div></div>';
     }
 
-    function materialsHtml() {
-      var rows = (DATA && DATA.rows) || [];
-      var canCost = !!(DATA && DATA.can_see_cost);
-      var lines = [];
-      rows.forEach(function (r) {
+    /* Materials aggregated per item (unit-aware): one row per خامة with
+       summed qty and cost across all clients/products. */
+    function aggregatedMaterials() {
+      var agg = {};
+      ((DATA && DATA.rows) || []).forEach(function (r) {
         ((r && r.materials) || []).forEach(function (m) {
-          lines.push({ client: r.client_name, product: r.product_name, item: m.item, unit: m.unit, qty: m.qty, cost: m.total_cost });
+          var k = String(m.item || '-') + '|' + String(m.unit || '');
+          var a = agg[k] || (agg[k] = { item: m.item, unit: m.unit, qty: 0, cost: 0 });
+          a.qty += Number(m.qty) || 0;
+          a.cost += Number(m.total_cost) || 0;
         });
       });
-      if (!lines.length) return '';
-      /* Aggregate per material item (unit-aware): one row per خامة with
-         summed qty and cost across all clients/products. */
-      var agg = {};
-      lines.forEach(function (l) {
-        var k = String(l.item || '-') + '|' + String(l.unit || '');
-        var a = agg[k] || (agg[k] = { item: l.item, unit: l.unit, qty: 0, cost: 0 });
-        a.qty += Number(l.qty) || 0;
-        a.cost += Number(l.cost) || 0;
-      });
-      var aggLines = Object.keys(agg).map(function (k) { return agg[k]; }).sort(function (a, b) {
+      return Object.keys(agg).map(function (k) { return agg[k]; }).sort(function (a, b) {
         return String(a.item || '').localeCompare(String(b.item || ''), 'ar');
       });
+    }
+
+    function materialsHtml() {
+      var canCost = !!(DATA && DATA.can_see_cost);
+      var aggLines = aggregatedMaterials();
+      if (!aggLines.length) return '';
       var totQ = 0, totC = 0;
       aggLines.forEach(function (a) { totQ += a.qty; totC += a.cost; });
       var body = aggLines.map(function (a) {
@@ -465,23 +545,19 @@
       var b = document.getElementById('rep-body');
       if (!b) return;
       var rows = (DATA && DATA.rows) || [];
-      var t = (DATA && DATA.totals) || { produced_qty: 0, batch_cost: 0, by_op: {} };
       var kt = (DATA && DATA.kpi_totals) || { produced_qty: 0, batch_cost: 0, by_op: {} };
-      var kpiOps = (DATA && DATA.kpi_operation_types && DATA.kpi_operation_types.length)
-        ? DATA.kpi_operation_types : ['تصنيع وتعبئة', 'تصنيع (كميات)'];
+      var kpiOps = countedOps();
       var canCost = !!(DATA && DATA.can_see_cost);
-      var kpiScope = 'تصنيع وتعبئة + تصنيع (كميات)';
+      var kpiScope = kpiOps.join(' + ');
       var kpis =
         '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:14px;">' +
-          kpi('إجمالي المنتج (' + kpiScope + ')', qty(kt.produced_qty)) +
-          kpiOps.filter(function (ogn) {
-            var s = (kt.by_op && kt.by_op[ogn]) || { mo_count: 0 };
-            return (Number(s.mo_count) || 0) > 0;
-          }).map(function (ogn) {
-            var s = (kt.by_op && kt.by_op[ogn]) || { produced_qty: 0, batch_cost: 0 };
+          kpi('إجمالي المنتج — صافي (' + kpiScope + ')', qty(kt.produced_qty)) +
+          kpiOps.filter(function (ogn) { return slotActive((kt.by_op && kt.by_op[ogn]) || {}); }).map(function (ogn) {
+            var s = (kt.by_op && kt.by_op[ogn]) || {};
             return kpi('منتج — ' + ogn, qty(s.produced_qty)) +
               (canCost ? kpi('تكلفة — ' + ogn + ' (ضمن نطاق مؤشرات التصنيع)', money(s.batch_cost)) : '');
           }).join('') +
+          (Number(kt.bulk_used_qty) ? kpi('مخصوم: بالك من إنتاج سابق', qty(kt.bulk_used_qty)) : '') +
           (canCost ? kpi('إجمالي التكلفة (' + kpiScope + ')', money(kt.batch_cost)) : '') +
         '</div>';
 
@@ -491,43 +567,320 @@
         ? opSectionsHtml() + tablesSumHtml() + materialsHtml()
         : '<div class="empty-state"><span>' + esc(emptyText) + '</span></div>';
 
-      /* Hidden per-(client, product, op) table: the Excel export source.
-         Toolbar off — never seen. */
-      var xhead = [{ label: 'العميل', col: 'text' }, { label: 'الصنف المنتج', col: 'text' }, 'الوحدة',
-        { label: 'نوع العملية', col: 'text' }, { label: 'منتج', numeric: true }];
-      if (canCost) xhead.push({ label: 'التكلفة', numeric: true });
-      var opTypes = opTypesInOrder();
-      var xbody = [];
-      rows.forEach(function (r) {
-        opTypes.forEach(function (ogn) {
-          var s = (r.by_op && r.by_op[ogn]) || { mo_count: 0, produced_qty: 0, batch_cost: 0 };
-          if (!(Number(s.mo_count) > 0)) return;
-          var line = [esc(r.client_name || '-'), esc(r.product_name || '-'), esc(r.unit || '-'), esc(ogn),
-            '<span class="num">' + qty(s.produced_qty) + '</span>'];
-          if (canCost) line.push('<span class="num">' + money(s.batch_cost) + '</span>');
-          xbody.push(line);
-        });
-      });
-      var hidden = rows.length ? '<div style="display:none;">' + UIC.dataTable('mfgrep-tbl', {
-        headers: xhead, rows: xbody, emptyText: emptyText, title: 'تقرير تصنيع العملاء',
-        autoPage: false, searchable: false, exportXlsx: false, printable: false
-      }) + '</div>' : '';
-
-      b.innerHTML = kpis + main + hidden +
+      var bulkCats = ((DATA && DATA.bulk_category_ids) || []).join('، ');
+      b.innerHTML = kpis + main +
         '<p class="vf-text-muted" style="margin-top:14px;font-size:12px;">' +
-          'الكمية المنتجة = مجموع actual_qty لأوامر الحالة المحددة في الفترة. الخامات من بنود أوامر التصنيع. ' +
+          'كل صنف بيتحسب للعميل المسجّل عليه في الأصناف، سواء منتج رئيسي أو منتج ثانوي. ' +
+          'صافي الإنتاج = إنتاج الأمر (actual_qty) + المنتجات الثانوية − البالك المسحوب من إنتاج سابق ' +
+          '(خامة من تصنيفات ' + esc(bulkCats) + ' لنفس عميل المنتج). ' +
+          'اعادة التعبئة للعلم فقط ومش داخلة في الإجمالي. ' +
           'التكاليف تظهر فقط للمصرح لهم بإظهار التكاليف.' +
         '</p>';
     }
 
-    function printReport() { window.print(); }
+    /* ── A4 landscape print document ─────────────────────────────────────
+       Built from DATA into #rep-print right before printing (button or
+       Ctrl+P). Column widths are fixed percentages so every column fits the
+       landscape width — nothing scrolls, nothing is cut. */
+    function optLabel(list, v) {
+      for (var i = 0; i < (list || []).length; i++) if (String(list[i].value) === String(v)) return list[i].label;
+      return v;
+    }
+    function printCost() { return !!(DATA && DATA.can_see_cost) && PRINT_COST; }
+    /* data-num / data-fmt carry the raw value for the Excel copy of this
+       document (sheetFromPrint), which must not re-parse formatted text. */
+    function pNum(n, fmt) {
+      var v = Number(n) || 0;
+      return '<td class="n' + (v < 0 ? ' pr-neg' : '') + '" data-num="' + v + '"' + (fmt === money ? ' data-fmt="money"' : '') + '>' +
+        (fmt || qty)(v) + '</td>';
+    }
+    function pCols(widths) {
+      return '<colgroup>' + widths.map(function (w) { return '<col style="width:' + w + '%">'; }).join('') + '</colgroup>';
+    }
+    function pHead(cells) {
+      return '<thead><tr>' + cells.map(function (c) {
+        return '<th' + (c.cls ? ' class="' + c.cls + '"' : '') + '>' + c.label + '</th>';
+      }).join('') + '</tr></thead>';
+    }
 
-    /* UIC.exportExcel reads the hidden table's store, so the sheet it writes
-       is exactly the pivot table — including the totals row. */
+    /* Production per op, grouped by client with a subtotal per client. */
+    function printOpTable(t) {
+      var canCost = printCost();
+      var counted = isCounted(t);
+      var orows = rowsForOp(t);
+      var widths = canCost ? [4, 32, 7, 11, 11, 11, 11, 13] : [4, 40, 8, 12, 12, 12, 12];
+      var head = [{ label: 'م', cls: 'i' }, { label: 'الصنف' }, { label: 'الوحدة' },
+        { label: 'إنتاج الأمر', cls: 'n' }, { label: 'منتج ثانوي', cls: 'n' },
+        { label: counted ? 'مخصوم: بالك سابق' : 'من بالك', cls: 'n' }, { label: 'صافي الإنتاج', cls: 'n' }];
+      if (canCost) head.push({ label: 'التكلفة', cls: 'n' });
+      var span = head.length;
+      var body = '', cur = null, sub = null, n = 0;
+      function flush() {
+        if (!sub || sub.count < 2) return;
+        body += '<tr class="pr-sub"><td></td><td colspan="2">إجمالي ' + esc(sub.name) + '</td>' +
+          pNum(sub.main) + pNum(sub.bp) + pNum(sub.bulk) + pNum(sub.net) + (canCost ? pNum(sub.cost, money) : '') + '</tr>';
+      }
+      orows.forEach(function (r) {
+        if (cur !== r.client_id) {
+          flush();
+          cur = r.client_id;
+          sub = { name: r.client_name || '-', count: 0, main: 0, bp: 0, bulk: 0, net: 0, cost: 0 };
+          body += '<tr class="pr-grp"><td colspan="' + span + '">العميل: ' + esc(r.client_name || '-') + '</td></tr>';
+        }
+        var s = slotOf(r, t);
+        sub.count++;
+        sub.main += Number(s.main_qty) || 0; sub.bp += Number(s.byproduct_qty) || 0;
+        sub.bulk += Number(s.bulk_used_qty) || 0; sub.net += Number(s.produced_qty) || 0;
+        sub.cost += Number(s.batch_cost) || 0;
+        body += '<tr><td class="i">' + (++n) + '</td><td>' + esc(r.product_name || '-') + '</td><td>' + esc(r.unit || '-') + '</td>' +
+          pNum(s.main_qty) + pNum(s.byproduct_qty) + pNum(s.bulk_used_qty) + pNum(s.produced_qty) +
+          (canCost ? pNum(s.batch_cost, money) : '') + '</tr>';
+      });
+      flush();
+      var tt = (DATA.totals && DATA.totals.by_op && DATA.totals.by_op[t]) || {};
+      body += '<tr class="pr-tot"><td></td><td colspan="2">الإجمالي — ' + esc(t) + '</td>' +
+        pNum(tt.main_qty) + pNum(tt.byproduct_qty) + pNum(tt.bulk_used_qty) + pNum(tt.produced_qty) +
+        (canCost ? pNum(tt.batch_cost, money) : '') + '</tr>';
+      return '<table>' + pCols(widths) + pHead(head) + '<tbody>' + body + '</tbody></table>';
+    }
+
+    /* By-products / bulk drawn detail for one op. */
+    function printDetail(t, field, title, otherHead, otherOf) {
+      var canCost = printCost();
+      var lines = [];
+      ((DATA && DATA.rows) || []).forEach(function (r) {
+        ((r[field] && r[field][t]) || []).forEach(function (m) {
+          lines.push({ client: r.client_name, item: m.product_name || m.item, other: otherOf(r, m), qty: m.qty, cost: m.total_cost });
+        });
+      });
+      if (!lines.length) return '';
+      var totQ = 0, totC = 0, n = 0;
+      var head = [{ label: 'م', cls: 'i' }, { label: 'العميل' }, { label: 'الصنف' }, { label: otherHead }, { label: 'الكمية', cls: 'n' }];
+      if (canCost) head.push({ label: 'التكلفة', cls: 'n' });
+      var body = lines.map(function (l) {
+        totQ += Number(l.qty) || 0; totC += Number(l.cost) || 0;
+        return '<tr><td class="i">' + (++n) + '</td><td>' + esc(l.client || '-') + '</td><td>' + esc(l.item || '-') + '</td><td>' + esc(l.other || '-') + '</td>' +
+          pNum(l.qty) + (canCost ? pNum(l.cost, money) : '') + '</tr>';
+      }).join('') +
+        '<tr class="pr-tot"><td></td><td colspan="3">الإجمالي</td>' + pNum(totQ) + (canCost ? pNum(totC, money) : '') + '</tr>';
+      var widths = canCost ? [4, 19, 28, 23, 12, 14] : [4, 22, 32, 28, 14];
+      return '<h3>' + title + '</h3><table>' + pCols(widths) + pHead(head) + '<tbody>' + body + '</tbody></table>';
+    }
+
+    function buildPrintHtml() {
+      var canCost = printCost();
+      var rows = (DATA && DATA.rows) || [];
+      var kt = (DATA && DATA.kpi_totals) || {};
+      var t = (DATA && DATA.totals) || { by_op: {} };
+      var ops = countedOps();
+      var now = new Date();
+      var period = periodLabel();
+      var opsSel = checkedValues('op'), stSel = checkedValues('st');
+      var filters = [
+        ['الفترة', period],
+        ['العميل', F_CLIENT ? optLabel(OPTS.clients, F_CLIENT) : 'كل العملاء'],
+        ['الصنف', F_PRODUCT ? optLabel(OPTS.products, F_PRODUCT) : 'كل الأصناف'],
+        ['نوع العملية', opsSel.length ? opsSel.join('، ') : 'الكل'],
+        ['الحالة', stSel.length ? stSel.join('، ') : 'Locked']
+      ].map(function (f) { return '<span><b>' + f[0] + ':</b> ' + esc(f[1]) + '</span>'; }).join('');
+
+      var kpis = [['إجمالي صافي الإنتاج', qty(kt.produced_qty)]];
+      ops.forEach(function (o) {
+        var s = (kt.by_op && kt.by_op[o]) || {};
+        if (slotActive(s)) kpis.push(['صافي — ' + o, qty(s.produced_qty)]);
+      });
+      if (Number(kt.byproduct_qty)) kpis.push(['منتجات ثانوية', qty(kt.byproduct_qty)]);
+      if (Number(kt.bulk_used_qty)) kpis.push(['مخصوم: بالك سابق', qty(kt.bulk_used_qty)]);
+      kpis.push(['عدد أوامر التصنيع', String(Number(kt.mo_count) || 0)]);
+      if (canCost) kpis.push(['إجمالي التكلفة', money(kt.batch_cost)]);
+
+      var html = '<div class="pr-head"><div><div class="pr-company">Valley Foods</div>' +
+        '<h1 class="pr-title">تقرير تصنيع العملاء — ملخص الفترة</h1></div>' +
+        '<div class="pr-meta">تاريخ الطباعة: ' + fmtDate(now) + ' ' +
+        (now.getHours() < 10 ? '0' : '') + now.getHours() + ':' + (now.getMinutes() < 10 ? '0' : '') + now.getMinutes() + '</div></div>' +
+        '<div class="pr-filters">' + filters + '</div>' +
+        '<div class="pr-kpis">' + kpis.map(function (k) {
+          return '<div class="pr-kpi"><span>' + esc(k[0]) + '</span><strong>' + k[1] + '</strong></div>';
+        }).join('') + '</div>';
+
+      if (!rows.length) return html + '<p>لا توجد أوامر مطابقة للفلاتر.</p>';
+
+      opTypesInOrder().forEach(function (o) {
+        if (!rowsForOp(o).length) return;
+        var counted = isCounted(o);
+        html += '<div class="pr-section"><h2>' + (counted ? 'الإنتاج — ' + esc(o) : esc(o) + ' — للعلم فقط (غير داخل في إجمالي الإنتاج)') + '</h2>' +
+          printOpTable(o) +
+          printDetail(o, 'byproducts_by_op', 'المنتجات الثانوية — ' + esc(o), 'ناتج من أمر', function (r, m) { return m.source_product_name; }) +
+          printDetail(o, 'bulk_used_by_op', counted ? 'بالك مسحوب من إنتاج سابق (مخصوم من الصافي) — ' + esc(o) : 'البالك اللي اتعاد تعبئته — ' + esc(o),
+            counted ? 'استُخدم في' : 'اتعبّى في', function (r) { return r.product_name; }) +
+          '</div>';
+      });
+
+      /* Summary by operation + grand total. */
+      var sumHead = [{ label: 'نوع العملية' }, { label: 'عدد الأوامر', cls: 'n' }, { label: 'إنتاج الأمر', cls: 'n' },
+        { label: 'منتج ثانوي', cls: 'n' }, { label: 'بالك سابق', cls: 'n' }, { label: 'صافي الإنتاج', cls: 'n' }];
+      if (canCost) sumHead.push({ label: 'التكلفة', cls: 'n' });
+      var sumBody = opTypesInOrder().filter(function (o) { return slotActive((t.by_op && t.by_op[o]) || {}); }).map(function (o) {
+        var s = t.by_op[o];
+        return '<tr><td>' + esc(o) + (isCounted(o) ? '' : ' (للعلم — غير محسوب)') + '</td>' +
+          '<td class="n">' + (Number(s.mo_count) || 0) + '</td>' + pNum(s.main_qty) + pNum(s.byproduct_qty) +
+          pNum(s.bulk_used_qty) + pNum(s.produced_qty) + (canCost ? pNum(s.batch_cost, money) : '') + '</tr>';
+      }).join('') +
+        '<tr class="pr-tot"><td>إجمالي الإنتاج (' + esc(ops.join(' + ')) + ')</td><td class="n">' + (Number(t.mo_count) || 0) + '</td>' +
+        pNum(t.main_qty) + pNum(t.byproduct_qty) + pNum(t.bulk_used_qty) + pNum(t.produced_qty) +
+        (canCost ? pNum(t.batch_cost, money) : '') + '</tr>';
+      html += '<div class="pr-section"><h2>مجموع الجداول</h2><table>' +
+        pCols(canCost ? [26, 9, 13, 13, 13, 13, 13] : [32, 12, 14, 14, 14, 14]) + pHead(sumHead) + '<tbody>' + sumBody + '</tbody></table></div>';
+
+      var mats = aggregatedMaterials();
+      if (mats.length) {
+        var mq = 0, mc = 0, mn = 0;
+        var mHead = [{ label: 'م', cls: 'i' }, { label: 'الخامة' }, { label: 'الوحدة' }, { label: 'الكمية', cls: 'n' }];
+        if (canCost) mHead.push({ label: 'التكلفة', cls: 'n' });
+        var mBody = mats.map(function (a) {
+          mq += a.qty; mc += a.cost;
+          return '<tr><td class="i">' + (++mn) + '</td><td>' + esc(a.item || '-') + '</td><td>' + esc(a.unit || '-') + '</td>' +
+            pNum(a.qty) + (canCost ? pNum(a.cost, money) : '') + '</tr>';
+        }).join('') +
+          '<tr class="pr-tot"><td></td><td colspan="2">الإجمالي</td>' + pNum(mq) + (canCost ? pNum(mc, money) : '') + '</tr>';
+        html += '<div class="pr-section"><h2>الخامات المستخدمة</h2><table>' +
+          pCols(canCost ? [4, 52, 10, 16, 18] : [4, 64, 12, 20]) + pHead(mHead) + '<tbody>' + mBody + '</tbody></table></div>';
+      }
+
+      var bulkCats = ((DATA && DATA.bulk_category_ids) || []).join('، ');
+      return html + '<div class="pr-foot">' +
+        'كل صنف بيتحسب للعميل المسجّل عليه في الأصناف. صافي الإنتاج = إنتاج الأمر + المنتجات الثانوية − البالك المسحوب من إنتاج سابق ' +
+        '(خامة من تصنيفات ' + esc(bulkCats) + ' لنفس عميل المنتج). اعادة التعبئة للعلم فقط ومش داخلة في الإجمالي.' +
+        '</div>';
+    }
+
+    function fillPrint() {
+      var host = document.getElementById('rep-print');
+      if (!host) return;
+      /* body > :not(#rep-print) hides the screen page, so the print host
+         must sit directly under <body>. */
+      if (host.parentNode !== document.body) document.body.appendChild(host);
+      host.innerHTML = DATA ? buildPrintHtml() : '<p>جاري التحميل...</p>';
+    }
+
+    function printReport() {
+      if (!DATA) { UIC.toast('التقرير لسه بيتحمّل', 'error'); return; }
+      fillPrint();
+      window.print();
+    }
+
+    /* The name a download carries: the date range, plus the client and the
+       product when one was selected. Excel uses it directly; for print the
+       browser offers document.title as the PDF's name, so the title holds it
+       for the duration of the print. */
+    function downloadName() {
+      var parts = ['تقرير تصنيع العملاء'];
+      if (DATE_FROM || DATE_TO) parts.push((DATE_FROM || '…') + ' إلى ' + (DATE_TO || '…'));
+      else parts.push('كل الفترات');
+      if (F_CLIENT) parts.push(optLabel(OPTS.clients, F_CLIENT));
+      if (F_PRODUCT) parts.push(optLabel(OPTS.products, F_PRODUCT));
+      return parts.join(' - ').replace(/[\\\/:*?"<>|]+/g, '-').replace(/\s+/g, ' ').trim();
+    }
+    var SCREEN_TITLE = document.title;
+    function onBeforePrint() { fillPrint(); document.title = downloadName(); }
+    function onAfterPrint() { document.title = SCREEN_TITLE; }
+    /* Ctrl+P prints the same document, under the same name, as the button. */
+    window.addEventListener('beforeprint', onBeforePrint);
+    window.addEventListener('afterprint', onAfterPrint);
+
+    /* The period this report was run for, as one line. The printed document
+       and the Excel download both show exactly this text. */
+    function periodLabel() {
+      return (DATE_FROM || DATE_TO)
+        ? 'من ' + (DATE_FROM ? fmtDate(DATE_FROM) : '—') + ' إلى ' + (DATE_TO ? fmtDate(DATE_TO) : '—')
+        : 'كل الفترات';
+    }
+
+    /* ── Excel = the print document ──────────────────────────────────────
+       The sheet is read off buildPrintHtml() itself, so it carries exactly
+       what the print does — header, filters, KPIs, each operation's table
+       grouped by client with subtotals, by-products, bulk drawn, the summary,
+       the materials and the footnote — and follows the print's cost toggle.
+       Numbers come from pNum's data-num, never from the formatted text. */
+    function sheetFromPrint(html) {
+      var host = document.createElement('div');
+      host.innerHTML = html;
+      var aoa = [], merges = [], fmts = [], widths = [];
+      function text(el) { return String(el.textContent || '').replace(/\s+/g, ' ').trim(); }
+      function put(r, c, v, fmt) {
+        (aoa[r] = aoa[r] || [])[c] = v;
+        if (fmt) fmts.push({ r: r, c: c, z: fmt });
+        var w = String(v == null ? '' : v).length;
+        if (typeof v === 'number') w = Math.max(w, 10);
+        if (w > (widths[c] || 0)) widths[c] = w;
+      }
+      function line(v) { var r = aoa.length; aoa[r] = [v]; return r; }
+      function blank() { if (aoa.length && aoa[aoa.length - 1].length) aoa.push([]); }
+      host.querySelectorAll('.pr-company, .pr-title, .pr-meta, .pr-filters > span, .pr-kpi, h2, h3, table, .pr-foot, p')
+        .forEach(function (el) {
+          if (el.matches('.pr-filters > span')) {
+            if (!el.previousElementSibling) blank();
+            var b = el.querySelector('b');
+            var label = b ? text(b).replace(/:\s*$/, '') : '';
+            var r = aoa.length;
+            put(r, 0, label);
+            put(r, 1, text(el).slice(b ? text(b).length : 0).trim());
+          } else if (el.matches('.pr-kpi')) {
+            if (!el.previousElementSibling) blank();
+            var s = el.querySelector('span'), v = el.querySelector('strong');
+            var raw = v ? text(v) : '';
+            var num = Number(raw.replace(/,/g, ''));
+            var r2 = aoa.length;
+            put(r2, 0, s ? text(s) : '');
+            put(r2, 1, (raw !== '' && isFinite(num)) ? num : raw, s && /التكلفة/.test(text(s)) ? '#,##0.00' : null);
+          } else if (el.tagName === 'TABLE') {
+            /* colspan cells become merged ranges; the grid tracks which
+               columns of each row are already taken. */
+            el.querySelectorAll('tr').forEach(function (tr) {
+              var r = aoa.length, c = 0;
+              aoa[r] = [];
+              tr.querySelectorAll('th, td').forEach(function (cell) {
+                var span = Number(cell.getAttribute('colspan')) || 1;
+                var dn = cell.getAttribute('data-num');
+                if (dn !== null) put(r, c, Number(dn), cell.getAttribute('data-fmt') === 'money' ? '#,##0.00' : (Number.isInteger(Number(dn)) ? '#,##0' : '#,##0.###'));
+                else {
+                  var t = text(cell);
+                  var n = Number(t.replace(/,/g, ''));
+                  put(r, c, (cell.classList.contains('n') || cell.classList.contains('i')) && t !== '' && isFinite(n) ? n : t);
+                }
+                if (span > 1) merges.push({ s: { r: r, c: c }, e: { r: r, c: c + span - 1 } });
+                c += span;
+              });
+            });
+            aoa.push([]);
+          } else {
+            if (el.tagName === 'H2') blank();
+            line(text(el));
+          }
+        });
+      var ws = XLSX.utils.aoa_to_sheet(aoa);
+      fmts.forEach(function (f) {
+        var cell = ws[XLSX.utils.encode_cell({ r: f.r, c: f.c })];
+        if (cell && typeof cell.v === 'number') cell.z = f.z;
+      });
+      ws['!merges'] = merges;
+      ws['!cols'] = widths.map(function (w) { return { wch: Math.min(Math.max((w || 0) + 2, 8), 45) }; });
+      return ws;
+    }
+
     function exportExcel() {
-      var st = (window.__dtStore || {})['mfgrep-tbl'];
-      if (!st || !(st.rows || []).length) { UIC.toast('لا توجد بيانات للتصدير', 'error'); return; }
-      UIC.exportExcel('mfgrep-tbl');
+      if (!DATA) { UIC.toast('التقرير لسه بيتحمّل', 'error'); return; }
+      var name = downloadName();
+      var html = buildPrintHtml();
+      if (typeof XLSX === 'undefined') UIC.toast('جاري تحميل مكتبة Excel...', 'info');
+      API.ensureXlsx().then(function () {
+        var wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, sheetFromPrint(html), 'التقرير');
+        wb.Workbook = { Views: [{ RTL: true }] };
+        XLSX.writeFile(wb, name + '.xlsx');
+      }).catch(function (e) {
+        UIC.toast('تعذر التصدير: ' + ((e && e.message) || 'خطأ'), 'error');
+      });
     }
 
     window.MFGREP_PAGE = {
@@ -535,6 +888,7 @@
       clearDateFilter: clearDateFilter,
       clearPartyFilters: clearPartyFilters,
       printReport: printReport,
+      setPrintCost: function (on) { PRINT_COST = !!on; },
       exportExcel: exportExcel
     };
 

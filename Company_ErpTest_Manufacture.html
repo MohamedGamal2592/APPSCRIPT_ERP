@@ -61,9 +61,9 @@
     renderList();
   }
 
-  var LOADED_ALL = false;
-  function toggleLoadAll() { LOADED_ALL = !LOADED_ALL; renderList(); }
-
+  /* Like et_products / et_customers: the whole list is read once and
+     UIC.dataTable pages it 50 rows at a time, so search, sort and the pager
+     all work over every record. */
   function renderList(quiet) {
     /* [live-notice] the view on screen */
     if (UIC.Live.setView) UIC.Live.setView('list', { refresh: function () { renderList(true); }, loading: true });
@@ -71,8 +71,8 @@
       'جاري تحميل أوامر التصنيع...',
       'لحظة، جاري تجهيز جدول التصنيع...'
     ] });
-    companyCall('get_et_manufacture_headers', LOADED_ALL ? { loadAll: true } : {})
-      .then(function (r) { __headers = r.headers || []; renderHeadersTable(); })
+    companyCall('get_et_manufacture_headers', { loadAll: true })
+      .then(function (r) { __headers = r.headers || []; UIC.keepTableView('manufacture-table', renderHeadersTable); })
       .catch(function (e) { showError(e); })
       .finally(function () { if (!quiet) UI.hideSpinner(); });
   }
@@ -110,10 +110,7 @@
     });
     content.innerHTML = '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;">' +
       '<button class="btn btn-primary" onclick="openForm(\'\')">+ إضافة أمر تصنيع</button></div>' +
-      UIC.showAllBar({ loadedAll: LOADED_ALL, showAll: 'toggleLoadAll()', showLatest: 'toggleLoadAll()' }) +
       UIC.dataTable('manufacture-table', {
-        truncated: !LOADED_ALL,
-        showAll: 'toggleLoadAll()',
         title: 'التصنيع',
         headers: [
           { key: 'mo_number', label: 'رقم الأمر' },

@@ -55,9 +55,9 @@
     renderList();
   }
 
-  var LOADED_ALL = false;
-  function toggleLoadAll() { LOADED_ALL = !LOADED_ALL; renderList(); }
-
+  /* Like et_products / et_customers: the whole list is read once and
+     UIC.dataTable pages it 50 rows at a time, so search, sort and the pager
+     all work over every record. */
   function renderList(quiet) {
     /* [live-notice] the view on screen */
     if (UIC.Live.setView) UIC.Live.setView('list', { refresh: function () { renderList(true); }, loading: true });
@@ -66,11 +66,11 @@
       'جاري استرجاع العملاء والأصناف...',
       'لحظة، جاري تجهيز جدول العروض...'
     ] });
-    companyCall('get_et_sales_offer_headers', LOADED_ALL ? { loadAll: true } : {})
+    companyCall('get_et_sales_offer_headers', { loadAll: true })
       .then(function (r) {
         __options = r.options || {};
         __headers = r.headers || [];
-        renderHeadersTable(); try{schedulePrefetch();}catch(e){};
+        UIC.keepTableView('offer-table', renderHeadersTable); try{schedulePrefetch();}catch(e){};
       })
       .catch(function (e) { showError(e); })
       .finally(function () { if (!quiet) UI.hideSpinner(); });
@@ -115,13 +115,7 @@
     });
     content.innerHTML = '<div style="display:flex;justify-content:flex-end;margin-bottom:12px;">' +
       '<button class="btn btn-primary" onclick="openForm(\'\')">+ إضافة عرض سعر</button></div>' +
-      UIC.showAllBar({ loadedAll: LOADED_ALL, showAll: 'toggleLoadAll()', showLatest: 'toggleLoadAll()' }) +
       UIC.dataTable('offer-table', {
-        /* [RT-1] The list endpoint caps at the newest rows unless `loadAll` is
-           passed, and the search box filters only what is in memory — so the
-           table says which records the box actually searches. */
-        truncated: !LOADED_ALL,
-        showAll: 'toggleLoadAll()',
         title: 'عروض الأسعار',
         headers: [
           { key: 'invoice_number', label: 'رقم العرض' },

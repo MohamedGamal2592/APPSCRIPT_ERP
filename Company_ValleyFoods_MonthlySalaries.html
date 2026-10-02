@@ -129,6 +129,7 @@
       html += '<button id="vf-msal-cards-btn" class="vf-btn vf-btn-outline" style="padding:8px 14px;">🖨️ كشف الكروت</button>';
       html += '<button id="vf-msal-sections-btn" class="vf-btn vf-btn-outline" style="padding:8px 14px;">🖨️ كشف الأقسام</button>';
       html += '<button id="vf-msal-sections-xlsx-btn" class="vf-btn vf-btn-outline" style="padding:8px 14px;">📥 كشف الأقسام Excel</button>';
+      html += '<button id="vf-msal-compare-btn" class="vf-btn vf-btn-outline" style="padding:8px 14px;">📊 مقارنة بالشهر السابق</button>';
       html += '</div>';
 
       html += '</div>';
@@ -199,6 +200,8 @@
       if (sectionsBtn) sectionsBtn.onclick = function() { printPayrollReport('sections'); };
       var sectionsXlsxBtn = document.getElementById('vf-msal-sections-xlsx-btn');
       if (sectionsXlsxBtn) sectionsXlsxBtn.onclick = function() { exportSectionsExcel(); };
+      var compareBtn = document.getElementById('vf-msal-compare-btn');
+      if (compareBtn) compareBtn.onclick = function() { printPayrollReport('compare'); };
     }
 
     function loadData() {
@@ -237,7 +240,7 @@
         UIC.toast('اختر الشهر والسنة أولاً لعرض التقرير', 'error');
         return;
       }
-      var reportType = type === 'sections' ? 'sections' : 'cards';
+      var reportType = (type === 'sections' || type === 'compare') ? type : 'cards';
       UIC.openDownload(
         scriptUrl + '?download=payroll_report&company=9940659bd83035d7&type=' + reportType +
         '&month=' + encodeURIComponent(month) + '&year=' + encodeURIComponent(year) +
@@ -340,10 +343,16 @@
           var grand = { count: 0, basic: 0, additions: 0, deductions: 0, net: 0 };
           var summaryAoa = [['ملخص الأقسام — ' + monthName + ' ' + year], [],
             ['القسم', 'عدد الموظفين', 'إجمالي الأساسي', 'الإضافات', 'الخصومات', 'الصافي']];
+          /* First sheet: every salary row of the month in one place, so the file
+             is complete at a glance; per-section sheets follow. */
+          var ALL_SHEET_ = 'كل الموظفين';
+          names = [ALL_SHEET_].concat(names);
+          sections[ALL_SHEET_] = rows;
           names.forEach(function(name) {
             var list = sections[name];
+            var isAll = name === ALL_SHEET_;
             var labels = columns.map(function(h) { return VF_MSAL_XLSX_LABELS_[h] || h; });
-            var aoa = [[title + ' — ' + name], ['عدد الموظفين: ' + list.length], []].concat([labels]);
+            var aoa = [[title + (isAll ? '' : ' — ' + name)], ['عدد الموظفين: ' + list.length], []].concat([labels]);
             list.forEach(function(r) {
               aoa.push(columns.map(function(h) {
                 var v = r[h];
@@ -371,6 +380,7 @@
             ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: columns.length - 1 } }];
             try { ws['!sheetPr'] = { pageSetUpPr: { fitToPage: true } }; } catch (e) {}
             XLSX.utils.book_append_sheet(wb, ws, vfMsalSheetName_(name, used));
+            if (isAll) return;
             /* Summary accumulation mirrors the print report totals. */
             var t = { count: 0, basic: 0, additions: 0, deductions: 0, net: 0 };
             list.forEach(function(r) {

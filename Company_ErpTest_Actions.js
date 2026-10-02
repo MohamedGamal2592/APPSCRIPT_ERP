@@ -1354,17 +1354,35 @@ const ErpTest = (function () {
     return {
       status: 'success',
       parties: parties,
-      direction_options: ET_PARTY_DIRECTIONS.map(d => d.value),
+      /* The form offers the two sides only. ET_PARTY_DIRECTIONS still reads
+         the six-way values older rows carry (normalizeDirection_). */
+      direction_options: ['عميل', 'مورد'],
       type_options: distinctValues_(rows, 'type'),
       country_options: distinctValues_(rows, 'country'),
-      region_options: distinctValues_(rows, 'region')
+      region_options: distinctValues_(rows, 'region'),
+      region_by_country: regionsByCountry_(rows)
     };
+  }
+
+  /* country -> distinct regions seen with it, so the form's المنطقة list
+     narrows to the chosen الدولة. */
+  function regionsByCountry_(rows) {
+    const out = {};
+    const seen = {};
+    rows.forEach(r => {
+      const c = String((r.country == null) ? '' : r.country).trim();
+      const g = String((r.region == null) ? '' : r.region).trim();
+      if (!c || !g || seen[c + '\u0001' + g]) return;
+      seen[c + '\u0001' + g] = true;
+      (out[c] = out[c] || []).push(g);
+    });
+    return out;
   }
 
   function addParty_(data, user, dbId) {
     const name = String((data && data.name) || '').trim();
     if (!name) throw new Error('الاسم مطلوب');
-    const directionVal = String((data && data.customer_direction) || 'customer').trim();
+    const directionVal = String((data && data.customer_direction) || 'عميل').trim();
     var _partyNewVals = {
       name: name,
       customer_direction: directionVal,
@@ -1382,8 +1400,7 @@ const ErpTest = (function () {
     const id = created.assignedId;
     const record = created.record;
     try { var _uid = 'create_erp_test_customer_vendor_' + id; logHistory_(dbId, CUSTOMERS_SHEET, _uid, String(id), (user&&user.email)||'', 'create', _partyNewVals, null); } catch(e){}
-    bustTopLightCaches_(dbId, 'parties');
-    invalidateRefsCache_(dbId, 'parties');
+    bustPartyCaches_(dbId);   // [save-fast] was bustTopLightCaches_ + invalidateRefsCache_ — 3 script locks
     var savedParty = {
       id: id,
       name: name,
@@ -1408,7 +1425,7 @@ const ErpTest = (function () {
   function editParty_(data, user, dbId) {
     const id = Number((data && data.id));
     if (!id) throw new Error('معرف الطرف مطلوب');
-    const dirVal = String((data && data.customer_direction) || 'customer').trim();
+    const dirVal = String((data && data.customer_direction) || 'عميل').trim();
     var _editPartyNewVals = {
       name: String((data && data.name) || '').trim(),
       customer_direction: dirVal,
@@ -1425,10 +1442,12 @@ const ErpTest = (function () {
     if (!patched) throw new Error('الطرف غير موجود');
     var _editPartyOld = patched.oldRecord;
     try { var _uid = (_editPartyOld && _editPartyOld.record_uid) ? String(_editPartyOld.record_uid) : 'update_erp_test_customer_vendor_' + id; logHistory_(dbId, CUSTOMERS_SHEET, _uid, String(id), (user&&user.email)||'', 'update', _editPartyNewVals, _editPartyOld); } catch(e){}
-    bustTopLightCaches_(dbId, 'parties');
-    invalidateRefsCache_(dbId, 'parties');
-    var balMap = {};
-    try{ balMap = customerBalanceMap_(dbId); }catch(e){}
+    bustPartyCaches_(dbId);   // [save-fast] was bustTopLightCaches_ + invalidateRefsCache_ — 3 script locks
+    /* [save-fast] No customerBalanceMap_ here. It read the seven movement
+       sheets (measured ~5 s of an edit) to fill one field of the reply, and an
+       edit to a party's name, phone or classification cannot move its balance.
+       null is what get_et_parties { skipBalances } sends: the page reads the
+       balance from its own BALANCES map, which this save leaves correct. */
     var savedParty2 = {
       id: id,
       name: String((data && data.name) || '').trim(),
@@ -1442,7 +1461,7 @@ const ErpTest = (function () {
       telephone: String((data && data.telephone) || '').trim(),
       address: String((data && data.address) || '').trim(),
       created_at: (data && data.created_at) || '',
-      balance: balMap[String(id)] || 0
+      balance: null
     };
     return { status: 'success', message: 'تم تحديث الطرف', record: savedParty2, unique_id: String(id), assignedId: id };
   }
@@ -1791,10 +1810,40 @@ const ErpTest = (function () {
     return new Date(v);
   }
 
+  /* Mandatory on every save (0 is a valid entry for the cost fields, blank is not). */
+  const PURCHASING_REQUIRED_HEADER_ = [
+    ['type', 'النوع'], ['shipping_type', 'نوع الشحن'], ['supplier_name', 'المورد'], ['currency', 'العملة'],
+    ['exchange_rate', 'سعر الصرف'],
+    ['cif_insurance_value', 'قيمة التأمين (CIF)'], ['importation_reprice', 'إعادة تسعير الاستيراد'],
+    ['tax_declared_value', 'القيمة الضريبية المعلنة'], ['administrative_expenses', 'مصاريف إدارية'],
+    ['customs_expenses', 'مصاريف جمركية'], ['unloading_expenses', 'مصاريف تفريغ'], ['bank_commission', 'عمولة البنك'],
+    ['customs_clearance', 'تخليص جمركي ومينائي'], ['additional_fees', 'رسوم إضافية'],
+    ['clearance_expenses', 'مصاريف تخليص'], ['other_expenses', 'مصاريف أخرى'],
+    ['internal_cost_adjustment', 'تسوية التكلفة الداخلية']
+  ];
+  const PURCHASING_REQUIRED_LINE_ = [
+    ['product', 'المنتج'], ['qty', 'الكمية'], ['unit_price', 'سعر الوحدة'], ['other_cost', 'تكاليف أخرى'],
+    ['sales_value', 'سعر البيع'], ['movement_type', 'نوع الحركة']
+  ];
+
   function validatePurchasingHeader_(header, lines) {
     if (String((header.code == null) ? '' : header.code).trim() === '') throw new Error('الكود (Code) مطلوب');
     if (String((header.receipt_date == null) ? '' : header.receipt_date).trim() === '') throw new Error('تاريخ الاستلام مطلوب');
     if (String((header.value == null) ? '' : header.value).trim() === '') throw new Error('قيمة الفاتورة (Value) مطلوبة');
+    const blank = function (v) { return String(v == null ? '' : v).trim() === ''; };
+    PURCHASING_REQUIRED_HEADER_.forEach(function (f) {
+      if (blank(header[f[0]])) throw new Error(f[1] + ' مطلوب');
+    });
+    if (!(Number(header.exchange_rate) > 0)) throw new Error('سعر الصرف يجب أن يكون أكبر من صفر');
+    if (!lines || !lines.length) throw new Error('يجب إضافة صنف واحد على الأقل');
+    lines.forEach(function (l, i) {
+      const n = ' (الصنف ' + (i + 1) + ')';
+      PURCHASING_REQUIRED_LINE_.forEach(function (f) {
+        if (blank(l[f[0]])) throw new Error(f[1] + ' مطلوب' + n);
+      });
+      if (!(Number(l.qty) > 0)) throw new Error('الكمية يجب أن تكون أكبر من صفر' + n);
+      if (!(num0_(l.qty) * num0_(l.unit_price) * num0_(header.exchange_rate) + num0_(l.other_cost) > 0)) throw new Error('الإجمالي يجب أن يكون أكبر من صفر' + n);
+    });
     const rate = num0_(header.exchange_rate);
     const lineSum = (lines || []).reduce((s, l) => s + (num0_(l.qty) * num0_(l.unit_price) * rate + num0_(l.other_cost)), 0);
     const vbi = num0_(header.value) * rate;
@@ -2566,6 +2615,23 @@ const ErpTest = (function () {
   }
   function boxRefs_(dbId) {
     return tlRefs_(dbId, 'boxes', function () { return tlDbList_(dbId, BOX_SHEET); });
+  }
+
+  /* [save-fast] The cache work a party save actually needs.
+     bustTopLightCaches_(dbId, 'parties') + invalidateRefsCache_(dbId, 'parties')
+     took the global script lock three times (removeChunkedCache_ per key),
+     measured ~0.9 s of an add and ~2.5 s of an edit. Only one of those three
+     removals has a reader: the dashboard KPIs (customer names, 60 s TTL).
+     et_cust_sales_opts_ is read nowhere, and every party reference read goes
+     through tlRefs_, keyed on the version stamp bumped here, so the unversioned
+     refs_<db>_parties key has no reader either. */
+  function bustPartyCaches_(dbId) {
+    bumpTlRefsVersion_(dbId);
+    if (ET_SJS_READ || ET_SJS_WRITE) etBumpHead_(dbId, [CUSTOMERS_SHEET]);
+    try {
+      CacheService.getScriptCache().removeAll(['et_dashboard_kpis_' + dbId, 'et_cust_sales_opts_' + dbId]);
+      removeChunkedCache_('et_dashboard_kpis_' + dbId);
+    } catch (e) {}
   }
 
   function bustTopLightCaches_(dbId, type) {

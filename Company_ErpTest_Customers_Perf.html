@@ -111,6 +111,37 @@
   <div id="data-table" class="muted">لم تُحمَّل البيانات بعد.</div>
 </div>
 
+<div class="card">
+  <h2>٥ — الحفظ: أين يذهب وقت حفظ عميل؟</h2>
+  <div class="bar">
+    <button class="primary" id="btn-save1" onclick="runSaveProbes(1)">قياس الحفظ مرة</button>
+    <button id="btn-save3" onclick="runSaveProbes(3)">قياس الحفظ ٣ مرات</button>
+    <button id="btn-save-clear" onclick="clearSaveStats()">مسح</button>
+  </div>
+  <div class="note" style="margin:0 0 8px;">
+    <b class="warn">القياس ده بيكتب بيانات حقيقية:</b> كل مرة بتضيف صف واحد اسمه «[قياس الحفظ] …» في
+    <span dir="ltr">erp_test_customer_vendor</span> وبتعدّله مرتين، ومعاه سطور في سجل التعديلات وسجل العمليات وإيصالات الطلبات.
+    مش بيشتغل لوحده — بس لما تضغط.
+  </div>
+  <div id="save-verdict" class="verdict muted">اضغط «قياس الحفظ». أول مرة فيها تشغيل Apps Script البارد، فالقيمة التانية هي الواقعية. التفصيل من جوه الخادم بيظهر لحساب السوبر أدمن بس.</div>
+  <div id="save-table" style="margin-top:12px;"></div>
+  <div id="save-breakdown" style="margin-top:12px;"></div>
+  <div class="note">
+    كل رقم هو الوسيط. «انتظار القفل» = وقت مستني فيه طلب تاني (أي شركة) يسيب القفل العام؛ «داخل القفل» = وقت ماسكين فيه القفل وكل النظام مستنينا.
+    الصفوف المتداخلة جزء من الصف اللي فوقها، و«الباقي» = وقت جوه المرحلة من غير علامة. «الشبكة + تشغيل Apps Script» = وقت المتصفح ناقص كل اللي قاسه الخادم.
+  </div>
+</div>
+
+<div class="card">
+  <h2>٦ — الحفظ من صفحة العملاء نفسها (على الجهاز ده)</h2>
+  <div class="bar">
+    <button id="btn-page-save-refresh" onclick="renderPageSaves()">تحديث</button>
+    <button id="btn-page-save-clear" onclick="clearPageSaves()">مسح</button>
+  </div>
+  <div id="page-save-verdict" class="verdict muted">افتح صفحة <span dir="ltr">et_customers</span> واحفظ عميل (إضافة أو تعديل) — كل حفظة بتتسجل هنا: من الضغطة لحد ما الفورم اتقفل والصف ظهر، ولحد ما الخادم أكد.</div>
+  <div id="page-save-table" style="margin-top:12px;"></div>
+</div>
+
 <script>
   var params = new URLSearchParams(window.location.search);
   var SESSION_TOKEN = params.get('sessionToken') || (API.getSession() || {}).token || '';
@@ -744,9 +775,405 @@
       '<span class="muted">زمن تحميل الصفحة غير متاح في هذا المتصفح.</span>');
   }
 
+
+  /* ── ٥ — The save, measured ────────────────────────────────────────────────
+   *
+   * Three probes, run in order, never in parallel:
+   *   save_add       add_et_party straight to apiRouter — one new row, named so
+   *                  it is obvious in the sheet: «[قياس الحفظ] <time>».
+   *   save_edit      edit_et_party on that same row (the telephone changes, so
+   *                  the history writes one real column).
+   *   save_edit_api  the same edit through API.call, so the client layers —
+   *                  the request id kept in sessionStorage, the coordinator —
+   *                  show up as the gap between it and save_edit.
+   *
+   * The server returns its stage breakdown (router_timing_ms) and, since
+   * [save-diag], NAMED SPANS inside it: the request guard's two ledger writes,
+   * every script-lock wait and hold, the id scan, the history and SystemLog
+   * writes, the cache busting. A span inside another comes back as
+   * «parent/child», and the table below is drawn from whatever came back, so a
+   * span added on the server later shows up without touching this page.
+   */
+  var SAVE_PROBES = [
+    { id: 'save_add', label: 'إضافة عميل (مباشر)', detail: 'add_et_party عبر apiRouter — صف قياس جديد' },
+    { id: 'save_edit', label: 'تعديل عميل (مباشر)', detail: 'edit_et_party على نفس الصف — الهاتف بيتغير' },
+    { id: 'save_edit_api', label: 'تعديل (عبر API.call)', detail: 'نفس التعديل مع طبقات العميل: رقم الطلب والمنسّق' }
+  ];
+  var saveStats = {};
+  SAVE_PROBES.forEach(function (p) { saveStats[p.id] = freshStats(); });
+  var probeParty = null;   // the row this page created last
+  var saveRound = 0;
+
+  function setSaveBtns(disabled) {
+    ['btn-save1', 'btn-save3', 'btn-save-clear'].forEach(function (b) { var e = el(b); if (e) e.disabled = disabled; });
+  }
+  /* The server refuses a write without a request id (the duplicate guard). */
+  function newRequestId() {
+    var a = new Uint32Array(3);
+    try { crypto.getRandomValues(a); } catch (e) { for (var i = 0; i < 3; i++) a[i] = Math.floor(Math.random() * 4294967296); }
+    return 'savediag' + Array.prototype.map.call(a, function (v) { return ('00000000' + v.toString(16)).slice(-8); }).join('');
+  }
+  function rawWrite(action, data) {
+    var d = JSON.parse(JSON.stringify(data));
+    d.__request_id = newRequestId();
+    return rawCall(action, d);
+  }
+  function probeFields() {
+    var t = new Date();
+    return {
+      name: '[قياس الحفظ] ' + t.toISOString().slice(0, 19).replace('T', ' '),
+      customer_direction: 'محلي - موزع',
+      type: '', country: '', region: '', registration_number: '', tax_id: '',
+      telephone: '0', address: 'صف قياس — يمكن حذفه'
+    };
+  }
+  function editFields() {
+    var p = probeParty;
+    return {
+      id: p.id, name: p.name, customer_direction: p.customer_direction || 'محلي - موزع',
+      type: p.type || '', country: p.country || '', region: p.region || '',
+      registration_number: p.registration_number || '', tax_id: p.tax_id || '',
+      telephone: String(++saveRound), address: p.address || ''
+    };
+  }
+
+  function runSaveProbes(times) {
+    setSaveBtns(true);
+    var order = [];
+    for (var n = 0; n < times; n++) SAVE_PROBES.forEach(function (p) { order.push(p); });
+    var i = 0;
+    function step() {
+      if (i >= order.length) { setSaveBtns(false); renderSave(); return; }
+      var p = order[i++];
+      var call;
+      if (p.id === 'save_add') call = function () { return rawWrite('add_et_party', probeFields()); };
+      else if (!probeParty) call = function () { return Promise.reject(new Error('لا يوجد صف قياس — الإضافة فشلت')); };
+      else if (p.id === 'save_edit') call = function () { return rawWrite('edit_et_party', editFields()); };
+      else call = function () { return apiCall('edit_et_party', editFields()); };
+      var t0 = performance.now();
+      call().then(function (r) {
+        var dt = performance.now() - t0;
+        var s = saveStats[p.id];
+        s.samples.push(dt);
+        s.error = '';
+        if (r && r.router_timing_ms) s.timings.push({ client: dt, t: r.router_timing_ms });
+        try { s.bytes = JSON.stringify(r).length; } catch (e) { s.bytes = null; }
+        if (p.id === 'save_add' && r && r.record && r.record.id) probeParty = r.record;
+        try { console.log('[et_customers save probe]', p.id, Math.round(dt) + 'ms', r && r.router_timing_ms); } catch (e) {}
+      }).catch(function (e) {
+        saveStats[p.id].error = (e && e.message) || 'فشل الطلب';
+        try { console.warn('[et_customers save probe] FAILED', p.id, e); } catch (e2) {}
+      }).then(function () {
+        renderSave();
+        setTimeout(step, 60);
+      });
+    }
+    step();
+  }
+
+  function clearSaveStats() {
+    SAVE_PROBES.forEach(function (p) { saveStats[p.id] = freshStats(); });
+    renderSave();
+    var box = el('save-verdict');
+    if (box) { box.className = 'verdict muted'; box.innerHTML = 'تم مسح قياسات الحفظ.'; }
+  }
+
+  /* ── The span tree ──────────────────────────────────────────────────────── */
+  var SPAN_LABELS = {
+    guard_claim: 'حماية التكرار — تسجيل الطلب', guard_finalize: 'حماية التكرار — تأكيد النتيجة',
+    lock_wait: 'انتظار القفل العام', lock: 'ماسكين القفل العام',
+    cache_lock_wait: 'انتظار القفل (مسح كاش)', cache_lock: 'ماسكين القفل (مسح كاش)',
+    guard_find: 'البحث عن رقم الطلب في الإيصالات', flush: 'SpreadsheetApp.flush — كتابة فورية',
+    validate: 'التحقق من الحقول', dispatch: 'تنفيذ الحفظ نفسه', id_scan: 'قراءة عمود id لرقم جديد',
+    history: 'سجل التعديلات', firestore_http: 'طلب Firestore', change_stamp: 'ختم التغيير للأجهزة التانية',
+    refs_invalidate: 'مسح كاش المراجع', open_spreadsheet: 'فتح ملف الشيت', read_headers: 'قراءة صف العناوين',
+    script_property: 'قراءة Script Properties', system_log: 'سجل العمليات SystemLog',
+    audit_defer: 'تأجيل السجل للـ drain (Script Property)'
+  };
+  var SPAN_HINTS = {
+    guard_claim: 'ERP_Request_Receipts: قفل + بحث + سطر جديد + flush', guard_finalize: 'نفس الشيت: قفل + بحث + تحديث السطر + flush',
+    dispatch: 'addParty_ / editParty_', history: 'ERP_Record_History', system_log: 'logSystemAction_',
+    refs_invalidate: 'invalidateRefsCache_', change_stamp: 'noteRecordChange_ / noteTableChange_'
+  };
+  function ownLabel(path) {
+    if (/(^|\/)dispatch$/.test(path)) return 'كود الحفظ نفسه — قراءة/كتابة صف الشيت، والأرصدة في التعديل';
+    if (/dispatch\/lock$/.test(path)) return 'إضافة الصف في الشيت';
+    if (/guard_(claim|finalize)\/lock$/.test(path)) return 'كتابة سطر الإيصال';
+    return 'الباقي';
+  }
+  function spanLeaf(path) { var i = path.lastIndexOf('/'); return i === -1 ? path : path.slice(i + 1); }
+  function childrenOf(keys, path) {
+    return keys.filter(function (k) {
+      if (path === '') return k.indexOf('/') === -1;
+      return k.indexOf(path + '/') === 0 && k.slice(path.length + 1).indexOf('/') === -1;
+    });
+  }
+  function num(v) { v = Number(v); return isNaN(v) ? 0 : v; }
+
+  /* One sample -> { rowKey: ms }. Router stages first, then the spans, with
+     «(own)» rows so every parent's children add up to it. */
+  function saveSampleValues(x, keys) {
+    var t = x.t || {}, sp = t.spans || {}, out = {};
+    var total = num(t.server_total);
+    out.net = Math.max(0, x.client - total);
+    ['global_init', 'perf_begin', 'setup_before_auth', 'auth_validate', 'session_touch', 'kill_switch', 'perf_finish']
+      .forEach(function (k) { out[k] = num(t[k]); });
+    out.handler = num(t.handler);
+    out.system_log = num(t.logging_after_handler);
+    function walk(path, value) {
+      var kids = childrenOf(keys, path);
+      if (!kids.length) return;
+      var sum = 0;
+      kids.forEach(function (k) {
+        var v = num(sp[k]);
+        if (k === 'system_log') return;   // outside the handler; its own root
+        out[k] = v; sum += v; walk(k, v);
+      });
+      out[(path || 'handler') + '|own'] = Math.max(0, value - sum);
+    }
+    walk('', out.handler);
+    var sl = childrenOf(keys, 'system_log'), slSum = 0;
+    sl.forEach(function (k) { out[k] = num(sp[k]); slSum += out[k]; walk(k, out[k]); });
+    if (sl.length) out['system_log|own'] = Math.max(0, out.system_log - slSum);
+    var known = ['global_init', 'perf_begin', 'setup_before_auth', 'auth_validate', 'session_touch', 'kill_switch', 'handler', 'system_log', 'perf_finish']
+      .reduce(function (a, k) { return a + out[k]; }, 0);
+    out.rest = Math.max(0, total - known);
+    return out;
+  }
+  /* The row order: a depth-first walk of the union of span keys. */
+  function saveRowPlan(keys) {
+    var rows = [
+      { k: 'net', label: 'الشبكة + تشغيل Apps Script', d: 0 },
+      { k: 'global_init', label: 'تحميل كود المشروع', d: 0 },
+      { k: 'perf_begin', label: 'بدء القياس', d: 0 },
+      { k: 'setup_before_auth', label: 'الإعداد', d: 0 },
+      { k: 'auth_validate', label: 'التحقق من الجلسة', d: 0 },
+      { k: 'session_touch', label: 'تحديث الجلسة', d: 0 },
+      { k: 'kill_switch', label: 'مفتاح الإيقاف', d: 0 },
+      { k: 'handler', label: 'الطلب جوه الشركة', hint: 'صلاحيات + حماية التكرار + الحفظ', d: 0 }
+    ];
+    function walk(path, depth) {
+      var kids = childrenOf(keys, path).filter(function (k) { return k !== 'system_log'; });
+      kids.forEach(function (k) {
+        rows.push({ k: k, label: SPAN_LABELS[spanLeaf(k)] || spanLeaf(k), hint: SPAN_HINTS[spanLeaf(k)] || '', d: depth, span: k });
+        walk(k, depth + 1);
+      });
+      if (kids.length) rows.push({ k: (path || 'handler') + '|own', label: ownLabel(path || 'handler'), d: depth, own: true });
+    }
+    walk('', 1);
+    rows.push({ k: 'system_log', label: 'سجل العمليات SystemLog', hint: 'logSystemAction_ — بعد الحفظ وقبل الرد', d: 0, span: 'system_log' });
+    var sl = childrenOf(keys, 'system_log');
+    sl.forEach(function (k) { rows.push({ k: k, label: SPAN_LABELS[spanLeaf(k)] || spanLeaf(k), d: 1, span: k }); });
+    if (sl.length) rows.push({ k: 'system_log|own', label: 'الباقي', d: 1, own: true });
+    rows.push({ k: 'perf_finish', label: 'تسجيل القياس', d: 0 });
+    rows.push({ k: 'rest', label: 'غير محسوب', hint: 'داخل الخادم بين العلامات', d: 0 });
+    return rows;
+  }
+  function saveKeys(ids) {
+    var seen = {}, keys = [];
+    ids.forEach(function (id) {
+      saveStats[id].timings.forEach(function (x) {
+        Object.keys((x.t && x.t.spans) || {}).forEach(function (k) { if (!seen[k]) { seen[k] = 1; keys.push(k); } });
+      });
+    });
+    return keys;
+  }
+  function saveMedian(id, keys, rowKey) {
+    return median(saveStats[id].timings.map(function (x) { return saveSampleValues(x, keys)[rowKey] || 0; }));
+  }
+  function lastCount(id, span) {
+    var tm = saveStats[id].timings;
+    for (var i = tm.length - 1; i >= 0; i--) {
+      var c = (tm[i].t && tm[i].t.span_counts) || {};
+      if (c[span] != null) return c[span];
+    }
+    return null;
+  }
+  /* Sum of every span whose last segment is `leaf`, per sample, then the median. */
+  function leafSum(id, leaf) {
+    return median(saveStats[id].timings.map(function (x) {
+      var sp = (x.t && x.t.spans) || {}, s = 0;
+      Object.keys(sp).forEach(function (k) { if (spanLeaf(k) === leaf) s += num(sp[k]); });
+      return s;
+    }));
+  }
+  function leafCount(id, leaf) {
+    var tm = saveStats[id].timings;
+    if (!tm.length) return null;
+    var c = (tm[tm.length - 1].t && tm[tm.length - 1].t.span_counts) || {}, n = 0;
+    Object.keys(c).forEach(function (k) { if (spanLeaf(k) === leaf) n += num(c[k]); });
+    return n;
+  }
+
+  function renderSave() {
+    /* The totals table — the same columns as section ١. */
+    var h = '<table><thead><tr><th>القياس</th><th class="n">الأخير</th><th class="n">الأدنى</th><th class="n">الوسيط</th>' +
+      '<th class="n">الأعلى</th><th class="n">عدد</th><th class="n">قراءات الشيت</th><th>ملاحظة</th></tr></thead><tbody>';
+    SAVE_PROBES.forEach(function (p) {
+      var s = saveStats[p.id], a = s.samples;
+      var reads = s.timings.length ? s.timings[s.timings.length - 1].t.sheet_reads : '';
+      h += '<tr><td><b>' + esc(p.label) + '</b><div class="muted" style="font-size:11px;">' + esc(p.detail) + '</div></td>' +
+        '<td class="n">' + ms(a.length ? a[a.length - 1] : null) + '</td><td class="n">' + ms(lo(a)) + '</td>' +
+        '<td class="n">' + ms(median(a)) + '</td><td class="n">' + ms(hi(a)) + '</td><td class="n">' + a.length + '</td>' +
+        '<td class="n">' + (reads === '' || reads == null ? '—' : esc(reads)) + '</td>' +
+        '<td>' + (s.error ? '<span class="bad">' + esc(s.error) + '</span>' : '') + '</td></tr>';
+    });
+    h += '</tbody></table>';
+    setHtml('save-table', h);
+
+    /* The breakdown — add and edit side by side (the API.call edit carries no
+       server timing: API.call does not ask for it). */
+    var cols = ['save_add', 'save_edit'].filter(function (id) { return saveStats[id].timings.length; });
+    if (!cols.length) {
+      setHtml('save-breakdown', '');
+      var anySample = SAVE_PROBES.some(function (p) { return saveStats[p.id].samples.length; });
+      if (anySample) {
+        var vb = el('save-verdict');
+        if (vb) { vb.className = 'verdict muted'; vb.innerHTML = 'لم يرجع الخادم تفصيلًا. إما أن الكود الجديد لم يُرفع بعد (<span dir="ltr">clasp push</span>)، أو أن الحساب ليس سوبر أدمن.'; }
+      }
+      return;
+    }
+    var keys = saveKeys(cols);
+    var plan = saveRowPlan(keys);
+    var colMax = {};
+    cols.forEach(function (id) {
+      colMax[id] = 0;
+      plan.forEach(function (r) { if (r.own || r.k === 'handler') return; var v = saveMedian(id, keys, r.k); if (v > colMax[id]) colMax[id] = v; });
+    });
+    var b = '<div class="scroll" style="max-height:none;"><table><thead><tr><th>المرحلة</th>';
+    cols.forEach(function (id) { b += '<th class="n">' + esc(SAVE_PROBES.filter(function (p) { return p.id === id; })[0].label) + '</th>'; });
+    b += '</tr></thead><tbody>';
+    plan.forEach(function (r) {
+      var vals = cols.map(function (id) { return saveMedian(id, keys, r.k); });
+      if (r.own && vals.every(function (v) { return !v; })) return;
+      var cnt = r.span ? lastCount(cols[0], r.span) : null;
+      b += '<tr><td style="padding-right:' + (8 + r.d * 18) + 'px;">' + (r.own ? '<span class="muted">' + esc(r.label) + '</span>' : '<b>' + esc(r.label) + '</b>') +
+        (cnt && cnt > 1 ? ' <span class="pill">×' + cnt + '</span>' : '') +
+        (r.hint ? '<div class="muted" style="font-size:11px;" dir="auto">' + esc(r.hint) + '</div>' : '') + '</td>';
+      cols.forEach(function (id, ix) {
+        var v = vals[ix];
+        var top = !r.own && r.k !== 'handler' && v > 0 && v === colMax[id];
+        b += '<td class="n' + (top ? ' bad' : '') + '">' + (top ? '<b>' + ms(v) + '</b>' : ms(v)) + '</td>';
+      });
+      b += '</tr>';
+    });
+    b += '<tr><td><b>الإجمالي عند المتصفح</b></td>';
+    cols.forEach(function (id) { b += '<td class="n"><b>' + ms(median(saveStats[id].timings.map(function (x) { return x.client; }))) + '</b></td>'; });
+    b += '</tr></tbody></table></div>';
+    setHtml('save-breakdown', b);
+    renderSaveVerdict(cols, keys);
+  }
+
+  /* The sentence per finding. Every figure is a median; every claim names the
+     number it rests on, so the verdict can be checked against the table. */
+  function renderSaveVerdict(cols, keys) {
+    var box = el('save-verdict');
+    if (!box) return;
+    var lines = [];
+    var add = cols.indexOf('save_add') !== -1 ? 'save_add' : null;
+    var edit = cols.indexOf('save_edit') !== -1 ? 'save_edit' : null;
+    function tot(id) { return median(saveStats[id].timings.map(function (x) { return x.client; })); }
+    function pct(v, t) { return t ? Math.round(v / t * 100) + '%' : '—'; }
+    var floor = median(stats.floor.samples);
+    [add, edit].forEach(function (id) {
+      if (!id) return;
+      var t = tot(id);
+      var guard = saveMedian(id, keys, 'guard_claim') + saveMedian(id, keys, 'guard_finalize');
+      var disp = saveMedian(id, keys, 'dispatch');
+      var log = saveMedian(id, keys, 'system_log');
+      var net = saveMedian(id, keys, 'net') + saveMedian(id, keys, 'global_init');
+      lines.push('<b>' + (id === add ? 'الإضافة' : 'التعديل') + ' ' + ms(t) + '</b>: ' +
+        'حماية التكرار <b>' + ms(guard) + '</b> (' + pct(guard, t) + ') · ' +
+        'الحفظ نفسه <b>' + ms(disp) + '</b> (' + pct(disp, t) + ') · ' +
+        'سجل العمليات <b>' + ms(log) + '</b> (' + pct(log, t) + ') · ' +
+        'شبكة + تشغيل + تحميل الكود <b>' + ms(net) + '</b> (' + pct(net, t) + ')' +
+        (floor != null ? ' — أقل طلب قراءة (قسم ١) <b>' + ms(floor) + '</b>، يعني الحفظ بيزود <b>' + ms(Math.max(0, t - floor)) + '</b>.' : '.'));
+    });
+    var ref = add || edit;
+    var locks = (leafCount(ref, 'lock') || 0) + (leafCount(ref, 'cache_lock') || 0);
+    var wait = (leafSum(ref, 'lock_wait') || 0) + (leafSum(ref, 'cache_lock_wait') || 0);
+    lines.push('القفل العام للسكريبت (مشترك بين كل الشركات) اتاخد <b>' + locks + '</b> مرات في ' + (ref === add ? 'الإضافة' : 'التعديل') +
+      '، والانتظار عليه <b>' + ms(wait) + '</b>' + (wait > 300 ? ' <span class="bad">— في طلبات تانية شغالة في نفس الوقت</span>' : ' <span class="ok">— مفيش زحمة دلوقتي</span>') + '.');
+    var fl = leafSum(ref, 'flush'), fc = leafCount(ref, 'flush');
+    if (fc) lines.push('<span dir="ltr">SpreadsheetApp.flush</span> ×' + fc + ' = <b>' + ms(fl) + '</b> (كله من حماية التكرار).');
+    var fh = leafSum(ref, 'firestore_http'), fhc = leafCount(ref, 'firestore_http');
+    if (fhc) lines.push('طلبات Firestore ×' + fhc + ' = <b>' + ms(fh) + '</b> (سجل التعديلات + سجل العمليات) — طلبات HTTP متتالية والمستخدم مستنيها.');
+    var sp = leafSum(ref, 'script_property'), spc = leafCount(ref, 'script_property');
+    if (spc) lines.push('قراءات Script Properties ×' + spc + ' = <b>' + ms(sp) + '</b>.');
+    /* [save-fast A] did the audit writes leave the request? */
+    var ad = leafSum(ref, 'audit_defer'), adc = leafCount(ref, 'audit_defer');
+    if (adc) lines.push('<span class="ok">سجل التعديلات وسجل العمليات اتأجلوا للـ drain</span> ×' + adc + ' = <b>' + ms(ad) + '</b> بدل الكتابة في الشيتات وقت الحفظ.');
+    else if (saveMedian(ref, keys, 'dispatch/history') > 0) lines.push('<span class="warn">سجل التعديلات لسه بيتكتب وقت الحفظ</span> — التأجيل بيشتغل بس لو الـ drain (<span dir="ltr">drainHistoryQueue_</span>) اشتغل في آخر ١٠ دقايق.');
+    if (add && edit) {
+      var ownA = saveMedian(add, keys, 'dispatch|own'), ownE = saveMedian(edit, keys, 'dispatch|own');
+      if (ownE - ownA > 1000) lines.push('<span class="bad">التعديل أبطأ من الإضافة في «كود الحفظ نفسه» بـ ' + ms(ownE - ownA) + '</span> — ' +
+        '<span dir="ltr">editParty_</span> بيحسب الأرصدة كلها (<span dir="ltr">customerBalanceMap_</span>، ٧ شيتات) علشان يرجّع عمود الرصيد، والصفحة عندها الرصيد أصلًا.');
+    }
+    /* The biggest leaves overall, which is where to look first. The same step
+       in two places (the guard's two flushes, the two Firestore calls) is one
+       line, summed — that is the cost a fix would remove. */
+    var byLabel = {}, leaves = [];
+    saveRowPlan(keys).forEach(function (r) {
+      if (r.k === 'handler' || r.k === 'rest' || (r.own && r.label === 'الباقي')) return;
+      if (r.span && childrenOf(keys, r.span).length) return;   // a parent: its children speak for it
+      if (r.k === 'system_log' && childrenOf(keys, 'system_log').length) return;
+      if (!byLabel[r.label]) { byLabel[r.label] = { label: r.label, v: 0 }; leaves.push(byLabel[r.label]); }
+      byLabel[r.label].v += saveMedian(ref, keys, r.k) || 0;
+    });
+    leaves.sort(function (a, b) { return b.v - a.v; });
+    lines.push('<span class="bad">أكبر ٣ بنود</span> في ' + (ref === add ? 'الإضافة' : 'التعديل') + ': ' +
+      leaves.slice(0, 3).map(function (x) { return esc(x.label) + ' <b>' + ms(x.v) + '</b>'; }).join(' · ') + '.');
+    var api = median(saveStats.save_edit_api.samples), rawE = median(saveStats.save_edit.samples);
+    if (api != null && rawE != null) lines.push('طبقات العميل (API.call) تضيف <b>' + ms(Math.max(0, api - rawE)) + '</b> على التعديل' +
+      (api - rawE > 150 ? ' <span class="bad">— قيمة تستحق النظر</span>' : ' <span class="ok">— ضمن الضجيج</span>') + '.');
+    box.className = 'verdict';
+    box.innerHTML = lines.join('<br>');
+  }
+
+  /* ── ٦ — The real page's own saves, from this device ───────────────────────
+   * Written by Company_ErpTest_Customers.html (saveParty, [save-diag]). */
+  var PAGE_SAVE_KEY = 'et_save_timing_v1';
+  function pageSaves() {
+    try { var a = JSON.parse(localStorage.getItem(PAGE_SAVE_KEY) || '[]'); return Array.isArray(a) ? a : []; } catch (e) { return []; }
+  }
+  function clearPageSaves() { try { localStorage.removeItem(PAGE_SAVE_KEY); } catch (e) {} renderPageSaves(); }
+  function renderPageSaves() {
+    var all = pageSaves();
+    var box = el('page-save-verdict');
+    if (!all.length) { setHtml('page-save-table', ''); return; }
+    var h = '<table><thead><tr><th>النوع</th><th class="n">عدد</th><th class="n">قراءة الفورم</th><th class="n">رسم الصف الفوري</th>' +
+      '<th class="n">الفورم اتقفل والصف ظهر</th><th class="n">الخادم أكد</th><th class="n">إعادة الرسم بعد التأكيد</th><th class="n">صفوف الجدول</th></tr></thead><tbody>';
+    var med = {};
+    ['add', 'edit'].forEach(function (kind) {
+      var l = all.filter(function (x) { return x.kind === kind && x.ok; });
+      function m(f) { return median(l.map(function (x) { return x[f]; }).filter(function (v) { return v != null; })); }
+      med[kind] = { feedback: m('feedback'), confirmed: m('confirmed') };
+      h += '<tr><td><b>' + (kind === 'add' ? 'إضافة' : 'تعديل') + '</b></td><td class="n">' + l.length + '</td>' +
+        '<td class="n">' + ms(m('collect')) + '</td><td class="n">' + ms(m('paint')) + '</td>' +
+        '<td class="n"><b>' + ms(m('feedback')) + '</b></td><td class="n"><b>' + ms(m('confirmed')) + '</b></td>' +
+        '<td class="n">' + ms(m('reconcile')) + '</td><td class="n">' + (l.length ? l[l.length - 1].rows : '—') + '</td></tr>';
+    });
+    h += '</tbody></table>';
+    var failed = all.filter(function (x) { return !x.ok; });
+    if (failed.length) h += '<div class="note"><span class="bad">' + failed.length + ' حفظ فشل</span>: ' +
+      failed.slice(-3).map(function (x) { return esc(x.err || ''); }).join(' · ') + '</div>';
+    setHtml('page-save-table', h);
+    if (box) {
+      var parts = [];
+      ['add', 'edit'].forEach(function (k) {
+        if (med[k].confirmed == null) return;
+        parts.push((k === 'add' ? 'الإضافة' : 'التعديل') + ': المستخدم شاف الصف بعد <b>' + ms(med[k].feedback) + '</b>، والخادم أكد بعد <b>' + ms(med[k].confirmed) + '</b>');
+      });
+      box.className = 'verdict';
+      box.innerHTML = parts.join('<br>') + (parts.length ? '<br>الفرق بين الرقمين هو وقت الخادم — المستخدم مش مستنيه، بس الصف بيفضل «…» ومفيش أزرار عليه لحد التأكيد.' : '');
+    }
+  }
+
   renderProbeTable();
   renderBreakdown();
   renderLoadTiming();
+  renderSave();
+  renderPageSaves();
   /* The table first, the way this URL asked for it. Then one automatic pass of
      the call probes — but not while a page-open series is running, where it
      would compete for the server with the very load being measured. */

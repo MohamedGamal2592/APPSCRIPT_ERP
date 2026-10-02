@@ -49,6 +49,9 @@ function registerValleyFoods_() {
       { action: 'vf_hr_overtime', template: 'Company_ValleyFoods_Overtime', title: 'العمل الإضافي', nav: false },
       { action: 'vf_hr_monthly_salaries', template: 'Company_ValleyFoods_MonthlySalaries', title: 'الرواتب الشهرية', nav: false },
       { action: 'vf_hr_attendance', template: 'Company_ValleyFoods_Attendance', title: 'الحضور والانصراف', nav: false },
+      /* NOTE: its own grantable page — needs a row in ERP_Pages_Matrix before a
+         non-super-admin can open it or see it in the الموارد البشرية menu. */
+      { action: 'vf_hr_analysis', template: 'Company_ValleyFoods_HR_Analysis', title: 'تحليلات الموارد البشرية', label: 'تحليلات الموارد البشرية', nav: false },
 
       // ----- إعدادات شؤون الموظفين (جداول مرجعية) -----
       { action: 'vf_hr_settings_overtime', template: 'Company_ValleyFoods_HR_Settings', title: 'إعدادات العمل الإضافي', label: 'إعدادات العمل الإضافي', nav: false },
