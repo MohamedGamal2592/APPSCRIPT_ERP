@@ -40,7 +40,8 @@ const B4 = {
 const KEEP = ['get_xlsx_export', 'prefetch_refs', 'get_page_versions'];
 const MFG = ['get_et_manufacture_headers', 'get_et_manufacture_options', 'get_et_manufacture_lines', 'get_et_manufacture_print',
   'get_et_manufacture_template', 'add_et_manufacture', 'edit_et_manufacture', 'delete_et_manufacture',
-  'approve_et_manufacture', 'complete_et_manufacture', 'cancel_et_manufacture'];
+  'approve_et_manufacture', 'complete_et_manufacture', 'cancel_et_manufacture',
+  'start_et_manufacture', 'save_et_manufacture_progress', 'get_et_manufacture_order'];
 const EXTRA_ALLOWED = ['get_et_sync']; // P11
 const allowedActions = new Set([...Object.values(B4), ...KEEP, ...MFG, ...EXTRA_ALLOWED]);
 

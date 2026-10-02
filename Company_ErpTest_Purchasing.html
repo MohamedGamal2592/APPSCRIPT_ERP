@@ -218,18 +218,18 @@
         { key: 'value', label: 'القيمة (Value) *', type: 'number', required: true }
       ]},
       { title: 'التكاليف والمصاريف', open: true, fields: [
-        { key: 'cif_insurance_value', label: 'قيمة التأمين (CIF)', type: 'number', required: true },
-        { key: 'importation_reprice', label: 'إعادة تسعير الاستيراد', type: 'number', required: true },
-        { key: 'tax_declared_value', label: 'القيمة الضريبية المعلنة', type: 'number', required: true },
-        { key: 'administrative_expenses', label: 'مصاريف إدارية', type: 'number', required: true },
-        { key: 'customs_expenses', label: 'مصاريف جمركية', type: 'number', required: true },
-        { key: 'unloading_expenses', label: 'مصاريف تفريغ', type: 'number', required: true },
-        { key: 'bank_commission', label: 'عمولة البنك', type: 'number', required: true },
-        { key: 'customs_clearance', label: 'تخليص جمركي ومينائي', type: 'number', required: true },
-        { key: 'additional_fees', label: 'رسوم إضافية', type: 'number', required: true },
-        { key: 'clearance_expenses', label: 'مصاريف تخليص', type: 'number', required: true },
-        { key: 'other_expenses', label: 'مصاريف أخرى', type: 'number', required: true },
-        { key: 'internal_cost_adjustment', label: 'تسوية التكلفة الداخلية', type: 'number', required: true }
+        { key: 'cif_insurance_value', label: 'قيمة التأمين (CIF)', type: 'number', required: true, default: 0 },
+        { key: 'importation_reprice', label: 'إعادة تسعير الاستيراد', type: 'number', required: true, default: 0 },
+        { key: 'tax_declared_value', label: 'القيمة الضريبية المعلنة', type: 'number', required: true, default: 0 },
+        { key: 'administrative_expenses', label: 'مصاريف إدارية', type: 'number', required: true, default: 0 },
+        { key: 'customs_expenses', label: 'مصاريف جمركية', type: 'number', required: true, default: 0 },
+        { key: 'unloading_expenses', label: 'مصاريف تفريغ', type: 'number', required: true, default: 0 },
+        { key: 'bank_commission', label: 'عمولة البنك', type: 'number', required: true, default: 0 },
+        { key: 'customs_clearance', label: 'تخليص جمركي ومينائي', type: 'number', required: true, default: 0 },
+        { key: 'additional_fees', label: 'رسوم إضافية', type: 'number', required: true, default: 0 },
+        { key: 'clearance_expenses', label: 'مصاريف تخليص', type: 'number', required: true, default: 0 },
+        { key: 'other_expenses', label: 'مصاريف أخرى', type: 'number', required: true, default: 0 },
+        { key: 'internal_cost_adjustment', label: 'تسوية التكلفة الداخلية', type: 'number', required: true, default: 0 }
       ]},
       { title: 'الضرائب وأخرى', fields: [
         { key: 'purchase_tax', label: 'ضريبة الشراء', type: 'number' },
@@ -246,8 +246,8 @@
     if (v !== null && v !== undefined && v !== '') return v;
     if (s.type === 'date' && s.default === 'today') return formatDate(new Date());
     if (s.default !== undefined && s.default !== null) return s.default;
-    /* A mandatory number starts blank on a new record so it has to be typed
-       (0 is accepted); optional numbers keep defaulting to 0. */
+    /* A mandatory number with no default of its own starts blank so it has to
+       be typed; the cost fields set default: 0. Optional numbers default to 0. */
     return s.type === 'number' && !s.required ? 0 : '';
   }
 

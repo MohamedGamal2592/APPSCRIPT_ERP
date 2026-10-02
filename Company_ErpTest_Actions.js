@@ -261,10 +261,14 @@ const ErpTest = (function () {
     'get_et_manufacture_lines': { handler: getManufactureLines_, page: 'et_manufacture', access: 'read', primaryLogTable: MFG_LINES_SHEET },
     'get_et_manufacture_template': { handler: getManufactureTemplate_, page: 'et_manufacture', access: 'read', primaryLogTable: MFG_LINES_SHEET },
     'get_et_manufacture_print': { handler: getManufacturePrint_, page: 'et_manufacture_print', access: 'read', primaryLogTable: MFG_SHEET },
+    // one order + its lines for the production / review screens, under the manufacture page's own permission
+    'get_et_manufacture_order': { handler: getManufacturePrint_, page: 'et_manufacture', access: 'read', primaryLogTable: MFG_SHEET },
     'add_et_manufacture': { handler: addManufacture_, page: 'et_manufacture', access: 'write', primaryLogTable: MFG_SHEET },
     'edit_et_manufacture': { handler: editManufacture_, page: 'et_manufacture', access: 'full', primaryLogTable: MFG_SHEET },
     'delete_et_manufacture': { handler: deleteManufacture_, page: 'et_manufacture', access: 'full', primaryLogTable: MFG_SHEET },
     'approve_et_manufacture': { handler: approveManufacture_, page: 'et_manufacture', access: 'write', primaryLogTable: MFG_SHEET },
+    'start_et_manufacture': { handler: startManufacture_, page: 'et_manufacture', access: 'write', primaryLogTable: MFG_SHEET },
+    'save_et_manufacture_progress': { handler: saveManufactureProgress_, page: 'et_manufacture', access: 'write', primaryLogTable: MFG_SHEET },
     'complete_et_manufacture': { handler: completeManufacture_, page: 'et_manufacture', access: 'write', primaryLogTable: MFG_SHEET },
     'cancel_et_manufacture': { handler: cancelManufacture_, page: 'et_manufacture', access: 'full', primaryLogTable: MFG_SHEET },
     'get_et_sync': { handler: getEtSync_, page: 'et_dashboard', access: 'read', primaryLogTable: '' },
@@ -4654,10 +4658,13 @@ const ErpTest = (function () {
   register('get_et_manufacture_lines', getManufactureLines_);
   register('get_et_manufacture_template', getManufactureTemplate_);
   register('get_et_manufacture_print', getManufacturePrint_);
+  register('get_et_manufacture_order', getManufacturePrint_);
   register('add_et_manufacture', addManufacture_);
   register('edit_et_manufacture', editManufacture_);
   register('delete_et_manufacture', deleteManufacture_);
   register('approve_et_manufacture', approveManufacture_);
+  register('start_et_manufacture', startManufacture_);
+  register('save_et_manufacture_progress', saveManufactureProgress_);
   register('complete_et_manufacture', completeManufacture_);
   register('cancel_et_manufacture', cancelManufacture_);
 
@@ -4676,13 +4683,19 @@ const ErpTest = (function () {
 
   // =========================================
   // Manufacturing (plan P5) — orders + material lines.
-  // State machine: add -> [Pending, Open]; approve -> [Approved, Open];
-  // complete -> [Approved, Completed] (terminal, stock moves);
-  // cancel -> [*, Cancelled] (terminal, no stock move).
+  // State machine: add -> [Pending, Open] (header + materials, editable);
+  // approve -> [Approved, Open]; start -> [Approved, In Progress];
+  // save progress (In Progress only) -> planned/produced qty, consumed and
+  // added materials, no stock move; complete -> [Approved, Completed]
+  // (In Progress only, terminal, stock moves);
+  // cancel (Open or In Progress) -> [*, Cancelled] (terminal, no stock move).
   // Stock/costs only count orders with production_status = Completed and
   // an empty deleted_at (see etStockMap_, getProductMovement_, incomeStatementCore_).
   // =========================================
   function mfgStr_(v) { return String(v == null ? '' : v).trim(); }
+  const MFG_OPEN = 'Open', MFG_IN_PROGRESS = 'In Progress', MFG_COMPLETED = 'Completed', MFG_CANCELLED = 'Cancelled';
+  function mfgStatus_(order) { return mfgStr_(order && order.production_status) || MFG_OPEN; }
+  function mfgBlank_(v) { return v === undefined || v === null || mfgStr_(v) === ''; }
 
   function unitCostOf_(dbId, productId) {
     const wanted = mfgStr_(productId);
@@ -4779,7 +4792,7 @@ const ErpTest = (function () {
         mo_unique_id: uid,
         product_id: l.product_id,
         planned_qty: l.planned_qty,
-        consumed_qty: '',
+        consumed_qty: mfgBlank_(l.consumed_qty) ? '' : l.consumed_qty,
         unit_cost: l.unit_cost,
         total_cost: l.total_cost,
         notes: l.notes,
@@ -4958,6 +4971,90 @@ const ErpTest = (function () {
     return { status: 'success', message: 'تم اعتماد أمر التصنيع' };
   }
 
+  /** Open -> In Progress. Approval is the gate: production never starts on an unapproved order. */
+  function startManufacture_(data, user, dbId) {
+    const uid = mfgStr_(data && data.unique_id);
+    if (!uid) throw new Error('معرف الأمر مطلوب');
+    const out = executeWithLock_(function () {
+      const order = mfgFindOrder_(dbId, uid);
+      if (!order) throw new Error('أمر التصنيع غير موجود');
+      if (mfgStr_(order.approval_status) !== 'Approved') throw new Error('يجب اعتماد الأمر قبل بدء التنفيذ');
+      if (mfgStatus_(order) !== MFG_OPEN) throw new Error('لا يمكن بدء التنفيذ إلا لأمر مفتوح');
+      // started_at / started_by land only where the tab has those columns
+      // (MFG_HEADERS / etRepairMfgHeaders_); no column is added inside a request.
+      const patched = tlDbPatch_(dbId, MFG_SHEET, uid, {
+        production_status: MFG_IN_PROGRESS,
+        started_at: new Date(),
+        started_by: (user && user.email) || ''
+      }, { user: user, version: data && data.version });
+      if (!patched) throw new Error('أمر التصنيع غير موجود');
+      return { old: order, record: patched.record };
+    });
+    try { logHistory_(dbId, MFG_SHEET, 'update_erp_test_manufacture_orders_' + uid, uid, (user && user.email) || '', 'update', out.record, out.old); } catch (e) {}
+    bustTopLightCaches_(dbId, 'manufacture');
+    return { status: 'success', message: 'بدأ تنفيذ أمر التصنيع', unique_id: uid, record: out.record };
+  }
+
+  /* In Progress only: planned/produced quantities, extra cost, notes and the
+   * material lines (consumed qty; materials may be added or removed). No stock
+   * moves until complete. Lines are re-written as a fresh generation, as edit does. */
+  function validateManufactureProgress_(order, header, lines) {
+    if (num0_(header.planned_qty) <= 0) throw new Error('الكمية المخططة يجب أن تكون أكبر من صفر');
+    if (!mfgBlank_(header.produced_qty) && !(Number(header.produced_qty) >= 0)) throw new Error('الكمية المنتجة لا يمكن أن تكون سالبة');
+    if (!mfgBlank_(header.extra_cost) && Number(header.extra_cost) < 0) throw new Error('التكاليف الإضافية لا يمكن أن تكون سالبة');
+    if (!lines.length) throw new Error('يجب إضافة خامة واحدة على الأقل');
+    const seen = {};
+    lines.forEach(function (l) {
+      const pid = mfgStr_(l && l.product_id);
+      if (!pid) throw new Error('الخامة مطلوبة لكل سطر');
+      if (pid === mfgStr_(order.product_id)) throw new Error('لا يمكن استخدام المنتج التام كخامة');
+      if (seen[pid]) throw new Error('الخامة مكررة في نفس الأمر');
+      seen[pid] = true;
+      if (!(Number(l.planned_qty || 0) >= 0)) throw new Error('الكمية المخططة للخامة لا يمكن أن تكون سالبة');
+      if (!mfgBlank_(l.consumed_qty) && !(Number(l.consumed_qty) >= 0)) throw new Error('الكمية المستهلكة لا يمكن أن تكون سالبة');
+      if (num0_(l.planned_qty) <= 0 && mfgBlank_(l.consumed_qty)) throw new Error('أدخل الكمية المخططة أو المستهلكة لكل خامة');
+    });
+  }
+
+  function saveManufactureProgress_(data, user, dbId) {
+    const header = (data && data.header) || {};
+    const lines = (data && data.lines) || [];
+    const uid = mfgStr_(header.unique_id || (data && data.unique_id));
+    if (!uid) throw new Error('معرف الأمر مطلوب');
+    const out = executeWithLock_(function () {
+      const order = mfgFindOrder_(dbId, uid);
+      if (!order) throw new Error('أمر التصنيع غير موجود');
+      if (mfgStatus_(order) !== MFG_IN_PROGRESS) throw new Error('تسجيل الإنتاج متاح فقط لأمر قيد التنفيذ');
+      validateManufactureProgress_(order, header, lines);
+      let materials = 0;
+      const priced = lines.map(function (l) {
+        const uc = unitCostOf_(dbId, l.product_id);
+        const qty = mfgBlank_(l.consumed_qty) ? num0_(l.planned_qty) : num0_(l.consumed_qty);
+        materials += qty * uc;
+        return { product_id: mfgStr_(l.product_id), planned_qty: num0_(l.planned_qty), consumed_qty: mfgBlank_(l.consumed_qty) ? '' : num0_(l.consumed_qty), unit_cost: uc, total_cost: qty * uc, notes: l.notes == null ? '' : l.notes };
+      });
+      const extra = num0_(header.extra_cost);
+      const produced = mfgBlank_(header.produced_qty) ? '' : num0_(header.produced_qty);
+      const basis = produced !== '' && produced > 0 ? produced : num0_(header.planned_qty);
+      const patched = tlDbPatch_(dbId, MFG_SHEET, uid, {
+        planned_qty: num0_(header.planned_qty),
+        produced_qty: produced,
+        materials_cost: materials,
+        extra_cost: extra,
+        total_cost: materials + extra,
+        unit_cost: basis > 0 ? (materials + extra) / basis : 0,
+        notes: header.notes == null ? (order.notes || '') : header.notes
+      }, { user: user, version: header.version });
+      if (!patched) throw new Error('أمر التصنيع غير موجود');
+      tlDbSoftDeleteWhere_(dbId, MFG_LINES_SHEET, 'mo_unique_id', uid, { user: user });
+      mfgWriteLines_(dbId, uid, priced, user);
+      return { old: order, record: patched.record };
+    });
+    try { logHistory_(dbId, MFG_SHEET, 'update_erp_test_manufacture_orders_' + uid, uid, (user && user.email) || '', 'update', out.record, out.old); } catch (e) {}
+    bustTopLightCaches_(dbId, 'manufacture');
+    return { status: 'success', message: 'تم حفظ بيانات الإنتاج', unique_id: uid, assignedId: uid, record: out.record };
+  }
+
   function completeManufacture_(data, user, dbId) {
     data = data || {};
     const uid = mfgStr_(data.unique_id);
@@ -4966,8 +5063,11 @@ const ErpTest = (function () {
       const order = mfgFindOrder_(dbId, uid);
       if (!order) throw new Error('أمر التصنيع غير موجود');
       if (mfgStr_(order.approval_status) !== 'Approved') throw new Error('يجب اعتماد الأمر قبل الإكمال');
-      if (mfgStr_(order.production_status || 'Open') !== 'Open') throw new Error('الأمر مغلق');
-      const produced = num0_(data.produced_qty);
+      const st = mfgStatus_(order);
+      if (st === MFG_COMPLETED || st === MFG_CANCELLED) throw new Error('الأمر مغلق');
+      if (st !== MFG_IN_PROGRESS) throw new Error('يجب بدء تنفيذ الأمر قبل الإكمال');
+      // The produced quantity recorded on the order (save progress) unless the request gives one.
+      const produced = num0_(mfgBlank_(data.produced_qty) ? order.produced_qty : data.produced_qty);
       if (!(produced > 0)) throw new Error('الكمية المنتجة مطلوبة');
       if (!mfgStr_(data.completion_date)) throw new Error('تاريخ الإكمال مطلوب');
       // Version check before any line is patched, so a stale request writes nothing.
@@ -4985,7 +5085,9 @@ const ErpTest = (function () {
       const lines = mfgLiveLines_(dbId, uid);
       const priced = lines.map(function (l) {
         const p = payload[mfgStr_(l.unique_id)];
-        const consumed = (p && p.consumed_qty !== undefined && p.consumed_qty !== null && p.consumed_qty !== '') ? Number(p.consumed_qty) : num0_(l.planned_qty);
+        // Request value, else the consumed qty saved with the progress, else the plan.
+        const consumed = (p && !mfgBlank_(p.consumed_qty)) ? Number(p.consumed_qty)
+          : (!mfgBlank_(l.consumed_qty) ? Number(l.consumed_qty) : num0_(l.planned_qty));
         const avail = num0_(available[mfgStr_(l.product_id)]);
         if (!(consumed >= 0) || consumed > avail) {
           throw new Error('الكمية المستهلكة من ' + (names[mfgStr_(l.product_id)] || l.product_id) + ' تتجاوز الرصيد المتاح (المتاح: ' + avail + ')');
@@ -5026,9 +5128,10 @@ const ErpTest = (function () {
     const out = executeWithLock_(function () {
       const order = mfgFindOrder_(dbId, uid);
       if (!order) throw new Error('أمر التصنيع غير موجود');
-      if (mfgStr_(order.production_status || 'Open') !== 'Open') throw new Error('الأمر مغلق');
+      const st = mfgStatus_(order);
+      if (st !== MFG_OPEN && st !== MFG_IN_PROGRESS) throw new Error('الأمر مغلق');
       const patched = tlDbPatch_(dbId, MFG_SHEET, uid, {
-        production_status: 'Cancelled',
+        production_status: MFG_CANCELLED,
         cancelled_at: new Date(),
         cancelled_by: (user && user.email) || ''
       }, { user: user, version: data && data.version });
@@ -5038,6 +5141,38 @@ const ErpTest = (function () {
     try { logHistory_(dbId, MFG_SHEET, 'update_erp_test_manufacture_orders_' + uid, uid, (user && user.email) || '', 'update', out.record, out.old); } catch (e) {}
     bustTopLightCaches_(dbId, 'manufacture');
     return { status: 'success', message: 'تم إلغاء أمر التصنيع', unique_id: uid, record: out.record };
+  }
+
+  /* One header per column. A hand-typed header row that merges names into one
+   * cell ("planned_qty / produced_qty") silently drops those fields on write. */
+  const MFG_HEADERS = {};
+  MFG_HEADERS[MFG_SHEET] = ['unique_id', 'id', 'mo_number', 'mo_date', 'product_id', 'planned_qty', 'produced_qty',
+    'materials_cost', 'extra_cost', 'total_cost', 'unit_cost', 'production_status', 'started_at', 'started_by',
+    'completion_date', 'completed_by', 'cancelled_at', 'cancelled_by', 'notes', 'approval_status', 'approval',
+    'approval_time', 'user', 'created_at', 'updated_at', 'deleted_at', 'deleted_by', 'version'];
+  MFG_HEADERS[MFG_LINES_SHEET] = ['unique_id', 'id', 'mo_unique_id', 'product_id', 'planned_qty', 'consumed_qty',
+    'unit_cost', 'total_cost', 'notes', 'user', 'created_at', 'updated_at', 'deleted_at', 'deleted_by', 'version'];
+
+  /** Rewrites a manufacture tab's header row to MFG_HEADERS — only when the tab
+   *  holds no data rows, so no existing value can end up under another column. */
+  function etRepairMfgHeaders_(dbId) {
+    const out = {};
+    Object.keys(MFG_HEADERS).forEach(function (tab) {
+      const want = MFG_HEADERS[tab];
+      const sheet = etSheet_(tab, dbId);
+      const lastCol = Math.max(sheet.getLastColumn(), 1);
+      const have = sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(function (h) { return mfgStr_(h); });
+      const missing = want.filter(function (h) { return have.indexOf(h) === -1; });
+      if (!missing.length) { out[tab] = 'ok'; return; }
+      if (sheet.getLastRow() > 1) { out[tab] = 'skipped: the tab has data rows; missing ' + missing.join(', '); return; }
+      sheet.getRange(1, 1, 1, lastCol).clearContent();
+      sheet.getRange(1, 1, 1, want.length).setValues([want]);
+      noteMutation_(sheet); etPackTouched_(sheet);
+      try { tlRefreshHeaderCache_(sheet); } catch (e) {}
+      noteTableChange_(dbId, tab);
+      out[tab] = 'repaired';
+    });
+    return out;
   }
 
   // Completed, live orders and the live lines whose parent is one of them (P7).
@@ -5087,7 +5222,8 @@ const ErpTest = (function () {
     return /date$/.test(n) || /_at$/.test(n) || /_time$/.test(n) || n === 'تاريخ الفاتورة' || n === 'reciept date';
   }
   function etSerialToDate_(serial) {
-    var utc = new Date(ET_EPOCH_UTC_ + Number(serial) * 86400000);
+    // Round: a day fraction does not land on a whole millisecond, and Date truncates (.190 read back as .189).
+    var utc = new Date(ET_EPOCH_UTC_ + Math.round(Number(serial) * 86400000));
     return new Date(utc.getUTCFullYear(), utc.getUTCMonth(), utc.getUTCDate(),
       utc.getUTCHours(), utc.getUTCMinutes(), utc.getUTCSeconds(), utc.getUTCMilliseconds());
   }
@@ -5343,7 +5479,7 @@ const ErpTest = (function () {
   // still pending in the overlay).
   // =========================================
   var _etTx = null;
-  const ET_WRITE_VERBS = /^(add|edit|delete|approve|complete|cancel)_/;
+  const ET_WRITE_VERBS = /^(add|edit|delete|approve|start|save|complete|cancel)_/;
 
   function etSheet_(name, dbId) {
     if (_etTx && _etTx.dbId === dbId) return etTxSheet_(name);
@@ -5868,6 +6004,7 @@ const ErpTest = (function () {
   
   return { dispatch_: dispatch_,
     schemaCheck_: etSchemaCheck_,
+    repairMfgHeaders_: etRepairMfgHeaders_,
     setFlag_: etSetFlag_,
     clientPacks_: etClientPacksOn_,
     compact_: etCompact_,
@@ -5916,16 +6053,22 @@ ErpTest.approvalPolicy_ = {
     add_et_sales_offer: 'et_offer', edit_et_sales_offer: 'et_offer', delete_et_sales_offer: 'et_offer', approve_et_sales_offer: 'et_offer',
     add_et_cash: 'et_cash', edit_et_cash: 'et_cash', delete_et_cash: 'et_cash', approve_et_cash: 'et_cash', add_et_transfer: 'et_cash',
     add_et_manufacture: 'et_manufacture', edit_et_manufacture: 'et_manufacture', delete_et_manufacture: 'et_manufacture',
-    approve_et_manufacture: 'et_manufacture', complete_et_manufacture: 'et_manufacture', cancel_et_manufacture: 'et_manufacture'
+    approve_et_manufacture: 'et_manufacture', complete_et_manufacture: 'et_manufacture', cancel_et_manufacture: 'et_manufacture',
+    start_et_manufacture: 'et_manufacture', save_et_manufacture_progress: 'et_manufacture'
   },
   statusOnly: {
     approve_et_purchasing: true, approve_et_sales: true, approve_et_sales_offer: true, approve_et_cash: true,
     delete_et_purchasing: true, delete_et_sales: true, delete_et_sales_offer: true, delete_et_cash: true,
-    approve_et_manufacture: true, delete_et_manufacture: true, complete_et_manufacture: true, cancel_et_manufacture: true
+    approve_et_manufacture: true, delete_et_manufacture: true, complete_et_manufacture: true, cancel_et_manufacture: true,
+    // validated in their handlers (validateManufactureProgress_), not by the add/edit validator
+    start_et_manufacture: true, save_et_manufacture_progress: true
   }
 };
 ErpTest.attachmentPolicy_ = function () { return {}; };
 ErpTest.artifactHandlers_ = {};
+
+/** Run once from the Apps Script editor: one header per column on the manufacture tabs (empty tabs only). */
+function etRepairManufactureHeaders() { var r = ErpTest.repairMfgHeaders_('1rdnnP3rMZTnoyyfG5V3X6w62AXatgIisZljkg0izJzE'); console.log(JSON.stringify(r)); return r; }
 
 function etSchemaCheckRun_() { var r = ErpTest.schemaCheck_('1rdnnP3rMZTnoyyfG5V3X6w62AXatgIisZljkg0izJzE'); console.log(JSON.stringify(r)); return r; }
 

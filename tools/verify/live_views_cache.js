@@ -17,6 +17,9 @@
  *   9 logout                              → erp_c_* cleared
  *  10 reply > 400 KB, or an opt-out page  → never stored
  *  11 a click while the inert paint shows → ignored
+ *  12 page boot embedded the list         → device copy skipped; this load's reply
+ *                                           shown and stored (a hand edit in the
+ *                                           sheet moves no stamp)
  *
  * Run: node tools/verify/live_views_cache.js
  */
@@ -68,12 +71,12 @@ function makeServer(company, page) {
   return srv;
 }
 
-function visit(file, srv, storage, user, listReply) {
+function visit(file, srv, storage, user, listReply, extraGlobals) {
   const sb = bootPage({
     page: file, isSuperAdmin: true,
     containers: ['tl-content', 'products-content', 'content', 'app', 'ac-root', 'vf-products-content'],
     scriptlets: { CURRENT_ACTION: "'x'" },
-    globals: { localStorage: storage, AUTH_USER_EMAIL: user },
+    globals: Object.assign({ localStorage: storage, AUTH_USER_EMAIL: user }, extraGlobals || {}),
     call: (a) => {
       srv.calls.push(a);
       if (a === 'get_page_versions') return srv.reply();
@@ -134,6 +137,19 @@ async function runCase(c) {
   await drive(sb);
   check(sb.UIC.Live.isInert() === false && srv.count(c.list) === 0 && srv.count('get_page_versions') >= 1,
     '  → live after the stamp check, with NO list call', srv.calls);
+
+  /* 12 — the sheet was edited by hand (no stamp moved) and the page is
+     reloaded: this load's page boot embedded the list, so the device copy is
+     skipped and the boot reply (here: the call) is what shows and is stored. */
+  srv.calls.length = 0;
+  marker = 12;
+  sb = visit(c.file, srv, storage, 'a@x', listReply, { PageBoot: { has: (route, p) => route === 'company_action' && p && p.module_action === c.list } });
+  check(sb.UIC.Live.isInert() === false, '12 a page-boot reply for the list: the device copy is not painted');
+  await drive(sb);
+  const s12 = JSON.parse(storage.getItem(lvKeys(storage, c.page)[0]));
+  check(srv.count(c.list) === 1 && s12 && s12.d && s12.d.marker === 12,
+    '  → the list comes from this load and replaces the stored copy, unchanged stamps or not', { calls: srv.calls, marker: s12 && s12.d && s12.d.marker });
+  marker = 1;
 
   /* 3 — second visit, a view table moved */
   srv.calls.length = 0;

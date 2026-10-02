@@ -55,6 +55,8 @@ function etTestMfg_() {
   etThrows_(log, function () { etT_('add_et_manufacture', { header: { mo_date: today, product_id: F, planned_qty: 1 }, lines: [{ product_id: A, planned_qty: 1 }, { product_id: A, planned_qty: 1 }] }); }, 'الخامة مكررة في نفس الأمر', '3: duplicate material');
   etThrows_(log, function () { etT_('complete_et_manufacture', { unique_id: k1, produced_qty: 5, completion_date: today }); }, 'يجب اعتماد الأمر قبل الإكمال', '4: complete before approve');
   etOk_(log, etT_('approve_et_manufacture', { unique_id: k1, version: 0 }).status === 'success', '5: approve');
+  etThrows_(log, function () { etT_('complete_et_manufacture', { unique_id: k1, produced_qty: 5, completion_date: today }); }, 'يجب بدء تنفيذ الأمر قبل الإكمال', '5: complete before start');
+  etOk_(log, etT_('start_et_manufacture', { unique_id: k1 }).status === 'success', '5: start (In Progress)');
   var l1 = etT_('get_et_manufacture_lines', { parent_id: k1 }).lines;
   etT_('complete_et_manufacture', { unique_id: k1, produced_qty: 5, completion_date: today,
     lines: l1.map(function (l) { return { unique_id: l.unique_id, consumed_qty: String(l.product_id) === String(A) ? 4 : 2 }; }) });
@@ -64,6 +66,7 @@ function etTestMfg_() {
   var k2 = Utilities.getUuid().replace(/-/g, '').slice(0, 16);
   etT_('add_et_manufacture', { request_key: k2, header: { mo_date: today, product_id: F, planned_qty: 1 }, lines: [{ product_id: A, planned_qty: 7 }] });
   etT_('approve_et_manufacture', { unique_id: k2, version: 0 });
+  etT_('start_et_manufacture', { unique_id: k2 });
   etThrows_(log, function () { etT_('complete_et_manufacture', { unique_id: k2, produced_qty: 1, completion_date: today }); }, 'تتجاوز الرصيد المتاح (المتاح: 6)', '7: over-consumption, available 6');
   etOk_(log, etT_('cancel_et_manufacture', { unique_id: k2 }).status === 'success', '8: cancel');
   etThrows_(log, function () { etT_('complete_et_manufacture', { unique_id: k2, produced_qty: 1, completion_date: today }); }, 'الأمر مغلق', '8: complete after cancel');

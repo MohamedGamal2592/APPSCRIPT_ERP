@@ -36,7 +36,7 @@ const bg = V.batchGet;
 V.batchGet = function (a, b) { return typeof a === 'string' ? bg.call(V, b, a) : bg.call(V, a, b); };
 const EPOCH = Date.UTC(1899, 11, 30);
 function serialToDate(serial) {
-  const u = new Date(EPOCH + Number(serial) * 86400000);
+  const u = new Date(EPOCH + Math.round(Number(serial) * 86400000));   // Sheets keeps the ms; Date would truncate .99999
   return new Date(u.getUTCFullYear(), u.getUTCMonth(), u.getUTCDate(), u.getUTCHours(), u.getUTCMinutes(), u.getUTCSeconds(), u.getUTCMilliseconds());
 }
 let failNextBatchUpdate = false;
@@ -168,7 +168,8 @@ function runScript(DB) {
   call('add_et_manufacture', { request_key: 'MO-1', header: { mo_date: '2025-05-01', product_id: P[2], planned_qty: 2, extra_cost: 3 }, lines: [{ product_id: P[0], planned_qty: 2 }, { product_id: P[1], planned_qty: 1 }] });
   call('edit_et_manufacture', { header: { unique_id: 'MO-1', version: 0, mo_date: '2025-05-01', product_id: P[2], planned_qty: 2, extra_cost: 4 }, lines: [{ product_id: P[0], planned_qty: 3 }, { product_id: P[1], planned_qty: 1 }] });
   call('approve_et_manufacture', { unique_id: 'MO-1', version: 1 });
-  call('complete_et_manufacture', { unique_id: 'MO-1', version: 2, produced_qty: 2, completion_date: '2025-05-02' });
+  call('start_et_manufacture', { unique_id: 'MO-1', version: 2 });
+  call('complete_et_manufacture', { unique_id: 'MO-1', version: 3, produced_qty: 2, completion_date: '2025-05-02' });
   call('add_et_manufacture', { request_key: 'MO-2', header: { mo_date: '2025-05-03', product_id: P[2], planned_qty: 1 }, lines: [{ product_id: P[0], planned_qty: 1 }] });
   call('cancel_et_manufacture', { unique_id: 'MO-2', version: 0 });
   call('add_et_manufacture', { request_key: 'MO-3', header: { mo_date: '2025-05-04', product_id: P[2], planned_qty: 1 }, lines: [{ product_id: P[1], planned_qty: 1 }] });

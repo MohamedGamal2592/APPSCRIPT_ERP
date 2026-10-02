@@ -95,6 +95,19 @@
     return null;
   }
 
+  /* True when answer() would serve this data read from the embedded replies.
+     The device cache (UIC.Live.viewCache) asks first: a reply the server read
+     for THIS load is fresher than any copy kept on the device, so a reload
+     always shows the sheet as it is now, even after a hand edit no stamp saw. */
+  function has(route, payload) {
+    if (!CFG || route !== 'company_action' || !payload || !entries.length) return false;
+    if (String(payload.target_system || '') !== String(CFG.company)) return false;
+    if (Date.now() - T0 > DATA_MAX_AGE_MS) return false;
+    var key = keyOf(payload.target_system, payload.module_action, payload.data);
+    for (var i = 0; i < entries.length; i++) if (!entries[i].stamps && entries[i].key === key) return true;
+    return false;
+  }
+
   /* A declared read that went to the server (off mode, or a failed embed):
      time it the same way. */
   function observe(route, payload, promise) {
@@ -399,6 +412,7 @@
 
   window.PageBoot = {
     answer: answer,
+    has: has,
     observe: observe,
     mark: mark,
     contentShown: contentShown,

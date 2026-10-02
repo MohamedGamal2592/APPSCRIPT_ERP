@@ -8789,6 +8789,17 @@ UIC.Live = (function () {
     return !!(UIC.Cache && UIC.Cache.cacheable(company || ''));
   }
 
+  /** True when this load's page boot embedded a server reply for the call:
+   *  that reply is fresher than the device copy (a hand edit in the sheet
+   *  moves no stamp), so the device copy is skipped and the call answered by
+   *  the boot — no extra request. */
+  function bootHas(company, action, payload) {
+    try {
+      return !!(window.PageBoot && typeof PageBoot.has === 'function' &&
+        PageBoot.has('company_action', { target_system: company || '', module_action: action, data: payload || {} }));
+    } catch (e) { return false; }
+  }
+
   function viewKey(company, page, view, action, payload) {
     return UIC.Cache.key(company || '', 'lv:' + page + ':' + view + ':' + action, payload, '');
   }
@@ -8878,7 +8889,7 @@ UIC.Live = (function () {
     }
     hookLogout();
     var key = viewKey(o.company, o.page, view, o.action, o.payload);
-    var rec = UIC.Cache.peek(key);
+    var rec = bootHas(o.company, o.action, o.payload) ? null : UIC.Cache.peek(key);
     var fresh = rec && (Date.now() - (Number(rec.at) || 0)) <= VIEW_MAX_AGE;
     if (fresh) { setInert(true); try { render(rec.d, { inert: true }); } catch (e) {} }
     return confirmStamps(o.call, o.page).then(function (resp) {
@@ -8919,7 +8930,7 @@ UIC.Live = (function () {
         setInert(false);
         return Promise.resolve(f);
       }
-      var rec = UIC.Cache.peek(key);
+      var rec = bootHas(cfg.company, action, payload) ? null : UIC.Cache.peek(key);
       var usable = rec && (Date.now() - (Number(rec.at) || 0)) <= VIEW_MAX_AGE;
       if (!usable) {
         /* A miss: stamps first, then the list — see the note above. */

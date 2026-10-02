@@ -30,7 +30,7 @@
     return /date$/.test(n) || /_at$/.test(n) || /_time$/.test(n) || n === 'تاريخ الفاتورة' || n === 'reciept date';
   }
   function etSerialToDate_(serial) {
-    var utc = new Date(ET_EPOCH_UTC_ + Number(serial) * 86400000);
+    var utc = new Date(ET_EPOCH_UTC_ + Math.round(Number(serial) * 86400000));
     return new Date(utc.getUTCFullYear(), utc.getUTCMonth(), utc.getUTCDate(),
       utc.getUTCHours(), utc.getUTCMinutes(), utc.getUTCSeconds(), utc.getUTCMilliseconds());
   }

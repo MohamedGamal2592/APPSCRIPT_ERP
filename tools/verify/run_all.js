@@ -127,6 +127,7 @@ const STEPS = [
   ['tl_sheetdb_contract.js', 'TL-DB — Top Light sheets-as-database: value-only writes, key-addressed patches, soft delete'],
   ['erptest_clone_static.js', 'ET-STATIC — Testing System clone: no Top Light leftovers, translation layer, policies, field literals'],
   ['erptest_mfg_vm.js', 'ET-MFG — Testing System T-MFG / T-STOCK on the real erp_test headers'],
+  ['erptest_mfg_page_vm.js', 'ET-MFG-PAGE — et_manufacture page: Open → approve → In Progress → record production → review → Done'],
   ['erptest_parity_vm.js', 'ET-PARITY — Testing System reads equal Top Light (legacy and packs)'],
   ['erptest_write_vm.js', 'ET-WRITE — Testing System write layer: T-WRITE, T-ATOMIC, compaction, reconcile, get_et_sync'],
   ['erptest_instant_insert.js', 'ET-INSTANT — instant inserts stay gated and box_balance stays in the lock'],

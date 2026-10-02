@@ -29,6 +29,7 @@
   var __editingUid = '';
   var __editingVersion = 0;
   var __canEdit = false;
+  var __showConsumed = false;
 
   /* [live-notice D6] list replies from the device cache, trusted by the stamps */
   if (window.UIC && UIC.Live && UIC.Live.viewCache) companyCall = UIC.Live.viewCache(companyCall, { company: '37fc50edf1424abd', page: 'et_manufacture', view: 'list', lists: ['get_et_manufacture_headers'] });
@@ -78,33 +79,53 @@
   }
 
   function dateOnly(v) { return v ? String(v).slice(0, 10) : '-'; }
+  /* Stages: Open (order + materials, editable until approved) → approved →
+     In Progress (record planned/produced qty and the materials used) →
+     Completed (after the review dialog), or Cancelled from Open / In Progress. */
+  var ST_OPEN = 'Open', ST_PROGRESS = 'In Progress', ST_DONE = 'Completed', ST_CANCELLED = 'Cancelled';
+  var STATUS_LABEL = { 'Open': 'مفتوح', 'In Progress': 'قيد التنفيذ', 'Completed': 'مكتمل', 'Cancelled': 'ملغي' };
+  var STATUS_COLOR = { 'Open': 'var(--text-muted)', 'In Progress': '#d97706', 'Completed': 'var(--success)', 'Cancelled': 'var(--danger)' };
+  var APPROVAL_LABEL = { 'Pending': 'بانتظار الاعتماد', 'Approved': 'معتمد' };
+  function statusOf(h) { return String((h && h.production_status) || ST_OPEN); }
   function isPending(h) { return String(h.approval_status || 'Pending') === 'Pending'; }
-  function isOpen(h) { return String(h.production_status || 'Open') === 'Open'; }
+  function isOpen(h) { return statusOf(h) === ST_OPEN; }
+  function inProgress(h) { return statusOf(h) === ST_PROGRESS; }
+  function blank(v) { return v === undefined || v === null || String(v).trim() === ''; }
+  function statusBadge(h) {
+    var s = statusOf(h);
+    return '<span style="font-weight:700;color:' + (STATUS_COLOR[s] || 'inherit') + ';">' + FMT.escape(STATUS_LABEL[s] || s) + '</span>';
+  }
 
   function renderHeadersTable() {
     var content = document.getElementById('tl-content');
     var rows = __headers.map(function (h) {
       var uid = FMT.escape(h.unique_id || '');
-      var btns = [{ label: '🖨️ طباعة / Print', onclick: "doAction('" + uid + "','print')" }];
-      if (isPending(h) && isOpen(h)) btns.push({ label: '✅ اعتماد / Approve', onclick: "doAction('" + uid + "','approve')" });
-      if (isPending(h) && isOpen(h) && UIC.canFull_()) {
-        btns.push({ label: '✏️ تعديل / Edit', onclick: "doAction('" + uid + "','edit')" });
-        btns.push({ label: '🗑️ حذف / Delete', color: '#dc2626', onclick: "doAction('" + uid + "','delete')" });
-      } else {
-        btns.push({ label: '👁️ عرض / View', onclick: "doAction('" + uid + "','view')" });
+      var act = function (label, a, color) { var b = { label: label, onclick: "doAction('" + uid + "','" + a + "')" }; if (color) b.color = color; return b; };
+      var btns = [];
+      if (inProgress(h)) {
+        btns.push(act('📝 تسجيل الإنتاج / Record production', 'progress'));
+        btns.push(act('✅ إنهاء الأمر / Done', 'done'));
       }
-      if (!isPending(h) && isOpen(h)) btns.push({ label: '🏭 إكمال الإنتاج / Complete', onclick: "doAction('" + uid + "','complete')" });
-      if (isOpen(h) && UIC.canFull_()) btns.push({ label: '⛔ إلغاء / Cancel', color: '#dc2626', onclick: "doAction('" + uid + "','cancel')" });
+      if (isPending(h) && isOpen(h)) btns.push(act('✅ اعتماد / Approve', 'approve'));
+      if (!isPending(h) && isOpen(h)) btns.push(act('▶️ بدء التنفيذ / Start', 'start'));
+      if (isPending(h) && isOpen(h) && UIC.canFull_()) {
+        btns.push(act('✏️ تعديل / Edit', 'edit'));
+        btns.push(act('🗑️ حذف / Delete', 'delete', '#dc2626'));
+      } else {
+        btns.push(act('👁️ عرض / View', 'view'));
+      }
+      btns.push(act('🖨️ طباعة / Print', 'print'));
+      if ((isOpen(h) || inProgress(h)) && UIC.canFull_()) btns.push(act('⛔ إلغاء / Cancel', 'cancel', '#dc2626'));
       return {
         mo_number: FMT.escape(String(h.mo_number || '-')),
         mo_date: dateOnly(h.mo_date),
         product_name: FMT.escape(String(h.product_name || '-')),
         planned_qty: FMT.number(h.planned_qty),
-        produced_qty: h.produced_qty === '' || h.produced_qty == null ? '-' : FMT.number(h.produced_qty),
+        produced_qty: blank(h.produced_qty) ? '-' : FMT.number(h.produced_qty),
         total_cost: FMT.number(h.total_cost),
         unit_cost: FMT.number(h.unit_cost),
-        approval_status: FMT.escape(String(h.approval_status || '-')),
-        production_status: FMT.escape(String(h.production_status || '-')),
+        approval_status: FMT.escape(APPROVAL_LABEL[String(h.approval_status || 'Pending')] || String(h.approval_status || '-')),
+        production_status: statusBadge(h),
         actions: UIC.actionBtns(btns)
       };
     });
@@ -117,7 +138,7 @@
           { key: 'mo_date', label: 'التاريخ' },
           { key: 'product_name', label: 'المنتج التام' },
           { key: 'planned_qty', label: 'الكمية المخططة' },
-          { key: 'produced_qty', label: 'الكمية المنتجة' },
+          { key: 'produced_qty', label: 'الكمية المنتجة فعلياً' },
           { key: 'total_cost', label: 'إجمالي التكلفة' },
           { key: 'unit_cost', label: 'تكلفة الوحدة' },
           { key: 'approval_status', label: 'الاعتماد' },
@@ -165,6 +186,7 @@
   function renderForm(record) {
     var content = document.getElementById('tl-content');
     __canEdit = !record || (isPending(record) && isOpen(record) && UIC.canFull_());
+    __showConsumed = !!record && !isOpen(record);
     __editingVersion = record ? num(record.version) : 0;
     var today = new Date().toISOString().slice(0, 10);
     var prodOpts = productOptions().map(function (p) { return { value: p.value, label: p.label }; });
@@ -172,6 +194,7 @@
       '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">' +
       '<button class="btn btn-outline" onclick="showList()">← عودة</button>' +
       '<h2 style="margin:0;">' + (record ? (__canEdit ? 'تعديل أمر تصنيع' : 'عرض أمر تصنيع') : 'إضافة أمر تصنيع') + '</h2></div>' +
+      stageBar(record) +
       '<form id="manufacture-form">' +
       '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:0 16px;padding:16px;background:var(--bg-surface);border:1px solid var(--border-color);border-radius:8px;margin-bottom:16px;">' +
       UIC.field({ key: 'mo_date', label: 'تاريخ الأمر *', type: 'date', value: record ? dateOnly(record.mo_date) : today, required: true }) +
@@ -187,7 +210,7 @@
       '</div>' +
       '<div class="table-wrap">' +
       '<table id="lines-table" class="table" style="min-width:600px;"><thead><tr>' +
-      '<th>الخامة</th><th>الرصيد المتاح</th><th>الكمية المخططة</th>' + (__canEdit ? '<th></th>' : '') +
+      '<th>الخامة</th><th>الرصيد المتاح</th><th>الكمية المخططة</th>' + (__showConsumed ? '<th>الكمية المستهلكة</th>' : '') + (__canEdit ? '<th></th>' : '') +
       '</tr></thead><tbody id="lines-tbody"></tbody></table>' +
       '</div>' +
       (__canEdit ? '<div style="margin:12px 0;"><button class="btn btn-outline" onclick="addLine()">+ إضافة خامة</button></div>' : '') +
@@ -201,7 +224,7 @@
     if (record) {
       companyCall('get_et_manufacture_lines', { parent_id: record.unique_id })
         .then(function (r) {
-          __lines = (r.lines || []).map(function (l) { return { unique_id: l.unique_id, product_id: l.product_id, planned_qty: l.planned_qty }; });
+          __lines = (r.lines || []).map(function (l) { return { unique_id: l.unique_id, product_id: l.product_id, planned_qty: l.planned_qty, consumed_qty: l.consumed_qty }; });
           renderLines();
         })
         .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); });
@@ -231,6 +254,7 @@
         ? '<input class="input" type="number" min="0" step="any" value="' + (l.planned_qty != null ? l.planned_qty : '') + '" oninput="updateLine(' + i + ', \'planned_qty\', this.value, false)">'
         : FMT.number(l.planned_qty);
       html += '<tr><td>' + cell + '</td><td>' + FMT.number(p ? p.current_qty : 0) + '</td><td>' + qty + '</td>' +
+        (__showConsumed ? '<td>' + (blank(l.consumed_qty) ? '-' : FMT.number(l.consumed_qty)) + '</td>' : '') +
         (__canEdit ? '<td><button class="btn btn-outline" style="padding:4px 10px;" onclick="removeLine(' + i + ')">حذف</button></td>' : '') + '</tr>';
     });
     var tbody = document.getElementById('lines-tbody');
@@ -286,8 +310,263 @@
     else if (action === 'approve') approveManufacture(uid);
     else if (action === 'edit' || action === 'view') openForm(uid);
     else if (action === 'delete') deleteManufacture(uid);
-    else if (action === 'complete') openCompleteDialog(uid);
+    else if (action === 'start') startManufacture(uid);
+    else if (action === 'progress') openProgress(uid);
+    else if (action === 'done') openDoneReview(uid);
     else if (action === 'cancel') cancelManufacture(uid);
+  }
+
+  /* Where the order is in its life — shown on the order and production screens. */
+  function stageBar(h) {
+    var s = h ? statusOf(h) : '';
+    if (s === ST_CANCELLED) {
+      return '<div style="margin-bottom:16px;padding:10px 14px;border-radius:8px;border:1px solid var(--danger);color:var(--danger);font-weight:700;">⛔ الأمر ملغي</div>';
+    }
+    var reached = !h ? 0 : (s === ST_DONE ? 4 : s === ST_PROGRESS ? 3 : (isPending(h) ? 1 : 2));
+    var steps = ['إنشاء الأمر والخامات', 'الاعتماد', 'قيد التنفيذ', 'مكتمل'];
+    return '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px;">' + steps.map(function (label, i) {
+      var n = i + 1;
+      var done = n < reached || (n === 4 && reached === 4), cur = n === reached && n !== 4;
+      var bg = done ? 'var(--success)' : cur ? '#d97706' : 'var(--bg-surface)';
+      var fg = (done || cur) ? '#fff' : 'var(--text-muted)';
+      return '<div style="flex:1;min-width:130px;padding:8px 12px;border-radius:8px;border:1px solid var(--border-color);background:' + bg + ';color:' + fg + ';font-weight:700;font-size:13px;">' +
+        (done ? '✓ ' : n + '. ') + label + '</div>';
+    }).join('') + '</div>';
+  }
+
+  function startManufacture(uid) {
+    var h = headerOf(uid);
+    if (!confirm('بدء تنفيذ الأمر ' + (h.mo_number || '') + '؟ بعد البدء يمكنك تسجيل الكمية المنتجة والخامات المستخدمة.')) return;
+    UIC.Live.save({
+      call: companyCall,
+      action: 'start_et_manufacture',
+      data: { unique_id: uid, version: num(h.version) },
+      message: 'بدأ التنفيذ',
+      queueable: false,
+      reload: function () { renderList(true); },
+      onSuccess: function () { renderList(true); }
+    }).catch(function () {});
+  }
+
+  /* ── Record production (In Progress): planned + actually produced qty, and
+     the materials — consumed qty per line, lines may be added or removed. ── */
+  var __progress = null;   // { uid, version, header, lines }
+  function openProgress(uid, then) {
+    if (UIC.Live.setView) UIC.Live.setView('form', { refresh: function () { openProgress(uid); }, loading: true, key: uid, table: 'erp_test_manufacture_orders' });
+    UIC.readSkeleton('tl-content', { message: ['جاري تحميل بيانات الإنتاج...'] });
+    Promise.all([ensureOptions(), companyCall('get_et_manufacture_order', { mo_code: uid })])
+      .then(function (res) {
+        var h = res[1].header || {};
+        if (!inProgress(h)) { UIC.toast('تسجيل الإنتاج متاح فقط لأمر قيد التنفيذ', 'error'); showList(); return; }
+        __progress = {
+          uid: uid, version: num(h.version), header: h,
+          lines: (res[1].lines || []).map(function (l) {
+            return { product_id: l.product_id, planned_qty: l.planned_qty, consumed_qty: blank(l.consumed_qty) ? '' : l.consumed_qty, unit_cost: l.unit_cost };
+          })
+        };
+        renderProgress();
+        if (typeof then === 'function') then();
+      })
+      .catch(function (e) { showError(e); })
+      .finally(function () { UI.hideSpinner(); });
+  }
+
+  function renderProgress() {
+    var h = __progress.header;
+    var info = function (label, v) { return '<div><div style="font-size:12px;color:var(--text-muted);">' + label + '</div><strong>' + v + '</strong></div>'; };
+    document.getElementById('tl-content').innerHTML =
+      '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">' +
+      '<button class="btn btn-outline" onclick="showList()">← عودة</button>' +
+      '<h2 style="margin:0;">تسجيل الإنتاج — ' + FMT.escape(h.mo_number || '') + '</h2></div>' +
+      stageBar(h) +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;padding:16px;background:var(--bg-surface);border:1px solid var(--border-color);border-radius:8px;margin-bottom:16px;">' +
+      info('رقم الأمر', FMT.escape(h.mo_number || '-')) + info('تاريخ الأمر', dateOnly(h.mo_date)) +
+      info('المنتج التام', FMT.escape(h.product_name || '-')) + info('بدأ التنفيذ', dateOnly(h.started_at)) +
+      '</div>' +
+      '<form id="progress-form">' +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:0 16px;padding:16px;background:var(--bg-surface);border:1px solid var(--border-color);border-radius:8px;margin-bottom:16px;">' +
+      UIC.field({ key: 'pg_planned_qty', label: 'الكمية المخططة', type: 'number', value: h.planned_qty, required: true, min: 0, step: 'any' }) +
+      UIC.field({ key: 'pg_produced_qty', label: 'الكمية المنتجة فعلياً', type: 'number', value: blank(h.produced_qty) ? '' : h.produced_qty, min: 0, step: 'any' }) +
+      UIC.field({ key: 'pg_extra_cost', label: 'تكاليف إضافية', type: 'number', value: num(h.extra_cost), min: 0, step: 'any' }) +
+      UIC.field({ key: 'pg_notes', label: 'ملاحظات', type: 'text', value: FMT.escape(h.notes || '') }) +
+      '</div></form>' +
+      '<h3 style="margin:20px 0 8px;">الخامات</h3>' +
+      '<div style="font-size:13px;color:var(--text-muted);margin-bottom:8px;">اترك «المستهلكة» فارغة لاستخدام الكمية المخططة. يمكنك إضافة خامة لم تكن في الخطة.</div>' +
+      '<div class="table-wrap"><table id="progress-lines" class="table" style="min-width:700px;"><thead><tr>' +
+      '<th>الخامة</th><th>الرصيد المتاح</th><th>الكمية المخططة</th><th>الكمية المستهلكة</th><th>الفرق</th><th></th>' +
+      '</tr></thead><tbody id="progress-tbody"></tbody></table></div>' +
+      '<div style="margin:12px 0;"><button class="btn btn-outline" onclick="progressAddLine()">+ إضافة خامة</button></div>' +
+      '<div style="margin:16px 0;display:flex;flex-wrap:wrap;gap:8px;">' +
+      '<button class="btn btn-primary" id="progress-save" onclick="saveProgress(false)">حفظ</button>' +
+      '<button class="btn btn-primary" id="progress-save-done" onclick="saveProgress(true)">حفظ ثم إنهاء الأمر ✅</button>' +
+      '<button class="btn btn-outline" onclick="showList()">إلغاء</button></div>';
+    renderProgressLines();
+  }
+
+  function progressAvailable(i) {
+    var chosen = {};
+    __progress.lines.forEach(function (l, j) { if (j !== i && l.product_id) chosen[String(l.product_id)] = true; });
+    var finished = String(__progress.header.product_id);
+    return productOptions().filter(function (p) { return !chosen[String(p.value)] && String(p.value) !== finished; });
+  }
+
+  function renderProgressLines() {
+    var html = __progress.lines.map(function (l, i) {
+      var p = productById(l.product_id);
+      var used = blank(l.consumed_qty) ? num(l.planned_qty) : num(l.consumed_qty);
+      var diff = used - num(l.planned_qty);
+      var over = p && used > num(p.current_qty);
+      return '<tr>' +
+        '<td><select id="pl_product_' + i + '" class="input" onchange="progressLine(' + i + ', \'product_id\', this.value, true)"><option value="">اختر...</option>' +
+          progressAvailable(i).map(function (o) {
+            return '<option value="' + FMT.escape(String(o.value)) + '"' + (String(o.value) === String(l.product_id) ? ' selected' : '') + '>' + FMT.escape(o.label) + '</option>';
+          }).join('') + '</select></td>' +
+        '<td' + (over ? ' style="color:var(--danger);font-weight:700;"' : '') + '>' + FMT.number(p ? p.current_qty : 0) + '</td>' +
+        '<td><input class="input" type="number" min="0" step="any" value="' + (blank(l.planned_qty) ? '' : l.planned_qty) + '" oninput="progressLine(' + i + ', \'planned_qty\', this.value, false)"></td>' +
+        '<td><input class="input" type="number" min="0" step="any" placeholder="' + FMT.number(l.planned_qty) + '" value="' + (blank(l.consumed_qty) ? '' : l.consumed_qty) + '" oninput="progressLine(' + i + ', \'consumed_qty\', this.value, false)"></td>' +
+        '<td id="pl_diff_' + i + '" style="color:' + (diff > 0 ? 'var(--danger)' : diff < 0 ? 'var(--success)' : 'inherit') + ';">' + (diff > 0 ? '+' : '') + FMT.number(diff) + '</td>' +
+        '<td><button class="btn btn-outline" style="padding:4px 10px;" onclick="progressRemoveLine(' + i + ')">حذف</button></td>' +
+        '</tr>';
+    }).join('');
+    var tb = document.getElementById('progress-tbody');
+    if (tb) tb.innerHTML = html || '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);">لا توجد خامات</td></tr>';
+  }
+
+  function progressAddLine() { __progress.lines.push({ product_id: '', planned_qty: 0, consumed_qty: '' }); renderProgressLines(); }
+  function progressRemoveLine(i) { __progress.lines.splice(i, 1); renderProgressLines(); }
+  function progressLine(i, key, value, rerender) {
+    __progress.lines[i][key] = value;
+    if (rerender) { renderProgressLines(); return; }
+    var l = __progress.lines[i];
+    var diff = (blank(l.consumed_qty) ? num(l.planned_qty) : num(l.consumed_qty)) - num(l.planned_qty);
+    var el = document.getElementById('pl_diff_' + i);
+    if (el) { el.textContent = (diff > 0 ? '+' : '') + FMT.number(diff); el.style.color = diff > 0 ? 'var(--danger)' : diff < 0 ? 'var(--success)' : 'inherit'; }
+  }
+
+  /* Client-side mirror of validateManufactureProgress_ (the server checks again). */
+  function progressProblem(header, lines) {
+    if (!(num(header.planned_qty) > 0)) return 'الكمية المخططة يجب أن تكون أكبر من صفر';
+    if (!lines.length) return 'يجب إضافة خامة واحدة على الأقل';
+    for (var i = 0; i < lines.length; i++) {
+      var l = lines[i], n = ' (السطر ' + (i + 1) + ')';
+      if (!l.product_id) return 'اختر الخامة' + n;
+      if (num(l.planned_qty) <= 0 && blank(l.consumed_qty)) return 'أدخل الكمية المخططة أو المستهلكة' + n;
+    }
+    return '';
+  }
+
+  function saveProgress(thenDone) {
+    var btn = document.getElementById(thenDone ? 'progress-save-done' : 'progress-save');
+    UI.submitOnce(btn, function () {
+      if (!UIC.validateForm('progress-form')) return Promise.reject();
+      var d = UIC.collectForm('progress-form');
+      var header = { unique_id: __progress.uid, version: __progress.version, planned_qty: d.pg_planned_qty,
+        produced_qty: d.pg_produced_qty, extra_cost: d.pg_extra_cost, notes: d.pg_notes };
+      var lines = __progress.lines.map(function (l) { return { product_id: l.product_id, planned_qty: l.planned_qty || 0, consumed_qty: l.consumed_qty }; });
+      var problem = progressProblem(header, lines);
+      if (problem) { UIC.toast(problem, 'error'); return Promise.reject(); }
+      if (thenDone && !(num(header.produced_qty) > 0)) { UIC.toast('أدخل الكمية المنتجة فعلياً قبل إنهاء الأمر', 'error'); return Promise.reject(); }
+      var uid = __progress.uid;
+      return UIC.Live.save({
+        call: companyCall,
+        action: 'save_et_manufacture_progress',
+        data: { header: header, lines: lines },
+        message: 'تم حفظ بيانات الإنتاج',
+        queueable: false,
+        reload: function () { renderList(true); },
+        onSuccess: function () {
+          if (thenDone) openProgress(uid, function () { openDoneReview(uid); });
+          else renderList(true);
+        }
+      }).catch(function () {});
+    });
+  }
+
+  /* ── Done: a review of everything the order will post, then confirm. Built
+     from a fresh read, so it shows what the server will complete with. ── */
+  var __done = null;   // { uid, version, ok }
+  function openDoneReview(uid) {
+    Promise.all([ensureOptions(), companyCall('get_et_manufacture_order', { mo_code: uid })])
+      .then(function (res) {
+        var h = res[1].header || {};
+        var lines = res[1].lines || [];
+        if (!inProgress(h)) { UIC.toast('يمكن إنهاء أمر قيد التنفيذ فقط', 'error'); renderList(true); return; }
+        var planned = num(h.planned_qty), produced = num(h.produced_qty);
+        var problems = [];
+        if (!(produced > 0)) problems.push('لم يتم تسجيل الكمية المنتجة فعلياً');
+        var materials = 0;
+        var rowsHtml = lines.map(function (l) {
+          var p = productById(l.product_id);
+          var fromPlan = blank(l.consumed_qty);
+          var used = fromPlan ? num(l.planned_qty) : num(l.consumed_qty);
+          var avail = p ? num(p.current_qty) : 0;
+          var cost = used * num(l.unit_cost);
+          materials += cost;
+          var short = used > avail;
+          if (short) problems.push('الكمية المستهلكة من ' + (l.product_name || l.product_id) + ' (' + FMT.number(used) + ') تتجاوز الرصيد المتاح (' + FMT.number(avail) + ')');
+          var diff = used - num(l.planned_qty);
+          return '<tr' + (short ? ' style="background:rgba(220,38,38,.08);"' : '') + '>' +
+            '<td>' + FMT.escape(l.product_name || '-') + '</td>' +
+            '<td>' + FMT.number(l.planned_qty) + '</td>' +
+            '<td>' + FMT.number(used) + (fromPlan ? ' <span style="font-size:11px;color:var(--text-muted);">(حسب الخطة)</span>' : '') + '</td>' +
+            '<td>' + (diff > 0 ? '+' : '') + FMT.number(diff) + '</td>' +
+            '<td>' + FMT.number(avail) + '</td>' +
+            '<td>' + FMT.number(cost) + '</td>' +
+            '<td style="font-weight:700;color:' + (short ? 'var(--danger)' : 'var(--success)') + ';">' + (short ? '⚠' : '✓') + '</td></tr>';
+        }).join('');
+        if (!lines.length) problems.push('لا توجد خامات في الأمر');
+        var extra = num(h.extra_cost), total = materials + extra;
+        var variance = produced - planned;
+        var cell = function (label, v, color) { return '<div><div style="font-size:12px;color:var(--text-muted);">' + label + '</div><strong' + (color ? ' style="color:' + color + ';"' : '') + '>' + v + '</strong></div>'; };
+        var body =
+          '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px;">' +
+          cell('رقم الأمر', FMT.escape(h.mo_number || '-')) + cell('تاريخ الأمر', dateOnly(h.mo_date)) +
+          cell('المنتج التام', FMT.escape(h.product_name || '-')) + cell('بدأ التنفيذ', dateOnly(h.started_at)) +
+          cell('الكمية المخططة', FMT.number(planned)) +
+          cell('الكمية المنتجة فعلياً', produced > 0 ? FMT.number(produced) : '—', produced > 0 ? '' : 'var(--danger)') +
+          cell('الفرق عن الخطة', (variance > 0 ? '+' : '') + FMT.number(variance) + (planned > 0 ? ' (' + Math.round(variance / planned * 1000) / 10 + '%)' : ''), variance < 0 ? 'var(--danger)' : '') +
+          cell('ملاحظات', FMT.escape(h.notes || '-')) +
+          '</div>' +
+          '<div class="table-wrap"><table class="table"><thead><tr><th>الخامة</th><th>مخطط</th><th>مستهلك</th><th>الفرق</th><th>الرصيد المتاح</th><th>تكلفة تقديرية</th><th></th></tr></thead><tbody>' +
+          rowsHtml + '</tbody></table></div>' +
+          '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:16px 0;padding:12px;border:1px solid var(--border-color);border-radius:8px;">' +
+          cell('تكلفة الخامات (تقديرية)', FMT.number(materials)) + cell('تكاليف إضافية', FMT.number(extra)) +
+          cell('إجمالي التكلفة', FMT.number(total)) + cell('تكلفة الوحدة', produced > 0 ? FMT.number(total / produced) : '—') +
+          '</div>' +
+          '<div style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">التكلفة النهائية تُحسب على الخادم بسعر التكلفة الحالي لحظة الإنهاء. بعد الإنهاء تُضاف الكمية المنتجة للمخزون وتُخصم الخامات، ولا يمكن التعديل.</div>' +
+          (problems.length
+            ? '<div style="padding:12px;border-radius:8px;border:1px solid var(--danger);color:var(--danger);margin-bottom:12px;"><strong>لا يمكن الإنهاء:</strong><ul style="margin:6px 0 0;padding-inline-start:20px;">' +
+              problems.map(function (p) { return '<li>' + FMT.escape(p) + '</li>'; }).join('') + '</ul></div>'
+            : '') +
+          '<form id="done-form">' +
+          UIC.field({ key: 'done_completion_date', label: 'تاريخ الإكمال', type: 'date', value: new Date().toISOString().slice(0, 10), required: true }) +
+          '<label style="display:flex;gap:8px;align-items:center;font-weight:700;margin-top:8px;"><input type="checkbox" id="done_confirm"' + (problems.length ? ' disabled' : '') + '> راجعت بيانات الأمر وأؤكد إنهاءه</label>' +
+          '</form>';
+        __done = { uid: uid, version: num(h.version), ok: !problems.length };
+        var footer =
+          '<button class="btn btn-outline" onclick="UIC.closeModal(\'done-modal\')">إغلاق</button> ' +
+          '<button class="btn btn-outline" onclick="UIC.closeModal(\'done-modal\');openProgress(\'' + FMT.escape(uid) + '\')">✏️ تعديل بيانات الإنتاج</button> ' +
+          '<button class="btn btn-primary" id="done-submit"' + (problems.length ? ' disabled' : '') + ' onclick="UI.submitOnce(this, submitDone)">✅ تأكيد إنهاء الأمر</button>';
+        UIC.openModal('done-modal', { title: 'مراجعة قبل الإنهاء — ' + FMT.escape(h.mo_number || ''), body: body, size: 'xl', footer: footer });
+      })
+      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); });
+  }
+
+  function submitDone() {
+    if (!__done || !__done.ok) return Promise.reject();
+    var cb = document.getElementById('done_confirm');
+    if (!cb || !cb.checked) { UIC.toast('أكّد مراجعة بيانات الأمر أولاً', 'error'); return Promise.reject(); }
+    if (!UIC.validateForm('done-form')) return Promise.reject();
+    var d = UIC.collectForm('done-form');
+    return UIC.Live.save({
+      call: companyCall,
+      action: 'complete_et_manufacture',
+      data: { unique_id: __done.uid, version: __done.version, completion_date: d.done_completion_date },
+      message: 'تم إنهاء أمر التصنيع',
+      queueable: false,
+      reload: function () { renderList(true); },
+      onSuccess: function () { UIC.closeModal('done-modal', true); __optionsPromise = null; renderList(true); }
+    }).catch(function () {});
   }
 
   function printManufacture(uid) {
@@ -336,48 +615,6 @@
       message: 'تم الإلغاء',
       queueable: false,
       reload: function () { renderList(true); }
-    }).catch(function () {});
-  }
-
-  var __completeUid = '';
-  var __completeLines = [];
-  function openCompleteDialog(uid) {
-    var h = headerOf(uid);
-    __completeUid = uid;
-    Promise.all([ensureOptions(), companyCall('get_et_manufacture_lines', { parent_id: uid })])
-      .then(function (res) {
-        __completeLines = res[1].lines || [];
-        var today = new Date().toISOString().slice(0, 10);
-        var body =
-          '<form id="complete-form">' +
-          UIC.field({ key: 'produced_qty', label: 'الكمية المنتجة *', type: 'number', value: h.planned_qty, required: true, min: 0, step: 'any' }) +
-          UIC.field({ key: 'completion_date', label: 'تاريخ الإكمال *', type: 'date', value: today, required: true }) +
-          '</form>' +
-          '<div class="table-wrap"><table class="table"><thead><tr><th>الخامة</th><th>مخطط</th><th>الرصيد المتاح</th><th>الكمية المستهلكة</th></tr></thead><tbody>' +
-          __completeLines.map(function (l, i) {
-            var p = productById(l.product_id);
-            return '<tr><td>' + FMT.escape(l.product_name || '-') + '</td><td>' + FMT.number(l.planned_qty) + '</td><td>' +
-              FMT.number(p ? p.current_qty : 0) + '</td><td><input class="input" id="consumed_' + i + '" type="number" min="0" step="any" value="' + num(l.planned_qty) + '"></td></tr>';
-          }).join('') +
-          '</tbody></table></div>';
-        UIC.openModal('complete-modal', { title: 'إكمال الإنتاج — ' + FMT.escape(h.mo_number || ''), body: body, size: 'lg', onSave: 'return submitComplete();' });
-      })
-      .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); });
-  }
-
-  function submitComplete() {
-    if (!UIC.validateForm('complete-form')) return Promise.reject();
-    var data = UIC.collectForm('complete-form');
-    var h = headerOf(__completeUid);
-    var lines = __completeLines.map(function (l, i) { return { unique_id: l.unique_id, consumed_qty: getVal('consumed_' + i) }; });
-    return UIC.Live.save({
-      call: companyCall,
-      action: 'complete_et_manufacture',
-      data: { unique_id: __completeUid, version: num(h.version), produced_qty: data.produced_qty, completion_date: data.completion_date, lines: lines },
-      message: 'تم إكمال الإنتاج',
-      queueable: false,
-      reload: function () { renderList(true); },
-      onSuccess: function () { UIC.closeModal('complete-modal', true); __optionsPromise = null; renderList(true); }
     }).catch(function () {});
   }
 
