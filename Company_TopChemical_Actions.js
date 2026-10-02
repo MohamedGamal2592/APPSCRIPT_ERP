@@ -113,6 +113,15 @@ const TopChemical = (function () {
     'get_stock_scan_catalog': { page: 'tc_stock_scan', access: 'read' },
     'get_stock_scan_balances': { page: 'tc_stock_scan', access: 'read' },
     'add_stock_scan': { page: 'tc_stock_scan', access: 'write' },
+    /* الحركة والاسطول — the same scan screen (same template) locked to
+       warehouse FLEET_WAREHOUSE_ID. Separate action names so the page is
+       granted on its own; the handlers force the warehouse server-side. */
+    'get_fleet_scan_options': { page: 'tc_fleet_scan', access: 'read' },
+    'get_fleet_scan_history': { page: 'tc_fleet_scan', access: 'read' },
+    'get_fleet_scan_warehouses': { page: 'tc_fleet_scan', access: 'read' },
+    'get_fleet_scan_catalog': { page: 'tc_fleet_scan', access: 'read' },
+    'get_fleet_scan_balances': { page: 'tc_fleet_scan', access: 'read' },
+    'add_fleet_scan': { page: 'tc_fleet_scan', access: 'write' },
     'get_customs_office': { page: 'tc_customs_office', access: 'read' },
     'add_customs_office': { page: 'tc_customs_office', access: 'write' },
     'get_purchase_items': { page: 'tc_purchasing', access: 'read' },
@@ -301,6 +310,12 @@ const TopChemical = (function () {
     'get_stock_scan_catalog': 'mysql:products',
     'get_stock_scan_balances': 'mysql:product_current_qty_warehouses',
     'add_stock_scan': STOCK_SHEET,
+    'get_fleet_scan_options': PRODUCTS_SHEET,
+    'get_fleet_scan_history': STOCK_SHEET,
+    'get_fleet_scan_warehouses': 'mysql:warehouse_locations',
+    'get_fleet_scan_catalog': 'mysql:products',
+    'get_fleet_scan_balances': 'mysql:product_current_qty_warehouses',
+    'add_fleet_scan': STOCK_SHEET,
     'get_purchase_items': PURCHASE_SHEET,
     'get_purchase_options': PURCHASE_SHEET,
     'add_purchase_item': PURCHASE_SHEET,
@@ -537,6 +552,10 @@ const TopChemical = (function () {
       'list': [STOCK_SHEET, PRODUCTS_SHEET]
     },
     'tc_stock_scan': {
+      'list': [PRODUCTS_SHEET],
+      'form': [STOCK_SHEET, PRODUCTS_SHEET]
+    },
+    'tc_fleet_scan': {
       'list': [PRODUCTS_SHEET],
       'form': [STOCK_SHEET, PRODUCTS_SHEET]
     },
@@ -2390,20 +2409,52 @@ const TopChemical = (function () {
     return dbStockScanBalance_(data || {}, user);
   }
 
+  /** الحركة والاسطول (tc_fleet_scan) counts warehouse_locations id 2 only. */
+  const FLEET_WAREHOUSE_ID = '2';
+  /** نوع الوعاء الخاص بالصنف — the scan form's choices, stored per row in
+   *  stock_revision.container_type. */
+  const STOCK_SCAN_CONTAINER_TYPES = ['شيكارة', 'كرتونة', 'برميل', 'بستلة', 'جونية'];
+  const STOCK_CONTAINER_HEADER = 'container_type';
+
+  /** Adds the container_type column to stock_revision once (idempotent) and
+   *  busts this execution's getHeaders_ cache so the new column is written. */
+  function ensureStockContainerHeader_(sheet) {
+    var headers = getHeaders_(sheet).map(function (h) { return String(h).trim().toLowerCase(); });
+    if (headers.indexOf(STOCK_CONTAINER_HEADER) !== -1) return;
+    executeWithLock_(function () {
+      var lastCol = sheet.getLastColumn();
+      var live = lastCol > 0 ? sheet.getRange(1, 1, 1, lastCol).getValues()[0] : [];
+      if (live.map(function (h) { return String(h).trim().toLowerCase(); }).indexOf(STOCK_CONTAINER_HEADER) !== -1) return;
+      sheet.getRange(1, lastCol + 1).setValue(STOCK_CONTAINER_HEADER);
+      noteMutation_(sheet);
+      SpreadsheetApp.flush();
+    });
+    delete _headerCache_[sheet.getParent().getId() + '_' + sheet.getSheetId()];
+  }
+
   /** The scan page's independent history read. The normal revision list also
    * builds a full product reference list; these rows already carry name_ar,
-   * so a scan history read needs only the stock_revision sheet. */
-  function getStockScanHistory_(data, user, dbId) {
+   * so a scan history read needs only the stock_revision sheet.
+   * opts.warehouse limits the rows to one warehouse (tc_fleet_scan).
+   * last_container_by_product covers every row of every warehouse, so the
+   * count form can default نوع الوعاء to the product's last stored value. */
+  function getStockScanHistory_(data, user, dbId, opts) {
+    var warehouseFilter = opts && opts.warehouse ? String(opts.warehouse) : '';
     var sheet = getSheet_(STOCK_SHEET, dbId);
     var headers = getHeaders_(sheet);
     var lastRow = sheet.getLastRow();
     var minimumDate = '2026-09-01';
     var dateColumn = headers.indexOf('date');
+    var headerKeys = headers.map(function (h) { return String(h).trim().toLowerCase(); });
+    var productColumn = headerKeys.indexOf('product');
+    var warehouseColumn = headerKeys.indexOf('warehouse');
+    var containerColumn = headerKeys.indexOf(STOCK_CONTAINER_HEADER);
+    var lastContainerByProduct = {};
     var rows = [];
     if (!headers.length || dateColumn < 0 || lastRow < 2) {
       return {
         status: 'success',
-        data_json: JSON.stringify({ schema_version: 1, table: STOCK_SHEET, rows: rows, from_date: minimumDate }),
+        data_json: JSON.stringify({ schema_version: 1, table: STOCK_SHEET, rows: rows, from_date: minimumDate, last_container_by_product: lastContainerByProduct }),
         loadedAll: true, total: 0, from_date: minimumDate
       };
     }
@@ -2429,8 +2480,18 @@ const TopChemical = (function () {
     var values = sheet.getRange(2, 1, lastRow - 1, headers.length).getValues();
     for (var i = values.length - 1; i >= 0; i--) {
       if (!values[i].some(function (v) { return String(v == null ? '' : v).trim() !== ''; })) continue;
+      if (containerColumn >= 0 && productColumn >= 0) {
+        // Walking newest-first: the first value seen per product is its last.
+        var productKey = String(values[i][productColumn] == null ? '' : values[i][productColumn]).trim();
+        var containerVal = String(values[i][containerColumn] == null ? '' : values[i][containerColumn]).trim();
+        if (productKey && containerVal && !Object.prototype.hasOwnProperty.call(lastContainerByProduct, productKey)) {
+          lastContainerByProduct[productKey] = containerVal;
+        }
+      }
       var rowDate = dateKey(values[i][dateColumn]);
       if (!rowDate || rowDate < minimumDate) continue;
+      if (warehouseFilter && (warehouseColumn < 0 ||
+          String(values[i][warehouseColumn] == null ? '' : values[i][warehouseColumn]).trim() !== warehouseFilter)) continue;
       var record = {};
       headers.forEach(function (h, ci) { record[String(h).trim()] = values[i][ci] === undefined ? '' : values[i][ci]; });
       /* Keep the actual sheet row: filtered/reversed history indexes are not
@@ -2441,7 +2502,7 @@ const TopChemical = (function () {
     }
     return {
       status: 'success',
-      data_json: JSON.stringify({ schema_version: 1, table: STOCK_SHEET, rows: rows, from_date: minimumDate }),
+      data_json: JSON.stringify({ schema_version: 1, table: STOCK_SHEET, rows: rows, from_date: minimumDate, last_container_by_product: lastContainerByProduct }),
       loadedAll: true,
       total: rows.length,
       from_date: minimumDate
@@ -2579,7 +2640,7 @@ const TopChemical = (function () {
      balance is re-read authoritatively for the same product+warehouse pair at
      save time — the client's available_amount is never trusted. New rows
      persist the warehouse ID; legacy text values in old rows are untouched. */
-  function addStockScan_(data, user, dbId) {
+  function addStockScan_(data, user, dbId, opts) {
     data = data || {};
     var productRaw = String(data.product == null ? '' : data.product).trim();
     if (!/^[1-9]\d{0,19}$/.test(productRaw)) throw new Error('المنتج مطلوب');
@@ -2587,6 +2648,11 @@ const TopChemical = (function () {
     if (!productRefs_(dbId).map[product]) throw new Error('المنتج غير موجود');
     var warehouseId = String(data.warehouse_id == null ? (data.warehouse == null ? '' : data.warehouse) : data.warehouse_id).trim();
     if (!/^[1-9]\d{0,19}$/.test(warehouseId)) throw new Error('المخزن مطلوب');
+    if (opts && opts.warehouse && warehouseId !== String(opts.warehouse)) throw new Error('المخزن غير صحيح لهذه الصفحة');
+    /* Blank is accepted only for saves queued by an older page build that
+       did not send the field; any value sent must be one of the choices. */
+    var containerType = String(data.container_type == null ? '' : data.container_type).trim();
+    if (containerType && STOCK_SCAN_CONTAINER_TYPES.indexOf(containerType) === -1) throw new Error('نوع الوعاء غير صحيح');
     var whList = dbStockScanWarehouses_({}, user);
     var warehouseLocation = null;
     (whList.warehouses || []).forEach(function (w) { if (String(w.value) === warehouseId) warehouseLocation = w.label; });
@@ -2606,6 +2672,7 @@ const TopChemical = (function () {
     }
     var notes = String(data.notes || '').trim();
     var sheet = getSheet_(STOCK_SHEET, dbId);
+    ensureStockContainerHeader_(sheet);
     var headers = getHeaders_(sheet);
     var rowValues = headers.map(function (h) {
       var key = String(h).trim().toLowerCase();
@@ -2614,6 +2681,7 @@ const TopChemical = (function () {
       if (key === 'amount') return amount;
       if (key === 'warehouse') return warehouseId;
       if (key === 'notes') return notes;
+      if (key === STOCK_CONTAINER_HEADER) return containerType;
       if (key === 'available_amount') return avail;
       if (key === 'user') return (user && user.email) || '';
       if (key === 'created_at') return new Date();
@@ -2655,6 +2723,7 @@ const TopChemical = (function () {
       warehouse: warehouseId,
       warehouse_location: warehouseLocation,
       notes: notes,
+      container_type: containerType,
       available_amount: avail,
       difference: differenceVal,
       percentage: percentageVal,
@@ -2662,7 +2731,7 @@ const TopChemical = (function () {
       created_at: new Date(),
       _sheetRow: rowNum
     };
-    try { var mapStock = { product: product, date: date, amount: amount, warehouse: warehouseId, notes: notes, available_amount: avail, user: (user && user.email) || '', created_at: new Date() }; logHistory_(dbId, STOCK_SHEET, 'create_' + STOCK_SHEET + '_' + rowNum, String(rowNum), (user && user.email) || '', 'create', mapStock, null); } catch (e) {}
+    try { var mapStock = { product: product, date: date, amount: amount, warehouse: warehouseId, notes: notes, container_type: containerType, available_amount: avail, user: (user && user.email) || '', created_at: new Date() }; logHistory_(dbId, STOCK_SHEET, 'create_' + STOCK_SHEET + '_' + rowNum, String(rowNum), (user && user.email) || '', 'create', mapStock, null); } catch (e) {}
     return { status: 'success', message: 'تمت إضافة جرد المخزون', record: savedRecord, data: { assignedId: rowNum, rowNumber: rowNum } };
   }
 
@@ -6876,7 +6945,30 @@ const valueMap = {};
   register('get_stock_scan_qty', function (data, user, dbId) {
     return readDiagnosticsForUser_(getSystemQty_(data, user, dbId), user);
   });
-  register('add_stock_scan', addStockScan_);
+  register('add_stock_scan', function (data, user, dbId) { return addStockScan_(data, user, dbId); });
+  /* الحركة والاسطول — the scan handlers, pinned to FLEET_WAREHOUSE_ID. */
+  register('get_fleet_scan_options', function (data, user, dbId) {
+    return readDiagnosticsForUser_(getStockScanOptions_(data, user, dbId), user);
+  });
+  register('get_fleet_scan_catalog', function (data, user) {
+    return readDiagnosticsForUser_(getStockScanCatalog_(data, user), user);
+  });
+  register('get_fleet_scan_balances', function (data, user) {
+    return readDiagnosticsForUser_(getStockScanBalances_(data, user), user);
+  });
+  register('get_fleet_scan_warehouses', function (data, user) {
+    var res = getStockScanWarehouses_(data, user) || {};
+    var out = Object.assign({}, res, {
+      warehouses: (res.warehouses || []).filter(function (w) { return String(w.value) === FLEET_WAREHOUSE_ID; })
+    });
+    return readDiagnosticsForUser_(out, user);
+  });
+  register('get_fleet_scan_history', function (data, user, dbId) {
+    return readDiagnosticsForUser_(getStockScanHistory_(data, user, dbId, { warehouse: FLEET_WAREHOUSE_ID }), user);
+  });
+  register('add_fleet_scan', function (data, user, dbId) {
+    return addStockScan_(data, user, dbId, { warehouse: FLEET_WAREHOUSE_ID });
+  });
   register('get_customs_office', getCustomsOffice_);
   register('add_customs_office', addCustomsOffice_);
   register('get_purchase_items', getPurchaseItems_);

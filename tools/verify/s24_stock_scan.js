@@ -48,7 +48,7 @@ check(/register\('get_stock_scan_warehouses',\s*getStockScanWarehouses_\)/.test(
   'get_stock_scan_warehouses registered');
 check(/register\('get_stock_scan_balance',\s*getStockScanBalance_\)/.test(tcActions),
   'get_stock_scan_balance registered');
-check(/register\('add_stock_scan',\s*addStockScan_\)/.test(tcActions),
+check(/register\('add_stock_scan',\s*(addStockScan_\)|function \(data, user, dbId\) \{ return addStockScan_\(data, user, dbId\); \}\))/.test(tcActions),
   'add_stock_scan uses the warehouse-validated pair-balance save (not the legacy hard-coded path)');
 
 /* ══ 2. addStockRevision_ — formulas retired, values computed instead ═══════ */
@@ -135,8 +135,8 @@ check(/var IS_SUPER_ADMIN = <\?!= user && user\.isSuperAdmin/.test(scanPage)
   'the new page sets IS_SUPER_ADMIN/USER_PAGES from the start — the exact gap found on the Valley Foods dashboard (§5)');
 check(/CONTAINER_TYPES = \['شيكارة', 'كرتونة', 'برميل', 'بستلة', 'جونية'\]/.test(scanPage),
   'container type is the fixed five-option list (جونية added for the sack container), not free text');
-check(/companyCall\('get_stock_scan_options',/.test(scanPage) && /companyCall\('get_stock_scan_warehouses',/.test(scanPage)
-  && /companyCall\('get_stock_scan_balances',/.test(scanPage) && /action:\s*'add_stock_scan'/.test(scanPage)
+check(/companyCall\((scanAction_\()?'get_stock_scan_options'/.test(scanPage) && /companyCall\((scanAction_\()?'get_stock_scan_warehouses'/.test(scanPage)
+  && /companyCall\((scanAction_\()?'get_stock_scan_balances'/.test(scanPage) && /action:\s*(scanAction_\()?'add_stock_scan'/.test(scanPage)
   && /UIC\.Live\.save/.test(scanPage),
   'the page calls catalog, options (fallback), warehouses and product balances by name and adapts the save through UIC.Live');
 check(!/companyCall\('get_stock_scan_qty'\)/.test(scanPage),
@@ -582,7 +582,7 @@ async function verifyStockScanLookupBehavior() {
   check(/get_stock_scan_warehouses/.test(scanPage) && /warehouseById/.test(scanPage) && /resolveWarehouseLabel/.test(scanPage)
     && /retryWarehouses/.test(scanPage),
     'warehouses load from the database with label mapping and a refresh/retry path');
-  check((scanPage.match(/action:\s*'add_stock_scan'/g) || []).length === 1 && /function confirmSave\(entry\)[\s\S]{0,1600}UIC\.Live\.save/.test(scanPage),
+  check((scanPage.match(/action:\s*(scanAction_\()?'add_stock_scan'/g) || []).length === 1 && /function confirmSave\(entry\)[\s\S]{0,1600}UIC\.Live\.save/.test(scanPage),
     'only the explicit confirm action can save — selection and lookup never do');
   check(/var entry = \{[\s\S]{0,900}warehouse_id: String\(currentWarehouse\.id\)/.test(scanPage),
     'the confirmed count is bound to a fixed product/warehouse pair');
@@ -621,7 +621,7 @@ async function verifyStockScanLookupBehavior() {
     'available_amount', 'difference', 'percentage', 'notes', 'user', 'created_at'];
   const historyValues = Array.from({ length: 60 }, (_, i) =>
     [i + 1, 'صنف ' + (i + 1), 'فئة', 'كجم', i + 1 > 30 ? '2026-09-26' : '2026-08-31', i + 1, '1', 10, '', 1, '', '', '']);
-  const historyBackend = { STOCK_SHEET: 'stock_revision', String, Object,
+  const historyBackend = { STOCK_SHEET: 'stock_revision', STOCK_CONTAINER_HEADER: 'container_type', String, Object,
     getHeaders_: () => historyHeaders,
     getSheet_: name => {
       if (name !== 'stock_revision') throw new Error('wrong sheet');

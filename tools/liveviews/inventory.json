@@ -2629,6 +2629,15 @@
       "products"
      ]
     },
+    "tc_fleet_scan": {
+     "list": [
+      "products"
+     ],
+     "form": [
+      "stock_revision",
+      "products"
+     ]
+    },
     "tc_trust": {
      "list": [
       "عهد وحسابات خاصة"

@@ -77,6 +77,18 @@
   var USER_PAGES = <?!= user && user.isSuperAdmin ? 'null' : JSON.stringify((user && user.authorizedPages) || {}) ?>;
   var CAN_WRITE = UIC.canAdd_(); var CAN_FULL = UIC.canFull_();
   var CONTAINER_TYPES = ['شيكارة', 'كرتونة', 'برميل', 'بستلة', 'جونية'];
+  /* One template, two pages: tc_fleet_scan (الحركة والاسطول) is this screen
+     locked to warehouse 2, calling the get_fleet_scan_* / add_fleet_scan
+     twins of the stock-scan actions (granted per page, warehouse forced by
+     the server). */
+  var IS_FLEET = CURRENT_ACTION === 'tc_fleet_scan';
+  var FLEET_WAREHOUSE_ID = '2';
+  var SCAN_PAGE_ID = IS_FLEET ? 'tc_fleet_scan' : 'tc_stock_scan';
+  function scanAction_(name) { return IS_FLEET ? String(name).replace('stock_scan', 'fleet_scan') : name; }
+  /* product id -> last stored نوع الوعاء (stock_revision.container_type),
+     delivered with the history read; pre-fills the count form. */
+  var lastContainerByProduct = Object.create(null);
+  var submittedContainerProducts = Object.create(null); // products saved from this page session
 
   function companyCall(moduleAction, data) {
     return API.call('company_action', {
@@ -213,7 +225,7 @@
       companyLogoUrl: COMPANY_LOGO_URL,
       companyLogoHref: scriptUrl + '?action=tc_dashboard&sessionToken=' + SESSION_TOKEN,
       companyLogoTitle: 'توب كيميكال',
-      breadcrumb: 'توب كيميكال / المخازن / جرد دوري مخازن باركود',
+      breadcrumb: IS_FLEET ? 'توب كيميكال / الحركة والاسطول / جرد الحركة والاسطول' : 'توب كيميكال / المخازن / جرد دوري مخازن باركود',
       contentId: 'scan-content',
       menuGroups: (window.TOPCHEMICAL_MENU || [])
     });
@@ -542,7 +554,7 @@
       }));
     }, 1000) : null;
     scanCatalogWaitTimer = requestTimer;
-    scanCatalogPromise = companyCall('get_stock_scan_catalog', refresh ? { refresh: true } : {})
+    scanCatalogPromise = companyCall(scanAction_('get_stock_scan_catalog'), refresh ? { refresh: true } : {})
       .then(function (r) {
         clearInterval(requestTimer);
         if (scanCatalogWaitTimer === requestTimer) scanCatalogWaitTimer = null;
@@ -695,7 +707,7 @@
     }
     productSearchBusy = true;
     productSearchWire++;
-    companyCall('get_stock_scan_options', requestData)
+    companyCall(scanAction_('get_stock_scan_options'), requestData)
       .then(function (r) {
         if (seq !== productSearchSequence) return;
         try { recentQueryPut(cachedKey, { product_options: r.product_options || [], has_more: !!r.has_more }); } catch (e) {}
@@ -788,7 +800,7 @@
     warehousesState = 'loading';
     warehousesError = '';
     renderWarehouseState();
-    companyCall('get_stock_scan_warehouses', forceRefresh ? { refresh: true } : {})
+    companyCall(scanAction_('get_stock_scan_warehouses'), forceRefresh ? { refresh: true } : {})
       .then(function (r) {
         if (seq !== warehousesSequence) return;
         warehouses = (r.warehouses || []).map(function (w) {
@@ -797,6 +809,8 @@
         warehouseById = Object.create(null);
         warehouses.forEach(function (w) { warehouseById[w.value] = w; });
         warehousesState = 'ready';
+        // The fleet page has exactly one warehouse: select it for every count.
+        if (IS_FLEET && warehouseById[FLEET_WAREHOUSE_ID]) retainedWarehouseId = FLEET_WAREHOUSE_ID;
         if (retainedWarehouseId && !warehouseById[retainedWarehouseId]) {
           retainedWarehouseId = '';
           currentWarehouse = null;
@@ -806,6 +820,11 @@
         }
         renderWarehouseState();
         renderScanHistory();
+        if (IS_FLEET && currentProduct && currentWarehouse) {
+          // The count form may have rendered before the list arrived.
+          setComboField_('warehouse', currentWarehouse.id, currentWarehouse.location);
+          if (currentBalance.state === 'idle') requestBalance(currentProduct.id, currentWarehouse.id, { refresh: true });
+        }
       }).catch(function (e) {
         if (seq !== warehousesSequence) return;
         warehousesState = 'error';
@@ -821,6 +840,7 @@
       else if (warehousesState === 'error') host.innerHTML = '<div class="scan-hint" role="status">تعذر تحميل المخازن' +
         (warehousesError ? ' — ' + esc(warehousesError) : '') +
         ' <button type="button" class="btn btn-outline" onclick="retryWarehouses()">إعادة المحاولة</button></div>';
+      else if (IS_FLEET && !warehouseById[FLEET_WAREHOUSE_ID]) host.innerHTML = '<div class="scan-hint" role="status">مخزن الحركة والاسطول غير متاح</div>';
       else host.innerHTML = '';
     }
     var sel = document.getElementById('warehouse');
@@ -875,7 +895,7 @@
     var refresh = !!(opts && opts.refresh);
     currentBalance = { state: 'loading', qty: null, productId: productId, warehouseId: warehouseId, error: '', at: 0 };
     renderBalanceState();
-    currentBalanceRequest = companyCall('get_stock_scan_balances', { product_id: productId, refresh: refresh })
+    currentBalanceRequest = companyCall(scanAction_('get_stock_scan_balances'), { product_id: productId, refresh: refresh })
       .then(function (r) {
         if (gen !== balanceGen) return;
         if (!currentProduct || String(currentProduct.id) !== productId) return;
@@ -948,8 +968,33 @@
     if (!payload || typeof payload !== 'object') payload = response || {};
     return {
       rows: Array.isArray(payload.rows) ? payload.rows : (Array.isArray(response && response.stock) ? response.stock : []),
-      from_date: payload.from_date || (response && response.from_date) || SCAN_HISTORY_START_DATE
+      from_date: payload.from_date || (response && response.from_date) || SCAN_HISTORY_START_DATE,
+      last_container_by_product: payload.last_container_by_product && typeof payload.last_container_by_product === 'object'
+        ? payload.last_container_by_product : {}
     };
+  }
+
+  function lastContainerFor_(productId) {
+    var v = lastContainerByProduct[String(productId == null ? '' : productId)];
+    return v && CONTAINER_TYPES.indexOf(v) >= 0 ? v : '';
+  }
+  /* The combo keeps its value in a hidden input and shows the label in
+     <key>_display; both must change together. */
+  function setComboField_(key, value, label) {
+    var hidden = document.getElementById(key);
+    var display = document.getElementById(key + '_display');
+    if (hidden) hidden.value = value == null ? '' : String(value);
+    if (display) { display.value = label == null ? '' : String(label); display.title = display.value; }
+  }
+  function setContainerTypeField_(value) { setComboField_('container_type', value, value); }
+  /* History may arrive after a product was already picked: fill the
+     still-empty field then, never overwriting a choice the operator made. */
+  function applyLastContainerToOpenForm_() {
+    if (!currentProduct) return;
+    var hidden = document.getElementById('container_type');
+    if (!hidden || String(hidden.value || '').trim()) return;
+    var last = lastContainerFor_(currentProduct.id);
+    if (last) setContainerTypeField_(last);
   }
 
   function loadScanHistory() {
@@ -958,10 +1003,21 @@
     scanHistoryState = 'loading';
     scanHistoryError = '';
     renderScanHistory();
-    backgroundCompanyCall('get_stock_scan_history', { loadAll: true })
+    backgroundCompanyCall(scanAction_('get_stock_scan_history'), { loadAll: true })
       .then(function (r) {
         if (seq !== scanHistorySequence) return;
-        mergeScanHistory(parseScanHistory_(r).rows);
+        var parsed = parseScanHistory_(r);
+        var localLast = lastContainerByProduct;
+        lastContainerByProduct = Object.create(null);
+        Object.keys(parsed.last_container_by_product).forEach(function (pid) {
+          lastContainerByProduct[pid] = String(parsed.last_container_by_product[pid]);
+        });
+        // A save made on this page after the read started is newer than the snapshot.
+        Object.keys(localLast).forEach(function (pid) {
+          if (localLast[pid] && submittedContainerProducts[pid]) lastContainerByProduct[pid] = localLast[pid];
+        });
+        applyLastContainerToOpenForm_();
+        mergeScanHistory(parsed.rows);
         scanHistoryState = 'ready';
         renderScanHistory();
       }).catch(function (e) {
@@ -1006,7 +1062,7 @@
   function renderScanHistory() {
     var host = document.getElementById('scan-history');
     if (!host) return;
-    var title = '<h3 class="scan-history-title">سجلات جرد المخزون من 1 سبتمبر 2026</h3>';
+    var title = '<h3 class="scan-history-title">' + (IS_FLEET ? 'سجلات جرد الحركة والاسطول من 1 سبتمبر 2026' : 'سجلات جرد المخزون من 1 سبتمبر 2026') + '</h3>';
     var pendingHtml = renderPendingScanRows();
     if (scanHistoryState === 'loading') {
       host.innerHTML = title + pendingHtml + '<div class="scan-hint" role="status">جارٍ تحميل سجلات الجرد...</div>';
@@ -1034,6 +1090,7 @@
         date: scanHistoryDate(s.date),
         date_sort: d && !isNaN(d.getTime()) ? d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate() : 0,
         amount: s.amount,
+        container_type: esc(s.container_type || '-'),
         warehouse: esc(resolveWarehouseLabel(s.warehouse)),
         available_amount: s.available_amount,
         difference: esc(s.difference || '-'),
@@ -1044,7 +1101,7 @@
          fields that are formatted or not shown as separate columns. */
       row.__search = [
         s.product, s.product_name, s.name_ar, s.category, s.unit, s.date,
-        s.amount, s.warehouse, resolveWarehouseLabel(s.warehouse),
+        s.amount, s.container_type, s.warehouse, resolveWarehouseLabel(s.warehouse),
         s.available_amount, s.difference, s.percentage, s.user, s.notes,
         s.created_at
       ].join(' ');
@@ -1055,6 +1112,7 @@
       { key: 'category', label: 'الفئة' }, { key: 'unit', label: 'الوحدة' },
       { key: 'date', label: 'التاريخ', numeric: true, sortKey: 'date_sort' },
       { key: 'amount', label: 'الكمية', numeric: true },
+      { key: 'container_type', label: 'نوع الوعاء' },
       { key: 'warehouse', label: 'المخزن', numeric: true },
       { key: 'available_amount', label: 'رصيد السيستم', numeric: true },
       { key: 'difference', label: 'الفرق' }, { key: 'percentage', label: 'النسبة' },
@@ -1078,6 +1136,7 @@
       ['المنتج', s.product_name || ('#' + s.product)], ['الاسم', s.name_ar || '-'],
       ['الفئة', s.category || '-'], ['الوحدة', s.unit || '-'],
       ['التاريخ', scanHistoryDate(s.date)], ['الكمية', s.amount],
+      ['نوع الوعاء الخاص بالصنف', s.container_type || '-'],
       ['المخزن', resolveWarehouseLabel(s.warehouse)], ['ملاحظات', s.notes || '-'],
       ['رصيد السيستم', s.available_amount], ['الفرق', s.difference || '-'],
       ['النسبة', scanHistoryPct(s.percentage)], ['أضيف بواسطة', s.user || '-'],
@@ -1320,7 +1379,7 @@
       }
       return;
     }
-    companyCall('get_stock_scan_options', { mode: 'id', id: digits })
+    companyCall(scanAction_('get_stock_scan_options'), { mode: 'id', id: digits })
       .then(function (r) {
         var opt = (r.product_options || [])[0];
         if (!opt) { UIC.toast('لم يتم العثور على صنف بهذا الكود', 'error'); return; }
@@ -1379,14 +1438,15 @@
         '<div class="name">' + esc(currentProduct.label) + '</div>' +
       '</div>' +
       '<form id="scan-form">' +
-        UIC.field({ key: 'warehouse', label: 'المخزن', type: 'select', required: true, options: warehouses, placeholder: 'اختر المخزن...' }) +
+        UIC.field({ key: 'warehouse', label: 'المخزن', type: 'select', required: true, options: warehouses, placeholder: 'اختر المخزن...',
+          value: IS_FLEET && currentWarehouse ? currentWarehouse.id : undefined }) +
         '<div id="scan-warehouse-status"></div>' +
         '<div id="scan-balance-status" aria-live="polite"></div>' +
-        UIC.field({ key: 'container_type', label: 'نوع العبوات او الشكل الخارجي', type: 'select', required: true, options: CONTAINER_TYPES, placeholder: 'اختر نوع العبوة...' }) +
-        UIC.field({ key: 'amount_per_unit', label: 'الكمية بالعبوة الواحدة او الشكل', type: 'number', step: '0.01', required: true, placeholder: 'مثال: 25', value: perUnitVal }) +
+        UIC.field({ key: 'container_type', label: 'نوع الوعاء الخاص بالصنف', type: 'select', required: true, options: CONTAINER_TYPES, placeholder: 'اختر نوع الوعاء...', value: lastContainerFor_(currentProduct.id) }) +
+        UIC.field({ key: 'amount_per_unit', label: 'الكمية بالوعاء/الشيكارة/الكرتونة....الخ', type: 'number', step: '0.01', required: true, placeholder: 'مثال: 25', value: perUnitVal }) +
         '<div class="scan-calc-field">' +
-          UIC.field({ key: 'unit_count', label: 'عدد العبوات او الشكل', type: 'number', step: '1', required: true, placeholder: 'مثال: 40' }) +
-          '<button type="button" class="btn btn-outline scan-calc-trigger" aria-label="إدخال عدد العبوات او الشكل" title="الحاسبة" onclick="openScanCalculator(\'unit_count\')">⌗</button>' +
+          UIC.field({ key: 'unit_count', label: 'عدد الوعاء/الكرتونة/الشيكارة ..الخ', type: 'number', step: '1', required: true, placeholder: 'مثال: 40' }) +
+          '<button type="button" class="btn btn-outline scan-calc-trigger" aria-label="إدخال عدد الوعاء/الكرتونة/الشيكارة" title="الحاسبة" onclick="openScanCalculator(\'unit_count\')">⌗</button>' +
         '</div>' +
         '<div class="scan-calc-field">' +
           UIC.field({ key: 'loose_amount', label: 'الكمية الفرط', type: 'number', step: '0.01', value: '0', required: true }) +
@@ -1442,7 +1502,7 @@
        tapping it opens it. */
     UIC.Calculator.open({
       target: target,
-      title: 'الحاسبة — ' + (targetId === 'unit_count' ? 'عدد العبوات' : 'الكمية الفرط'),
+      title: 'الحاسبة — ' + (targetId === 'unit_count' ? 'عدد الوعاء' : 'الكمية الفرط'),
       precision: targetId === 'unit_count' ? 0 : 2,
       integerOnly: targetId === 'unit_count',
       min: 0,
@@ -1592,12 +1652,18 @@
     var payload = {
       product: entry.product, warehouse_id: entry.warehouse_id, warehouse_location: entry.warehouse_location,
       date: entry.date, amount: entry.amount, available_amount: entry.available_amount, notes: entry.notes,
+      container_type: entry.container_type,
       __request_id: entry.__request_id
     };
+    // The next count of this product defaults to the type just chosen.
+    if (entry.container_type) {
+      lastContainerByProduct[String(entry.product)] = entry.container_type;
+      submittedContainerProducts[String(entry.product)] = true;
+    }
     var draft = cloneScan(entry);
     draft.__pending = true; draft.__status = 'pending'; draft.__scanKey = entry.__scanKey;
     UIC.Live.save({
-      call: companyCall, action: 'add_stock_scan', data: payload,
+      call: companyCall, action: scanAction_('add_stock_scan'), data: payload,
       list: scanHistoryRows, key: '__scanKey', draft: draft, render: renderScanHistory,
       uid: '__request_id', queueable: true, message: 'تم تسجيل الجرد',
       recordOf: function (resp) {
@@ -1631,7 +1697,8 @@
     retainedWarehouseId = String(d.warehouse_id || d.warehouse || '');
     currentWarehouse = warehouseById[retainedWarehouseId] ? { id: retainedWarehouseId, location: warehouseById[retainedWarehouseId].label } : null;
     showStep('count'); renderCountStep();
-    ['container_type','amount_per_unit','unit_count','loose_amount'].forEach(function (field) { var e = document.getElementById(field); if (e) e.value = d[field] == null ? '' : d[field]; });
+    ['amount_per_unit','unit_count','loose_amount'].forEach(function (field) { var e = document.getElementById(field); if (e) e.value = d[field] == null ? '' : d[field]; });
+    setContainerTypeField_(d.container_type);
     var sel = document.getElementById('warehouse'); if (sel) { sel.value = retainedWarehouseId; onWarehouseChange(); }
     updateTotalPreview();
   }
@@ -1640,7 +1707,7 @@
      visible pair balance revalidates (the scan flow itself has no list to redraw). */
   UIC.Live.watchPage({
     call: companyCall,
-    page: 'tc_stock_scan',
+    page: SCAN_PAGE_ID,
     onChange: function () { UIC.Live.arrive(function () {
       loadWarehouses(true);
       if (currentProduct && currentWarehouse) requestBalance(currentProduct.id, currentWarehouse.id, { refresh: true });
