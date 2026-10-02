@@ -79,9 +79,12 @@
   }
 
   function dateOnly(v) { return v ? String(v).slice(0, 10) : '-'; }
-  /* Stages: Open (order + materials, editable until approved) → approved →
-     In Progress (record planned/produced qty and the materials used) →
-     Completed (after the review dialog), or Cancelled from Open / In Progress. */
+  /* Two tracks, side by side.
+     production_status — Open → In Progress (one click) → Completed, after the
+     review dialog, where the order's figures get their last correction; a
+     Completed order is locked. Cancelled from Open / In Progress.
+     approval_status  — the office sign-off, recorded beside production and
+     gating neither start nor done. */
   var ST_OPEN = 'Open', ST_PROGRESS = 'In Progress', ST_DONE = 'Completed', ST_CANCELLED = 'Cancelled';
   var STATUS_LABEL = { 'Open': 'مفتوح', 'In Progress': 'قيد التنفيذ', 'Completed': 'مكتمل', 'Cancelled': 'ملغي' };
   var STATUS_COLOR = { 'Open': 'var(--text-muted)', 'In Progress': '#d97706', 'Completed': 'var(--success)', 'Cancelled': 'var(--danger)' };
@@ -106,8 +109,12 @@
         btns.push(act('📝 تسجيل الإنتاج / Record production', 'progress'));
         btns.push(act('✅ إنهاء الأمر / Done', 'done'));
       }
-      if (isPending(h) && isOpen(h)) btns.push(act('✅ اعتماد / Approve', 'approve'));
-      if (!isPending(h) && isOpen(h)) btns.push(act('▶️ بدء التنفيذ / Start', 'start'));
+      /* Start is the production track and never waits on the office sign-off,
+         so a user with write access can move their own order forward. */
+      if (isOpen(h)) btns.push(act('▶️ بدء التنفيذ / Start', 'start'));
+      /* The sign-off stays reachable at every production stage, Completed
+         included: it runs beside production, so starting must not bury it. */
+      if (isPending(h) && statusOf(h) !== ST_CANCELLED) btns.push(act('✅ اعتماد / Approve', 'approve'));
       if (isPending(h) && isOpen(h) && UIC.canFull_()) {
         btns.push(act('✏️ تعديل / Edit', 'edit'));
         btns.push(act('🗑️ حذف / Delete', 'delete', '#dc2626'));
@@ -195,6 +202,11 @@
       '<button class="btn btn-outline" onclick="showList()">← عودة</button>' +
       '<h2 style="margin:0;">' + (record ? (__canEdit ? 'تعديل أمر تصنيع' : 'عرض أمر تصنيع') : 'إضافة أمر تصنيع') + '</h2></div>' +
       stageBar(record) +
+      /* The order was closed by the review dialog: say so, rather than leaving
+         a read-only screen that looks like it is merely missing a Save. */
+      (record && statusOf(record) === ST_DONE
+        ? '<div style="margin-bottom:16px;padding:10px 14px;border-radius:8px;border:1px solid var(--success);color:var(--success);font-weight:700;">🔒 الأمر مكتمل — البيانات مقفلة ولا يمكن تعديلها</div>'
+        : '') +
       '<form id="manufacture-form">' +
       '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:0 16px;padding:16px;background:var(--bg-surface);border:1px solid var(--border-color);border-radius:8px;margin-bottom:16px;">' +
       UIC.field({ key: 'mo_date', label: 'تاريخ الأمر *', type: 'date', value: record ? dateOnly(record.mo_date) : today, required: true }) +
@@ -482,86 +494,236 @@
     });
   }
 
-  /* ── Done: a review of everything the order will post, then confirm. Built
-     from a fresh read, so it shows what the server will complete with. ── */
-  var __done = null;   // { uid, version, ok }
+  /* ── Done: the last writable moment ──────────────────────────────────────
+     The confirm here moves stock, prices the order and locks it for good, so
+     this dialog is not a read-only summary: the produced and planned
+     quantities, the extra cost, the notes and the consumed quantity of every
+     material are all editable in place, priced and checked live, and the
+     confirm sends them with the completion in ONE request. Built from a fresh
+     read, so it starts from what the server would complete with.
+     Adding or removing a material still belongs to the production screen —
+     «تعديل بيانات الإنتاج» in the footer goes there. ── */
+  var __done = null;   // { uid, version, header, lines }
+
   function openDoneReview(uid) {
     Promise.all([ensureOptions(), companyCall('get_et_manufacture_order', { mo_code: uid })])
       .then(function (res) {
         var h = res[1].header || {};
-        var lines = res[1].lines || [];
         if (!inProgress(h)) { UIC.toast('يمكن إنهاء أمر قيد التنفيذ فقط', 'error'); renderList(true); return; }
-        var planned = num(h.planned_qty), produced = num(h.produced_qty);
-        var problems = [];
-        if (!(produced > 0)) problems.push('لم يتم تسجيل الكمية المنتجة فعلياً');
-        var materials = 0;
-        var rowsHtml = lines.map(function (l) {
-          var p = productById(l.product_id);
-          var fromPlan = blank(l.consumed_qty);
-          var used = fromPlan ? num(l.planned_qty) : num(l.consumed_qty);
-          var avail = p ? num(p.current_qty) : 0;
-          var cost = used * num(l.unit_cost);
-          materials += cost;
-          var short = used > avail;
-          if (short) problems.push('الكمية المستهلكة من ' + (l.product_name || l.product_id) + ' (' + FMT.number(used) + ') تتجاوز الرصيد المتاح (' + FMT.number(avail) + ')');
-          var diff = used - num(l.planned_qty);
-          return '<tr' + (short ? ' style="background:rgba(220,38,38,.08);"' : '') + '>' +
-            '<td>' + FMT.escape(l.product_name || '-') + '</td>' +
-            '<td>' + FMT.number(l.planned_qty) + '</td>' +
-            '<td>' + FMT.number(used) + (fromPlan ? ' <span style="font-size:11px;color:var(--text-muted);">(حسب الخطة)</span>' : '') + '</td>' +
-            '<td>' + (diff > 0 ? '+' : '') + FMT.number(diff) + '</td>' +
-            '<td>' + FMT.number(avail) + '</td>' +
-            '<td>' + FMT.number(cost) + '</td>' +
-            '<td style="font-weight:700;color:' + (short ? 'var(--danger)' : 'var(--success)') + ';">' + (short ? '⚠' : '✓') + '</td></tr>';
-        }).join('');
-        if (!lines.length) problems.push('لا توجد خامات في الأمر');
-        var extra = num(h.extra_cost), total = materials + extra;
-        var variance = produced - planned;
-        var cell = function (label, v, color) { return '<div><div style="font-size:12px;color:var(--text-muted);">' + label + '</div><strong' + (color ? ' style="color:' + color + ';"' : '') + '>' + v + '</strong></div>'; };
-        var body =
-          '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px;">' +
-          cell('رقم الأمر', FMT.escape(h.mo_number || '-')) + cell('تاريخ الأمر', dateOnly(h.mo_date)) +
-          cell('المنتج التام', FMT.escape(h.product_name || '-')) + cell('بدأ التنفيذ', dateOnly(h.started_at)) +
-          cell('الكمية المخططة', FMT.number(planned)) +
-          cell('الكمية المنتجة فعلياً', produced > 0 ? FMT.number(produced) : '—', produced > 0 ? '' : 'var(--danger)') +
-          cell('الفرق عن الخطة', (variance > 0 ? '+' : '') + FMT.number(variance) + (planned > 0 ? ' (' + Math.round(variance / planned * 1000) / 10 + '%)' : ''), variance < 0 ? 'var(--danger)' : '') +
-          cell('ملاحظات', FMT.escape(h.notes || '-')) +
-          '</div>' +
-          '<div class="table-wrap"><table class="table"><thead><tr><th>الخامة</th><th>مخطط</th><th>مستهلك</th><th>الفرق</th><th>الرصيد المتاح</th><th>تكلفة تقديرية</th><th></th></tr></thead><tbody>' +
-          rowsHtml + '</tbody></table></div>' +
-          '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:16px 0;padding:12px;border:1px solid var(--border-color);border-radius:8px;">' +
-          cell('تكلفة الخامات (تقديرية)', FMT.number(materials)) + cell('تكاليف إضافية', FMT.number(extra)) +
-          cell('إجمالي التكلفة', FMT.number(total)) + cell('تكلفة الوحدة', produced > 0 ? FMT.number(total / produced) : '—') +
-          '</div>' +
-          '<div style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">التكلفة النهائية تُحسب على الخادم بسعر التكلفة الحالي لحظة الإنهاء. بعد الإنهاء تُضاف الكمية المنتجة للمخزون وتُخصم الخامات، ولا يمكن التعديل.</div>' +
-          (problems.length
-            ? '<div style="padding:12px;border-radius:8px;border:1px solid var(--danger);color:var(--danger);margin-bottom:12px;"><strong>لا يمكن الإنهاء:</strong><ul style="margin:6px 0 0;padding-inline-start:20px;">' +
-              problems.map(function (p) { return '<li>' + FMT.escape(p) + '</li>'; }).join('') + '</ul></div>'
-            : '') +
-          '<form id="done-form">' +
-          UIC.field({ key: 'done_completion_date', label: 'تاريخ الإكمال', type: 'date', value: new Date().toISOString().slice(0, 10), required: true }) +
-          '<label style="display:flex;gap:8px;align-items:center;font-weight:700;margin-top:8px;"><input type="checkbox" id="done_confirm"' + (problems.length ? ' disabled' : '') + '> راجعت بيانات الأمر وأؤكد إنهاءه</label>' +
-          '</form>';
-        __done = { uid: uid, version: num(h.version), ok: !problems.length };
-        var footer =
-          '<button class="btn btn-outline" onclick="UIC.closeModal(\'done-modal\')">إغلاق</button> ' +
-          '<button class="btn btn-outline" onclick="UIC.closeModal(\'done-modal\');openProgress(\'' + FMT.escape(uid) + '\')">✏️ تعديل بيانات الإنتاج</button> ' +
-          '<button class="btn btn-primary" id="done-submit"' + (problems.length ? ' disabled' : '') + ' onclick="UI.submitOnce(this, submitDone)">✅ تأكيد إنهاء الأمر</button>';
-        UIC.openModal('done-modal', { title: 'مراجعة قبل الإنهاء — ' + FMT.escape(h.mo_number || ''), body: body, size: 'xl', footer: footer });
+        __done = {
+          uid: uid,
+          version: num(h.version),
+          header: {
+            mo_number: h.mo_number, mo_date: h.mo_date, product_name: h.product_name, started_at: h.started_at,
+            planned_qty: h.planned_qty, produced_qty: blank(h.produced_qty) ? '' : h.produced_qty,
+            extra_cost: num(h.extra_cost), notes: h.notes || ''
+          },
+          lines: (res[1].lines || []).map(function (l) {
+            var p = productById(l.product_id);
+            return {
+              unique_id: l.unique_id, product_id: l.product_id,
+              product_name: l.product_name || (p ? p.label : String(l.product_id || '-')),
+              planned_qty: l.planned_qty,
+              consumed_qty: blank(l.consumed_qty) ? '' : l.consumed_qty,
+              unit_cost: num(l.unit_cost),
+              available: p ? num(p.current_qty) : 0
+            };
+          })
+        };
+        var s = doneCompute();
+        UIC.openModal('done-modal', {
+          title: 'مراجعة قبل الإنهاء — ' + FMT.escape(__done.header.mo_number || ''),
+          body: doneBody(s),
+          size: 'xl',
+          footer: doneFooter(s)
+        });
+        /* UIC.field writes no handler of its own, so the header inputs are wired
+           after the dialog exists; the material inputs carry their own oninput. */
+        ['dn_planned_qty', 'dn_produced_qty', 'dn_extra_cost'].forEach(function (id) {
+          var el = document.getElementById(id);
+          if (el && el.addEventListener) el.addEventListener('input', doneRecalc);
+        });
       })
       .catch(function (e) { UIC.toast(e.message || 'خطأ', 'error'); });
   }
 
+  /* The dialog's own fields are the order's figures while it is open. */
+  function doneSync() {
+    var h = __done.header;
+    var pick = function (id, cur) { var el = document.getElementById(id); return el ? el.value : cur; };
+    h.planned_qty = pick('dn_planned_qty', h.planned_qty);
+    h.produced_qty = pick('dn_produced_qty', h.produced_qty);
+    h.extra_cost = pick('dn_extra_cost', h.extra_cost);
+    h.notes = pick('dn_notes', h.notes);
+  }
+
+  function doneLine(i, key, value) {
+    __done.lines[i][key] = value;
+    doneRecalc();
+  }
+
+  /* Everything the confirm would post, priced, plus what still blocks it.
+     A client-side mirror of completeManufacture_ — the server checks again. */
+  function doneCompute() {
+    var h = __done.header;
+    var planned = num(h.planned_qty), produced = num(h.produced_qty), extra = num(h.extra_cost);
+    var problems = [];
+    if (!(planned > 0)) problems.push('الكمية المخططة يجب أن تكون أكبر من صفر');
+    if (!(produced > 0)) problems.push('لم يتم تسجيل الكمية المنتجة فعلياً');
+    if (extra < 0) problems.push('التكاليف الإضافية لا يمكن أن تكون سالبة');
+    if (!__done.lines.length) problems.push('لا توجد خامات في الأمر');
+    var materials = 0;
+    var lines = __done.lines.map(function (l) {
+      var fromPlan = blank(l.consumed_qty);
+      var used = fromPlan ? num(l.planned_qty) : num(l.consumed_qty);
+      var cost = used * num(l.unit_cost);
+      materials += cost;
+      var short = used > l.available;
+      if (used < 0) problems.push('الكمية المستهلكة من ' + (l.product_name || l.product_id) + ' لا يمكن أن تكون سالبة');
+      else if (short) problems.push('الكمية المستهلكة من ' + (l.product_name || l.product_id) + ' (' + FMT.number(used) + ') تتجاوز الرصيد المتاح (' + FMT.number(l.available) + ')');
+      return { fromPlan: fromPlan, used: used, cost: cost, short: short, diff: used - num(l.planned_qty) };
+    });
+    var total = materials + extra;
+    return {
+      planned: planned, produced: produced, extra: extra, lines: lines,
+      materials: materials, total: total,
+      unit: produced > 0 ? total / produced : null,
+      variance: produced - planned, problems: problems
+    };
+  }
+
+  function doneVarianceText(s) {
+    return (s.variance > 0 ? '+' : '') + FMT.number(s.variance) +
+      (s.planned > 0 ? ' (' + Math.round(s.variance / s.planned * 1000) / 10 + '%)' : '');
+  }
+
+  function doneProblemsHtml(s) {
+    if (!s.problems.length) return '';
+    return '<div style="padding:12px;border-radius:8px;border:1px solid var(--danger);color:var(--danger);margin-bottom:12px;">' +
+      '<strong>لا يمكن الإنهاء:</strong><ul style="margin:6px 0 0;padding-inline-start:20px;">' +
+      s.problems.map(function (p) { return '<li>' + FMT.escape(p) + '</li>'; }).join('') + '</ul></div>';
+  }
+
+  function doneBody(s) {
+    var h = __done.header;
+    var cell = function (label, v, id, color) {
+      return '<div><div style="font-size:12px;color:var(--text-muted);">' + label + '</div>' +
+        '<strong' + (id ? ' id="' + id + '"' : '') + (color ? ' style="color:' + color + ';"' : '') + '>' + v + '</strong></div>';
+    };
+    var rowsHtml = __done.lines.map(function (l, i) {
+      var c = s.lines[i];
+      return '<tr id="dn_row_' + i + '"' + (c.short ? ' style="background:rgba(220,38,38,.08);"' : '') + '>' +
+        '<td>' + FMT.escape(l.product_name || '-') + '</td>' +
+        '<td><input id="dn_plan_' + i + '" class="input" type="number" min="0" step="any" style="min-width:90px;" value="' + (blank(l.planned_qty) ? '' : l.planned_qty) + '" oninput="doneLine(' + i + ', \'planned_qty\', this.value)"></td>' +
+        '<td><input id="dn_cons_' + i + '" class="input" type="number" min="0" step="any" style="min-width:90px;" placeholder="' + FMT.number(l.planned_qty) + '" value="' + (blank(l.consumed_qty) ? '' : l.consumed_qty) + '" oninput="doneLine(' + i + ', \'consumed_qty\', this.value)">' +
+          '<span id="dn_plan_hint_' + i + '" style="font-size:11px;color:var(--text-muted);">' + (c.fromPlan ? ' (حسب الخطة)' : '') + '</span></td>' +
+        '<td id="dn_diff_' + i + '" style="color:' + (c.diff > 0 ? 'var(--danger)' : c.diff < 0 ? 'var(--success)' : 'inherit') + ';">' + (c.diff > 0 ? '+' : '') + FMT.number(c.diff) + '</td>' +
+        '<td>' + FMT.number(l.available) + '</td>' +
+        '<td id="dn_cost_' + i + '">' + FMT.number(c.cost) + '</td>' +
+        '<td id="dn_flag_' + i + '" style="font-weight:700;color:' + (c.short ? 'var(--danger)' : 'var(--success)') + ';">' + (c.short ? '⚠' : '✓') + '</td></tr>';
+    }).join('');
+
+    return '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px;">' +
+      cell('رقم الأمر', FMT.escape(h.mo_number || '-')) + cell('تاريخ الأمر', dateOnly(h.mo_date)) +
+      cell('المنتج التام', FMT.escape(h.product_name || '-')) + cell('بدأ التنفيذ', dateOnly(h.started_at)) +
+      cell('الفرق عن الخطة', doneVarianceText(s), 'dn_variance', s.variance < 0 ? 'var(--danger)' : '') +
+      '</div>' +
+      '<div style="font-size:13px;color:var(--text-muted);margin-bottom:8px;">راجع الأرقام وصحّحها هنا إن لزم — هذه آخر فرصة للتعديل، فبعد التأكيد يُقفل الأمر.</div>' +
+      '<form id="done-form">' +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:0 16px;">' +
+      UIC.field({ key: 'dn_planned_qty', label: 'الكمية المخططة', type: 'number', value: h.planned_qty, required: true, min: 0, step: 'any' }) +
+      UIC.field({ key: 'dn_produced_qty', label: 'الكمية المنتجة فعلياً', type: 'number', value: h.produced_qty, required: true, min: 0, step: 'any' }) +
+      UIC.field({ key: 'dn_extra_cost', label: 'تكاليف إضافية', type: 'number', value: h.extra_cost, min: 0, step: 'any' }) +
+      UIC.field({ key: 'done_completion_date', label: 'تاريخ الإكمال', type: 'date', value: new Date().toISOString().slice(0, 10), required: true }) +
+      UIC.field({ key: 'dn_notes', label: 'ملاحظات', type: 'text', value: FMT.escape(h.notes || '') }) +
+      '</div></form>' +
+      '<h4 style="margin:16px 0 8px;">الخامات</h4>' +
+      '<div style="font-size:13px;color:var(--text-muted);margin-bottom:8px;">اترك «المستهلكة» فارغة لاستخدام الكمية المخططة.</div>' +
+      '<div class="table-wrap"><table class="table" style="min-width:700px;"><thead><tr>' +
+      '<th>الخامة</th><th>مخطط</th><th>مستهلك</th><th>الفرق</th><th>الرصيد المتاح</th><th>تكلفة تقديرية</th><th></th>' +
+      '</tr></thead><tbody>' + rowsHtml + '</tbody></table></div>' +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:16px 0;padding:12px;border:1px solid var(--border-color);border-radius:8px;">' +
+      cell('تكلفة الخامات (تقديرية)', FMT.number(s.materials), 'dn_materials') +
+      cell('تكاليف إضافية', FMT.number(s.extra), 'dn_extra_total') +
+      cell('إجمالي التكلفة', FMT.number(s.total), 'dn_total') +
+      cell('تكلفة الوحدة', s.unit === null ? '—' : FMT.number(s.unit), 'dn_unit') +
+      '</div>' +
+      '<div style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">التكلفة النهائية تُحسب على الخادم بسعر التكلفة الحالي لحظة الإنهاء. بعد الإنهاء تُضاف الكمية المنتجة للمخزون وتُخصم الخامات، ولا يمكن التعديل.</div>' +
+      '<div id="dn_problems">' + doneProblemsHtml(s) + '</div>' +
+      '<label style="display:flex;gap:8px;align-items:center;font-weight:700;"><input type="checkbox" id="done_confirm"' + (s.problems.length ? ' disabled' : '') + '> راجعت بيانات الأمر وأؤكد إنهاءه</label>';
+  }
+
+  function doneFooter(s) {
+    return '<button class="btn btn-outline" onclick="UIC.closeModal(\'done-modal\')">إغلاق</button> ' +
+      '<button class="btn btn-outline" onclick="UIC.closeModal(\'done-modal\');openProgress(\'' + FMT.escape(__done.uid) + '\')">✏️ تعديل بيانات الإنتاج</button> ' +
+      '<button class="btn btn-primary" id="done-submit"' + (s.problems.length ? ' disabled' : '') + ' onclick="UI.submitOnce(this, submitDone)">✅ تأكيد إنهاء الأمر</button>';
+  }
+
+  /* Repaint the derived cells in place — rebuilding the body would take the
+     focus and the caret out of the field being typed in. */
+  function doneRecalc() {
+    if (!__done) return;
+    doneSync();
+    var s = doneCompute();
+    var put = function (id, text, color) {
+      var el = document.getElementById(id);
+      if (!el) return;
+      el.textContent = text;
+      if (color !== undefined) el.style.color = color;
+    };
+    s.lines.forEach(function (c, i) {
+      put('dn_diff_' + i, (c.diff > 0 ? '+' : '') + FMT.number(c.diff), c.diff > 0 ? 'var(--danger)' : c.diff < 0 ? 'var(--success)' : 'inherit');
+      put('dn_cost_' + i, FMT.number(c.cost));
+      put('dn_flag_' + i, c.short ? '⚠' : '✓', c.short ? 'var(--danger)' : 'var(--success)');
+      put('dn_plan_hint_' + i, c.fromPlan ? ' (حسب الخطة)' : '');
+      var row = document.getElementById('dn_row_' + i);
+      if (row) row.style.background = c.short ? 'rgba(220,38,38,.08)' : '';
+    });
+    put('dn_variance', doneVarianceText(s), s.variance < 0 ? 'var(--danger)' : '');
+    put('dn_materials', FMT.number(s.materials));
+    put('dn_extra_total', FMT.number(s.extra));
+    put('dn_total', FMT.number(s.total));
+    put('dn_unit', s.unit === null ? '—' : FMT.number(s.unit));
+    var box = document.getElementById('dn_problems');
+    if (box) box.innerHTML = doneProblemsHtml(s);
+    var blocked = !!s.problems.length;
+    var cb = document.getElementById('done_confirm');
+    /* An edit that reopens a problem also takes the tick back: the confirmation
+       belongs to the figures on screen, not to the ones that were there. */
+    if (cb) { cb.disabled = blocked; if (blocked) cb.checked = false; }
+    var btn = document.getElementById('done-submit');
+    if (btn) btn.disabled = blocked;
+    return s;
+  }
+
   function submitDone() {
-    if (!__done || !__done.ok) return Promise.reject();
+    if (!__done) return Promise.reject();
     var cb = document.getElementById('done_confirm');
     if (!cb || !cb.checked) { UIC.toast('أكّد مراجعة بيانات الأمر أولاً', 'error'); return Promise.reject(); }
     if (!UIC.validateForm('done-form')) return Promise.reject();
     var d = UIC.collectForm('done-form');
+    /* Re-read, so a last keystroke cannot slip past the checks. */
+    var s = doneRecalc();
+    if (s.problems.length) { UIC.toast(s.problems[0], 'error'); return Promise.reject(); }
     return UIC.Live.save({
       call: companyCall,
       action: 'complete_et_manufacture',
-      data: { unique_id: __done.uid, version: __done.version, completion_date: d.done_completion_date },
+      data: {
+        unique_id: __done.uid,
+        version: __done.version,
+        completion_date: d.done_completion_date,
+        planned_qty: s.planned,
+        produced_qty: s.produced,
+        extra_cost: s.extra,
+        notes: __done.header.notes == null ? '' : __done.header.notes,
+        /* The RESOLVED numbers, never a blank: an empty «مستهلك» reads as «per
+           plan» here, while the server reads a blank as «keep what is on the
+           line». Sending the figure the user was shown closes that gap — what
+           was confirmed on screen is exactly what commits. */
+        lines: __done.lines.map(function (l, i) {
+          return { unique_id: l.unique_id, planned_qty: num(l.planned_qty), consumed_qty: s.lines[i].used };
+        })
+      },
       message: 'تم إنهاء أمر التصنيع',
       queueable: false,
       reload: function () { renderList(true); },

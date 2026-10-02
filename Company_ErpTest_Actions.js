@@ -4971,14 +4971,23 @@ const ErpTest = (function () {
     return { status: 'success', message: 'تم اعتماد أمر التصنيع' };
   }
 
-  /** Open -> In Progress. Approval is the gate: production never starts on an unapproved order. */
+  /** Open -> In Progress, on one click.
+   *
+   * production_status is the SHOP FLOOR's own track (Open -> In Progress ->
+   * Completed) and approval_status is the office sign-off beside it. They used
+   * to be one chain: start and complete both refused an order that no approver
+   * had stamped, so a regular user (page access `write`, no `full`, no
+   * approver) created an order and could go no further — Start never appeared,
+   * and edit is `full`-only, so the order sat Open / Pending for good.
+   * The two tracks are independent now: whoever runs production moves the
+   * order, approval is recorded alongside it, and neither waits on the other.
+   */
   function startManufacture_(data, user, dbId) {
     const uid = mfgStr_(data && data.unique_id);
     if (!uid) throw new Error('معرف الأمر مطلوب');
     const out = executeWithLock_(function () {
       const order = mfgFindOrder_(dbId, uid);
       if (!order) throw new Error('أمر التصنيع غير موجود');
-      if (mfgStr_(order.approval_status) !== 'Approved') throw new Error('يجب اعتماد الأمر قبل بدء التنفيذ');
       if (mfgStatus_(order) !== MFG_OPEN) throw new Error('لا يمكن بدء التنفيذ إلا لأمر مفتوح');
       // started_at / started_by land only where the tab has those columns
       // (MFG_HEADERS / etRepairMfgHeaders_); no column is added inside a request.
@@ -5055,6 +5064,19 @@ const ErpTest = (function () {
     return { status: 'success', message: 'تم حفظ بيانات الإنتاج', unique_id: uid, assignedId: uid, record: out.record };
   }
 
+  /* In Progress -> Completed: the final, irreversible write. Stock moves (the
+   * produced quantity in, every consumed material out), the cost is priced at
+   * the current unit cost, and from here nothing on the order can be changed —
+   * edit, progress-save, complete and cancel all refuse a Completed order.
+   *
+   * Because it is the last writable moment, the request may carry the review
+   * dialog's own corrections — produced/planned quantity, extra cost, notes and
+   * the consumed quantity of each line — so what the user confirmed on screen
+   * is what commits, in one locked step rather than a save followed by a
+   * separate complete. Anything the request leaves out keeps the value already
+   * recorded on the order. Approval is a separate track (see startManufacture_)
+   * and does not gate this.
+   */
   function completeManufacture_(data, user, dbId) {
     data = data || {};
     const uid = mfgStr_(data.unique_id);
@@ -5062,7 +5084,6 @@ const ErpTest = (function () {
     const out = executeWithLock_(function () {
       const order = mfgFindOrder_(dbId, uid);
       if (!order) throw new Error('أمر التصنيع غير موجود');
-      if (mfgStr_(order.approval_status) !== 'Approved') throw new Error('يجب اعتماد الأمر قبل الإكمال');
       const st = mfgStatus_(order);
       if (st === MFG_COMPLETED || st === MFG_CANCELLED) throw new Error('الأمر مغلق');
       if (st !== MFG_IN_PROGRESS) throw new Error('يجب بدء تنفيذ الأمر قبل الإكمال');
@@ -5070,6 +5091,11 @@ const ErpTest = (function () {
       const produced = num0_(mfgBlank_(data.produced_qty) ? order.produced_qty : data.produced_qty);
       if (!(produced > 0)) throw new Error('الكمية المنتجة مطلوبة');
       if (!mfgStr_(data.completion_date)) throw new Error('تاريخ الإكمال مطلوب');
+      // The dialog's final corrections, each only when the request carries it.
+      const planned = num0_(mfgBlank_(data.planned_qty) ? order.planned_qty : data.planned_qty);
+      if (!(planned > 0)) throw new Error('الكمية المخططة يجب أن تكون أكبر من صفر');
+      const extra = num0_(mfgBlank_(data.extra_cost) ? order.extra_cost : data.extra_cost);
+      if (extra < 0) throw new Error('التكاليف الإضافية لا يمكن أن تكون سالبة');
       // Version check before any line is patched, so a stale request writes nothing.
       if (data.version !== undefined && data.version !== null && data.version !== '') checkRowVersion_(order, data.version);
 
@@ -5086,27 +5112,31 @@ const ErpTest = (function () {
       const priced = lines.map(function (l) {
         const p = payload[mfgStr_(l.unique_id)];
         // Request value, else the consumed qty saved with the progress, else the plan.
+        const plannedLine = (p && !mfgBlank_(p.planned_qty)) ? num0_(p.planned_qty) : num0_(l.planned_qty);
         const consumed = (p && !mfgBlank_(p.consumed_qty)) ? Number(p.consumed_qty)
-          : (!mfgBlank_(l.consumed_qty) ? Number(l.consumed_qty) : num0_(l.planned_qty));
+          : (!mfgBlank_(l.consumed_qty) ? Number(l.consumed_qty) : plannedLine);
         const avail = num0_(available[mfgStr_(l.product_id)]);
         if (!(consumed >= 0) || consumed > avail) {
           throw new Error('الكمية المستهلكة من ' + (names[mfgStr_(l.product_id)] || l.product_id) + ' تتجاوز الرصيد المتاح (المتاح: ' + avail + ')');
         }
         const uc = unitCostOf_(dbId, l.product_id);
-        return { line: l, consumed: consumed, unit_cost: uc, total_cost: consumed * uc };
+        return { line: l, planned_qty: plannedLine, consumed: consumed, unit_cost: uc, total_cost: consumed * uc };
       });
       let materials = 0;
       priced.forEach(function (x) {
         materials += x.total_cost;
-        tlDbPatch_(dbId, MFG_LINES_SHEET, x.line.unique_id, { consumed_qty: x.consumed, unit_cost: x.unit_cost, total_cost: x.total_cost }, { user: user });
+        tlDbPatch_(dbId, MFG_LINES_SHEET, x.line.unique_id, { planned_qty: x.planned_qty, consumed_qty: x.consumed, unit_cost: x.unit_cost, total_cost: x.total_cost }, { user: user });
       });
-      const extra = num0_(order.extra_cost);
       const total = materials + extra;
       const patched = tlDbPatch_(dbId, MFG_SHEET, uid, {
+        planned_qty: planned,
         materials_cost: materials,
+        extra_cost: extra,
         total_cost: total,
         unit_cost: total / produced,
         produced_qty: produced,
+        // '' is a deliberate clearing; only an absent field keeps what the order holds.
+        notes: (data.notes === undefined || data.notes === null) ? (order.notes == null ? '' : order.notes) : data.notes,
         completion_date: parseDate_(data.completion_date),
         completed_by: (user && user.email) || '',
         production_status: 'Completed'

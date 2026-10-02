@@ -132,7 +132,9 @@ ok(o1.approval_status === 'Pending' && o1.production_status === 'Open', 'T-MFG 1
 ok(near(o1.materials_cost, 4 * 10 + 2 * 5), 'T-MFG 1: materials_cost = 4·uc(A) + 2·uc(B)');
 throwsWith(function () { call('add_et_manufacture', { header: { mo_date: '2023-03-01', product_id: F, planned_qty: 1 }, lines: [{ product_id: F, planned_qty: 1 }] }); }, 'لا يمكن استخدام المنتج التام كخامة', 'T-MFG 2: finished product as material refused');
 throwsWith(function () { call('add_et_manufacture', { header: { mo_date: '2023-03-01', product_id: F, planned_qty: 1 }, lines: [{ product_id: A, planned_qty: 1 }, { product_id: A, planned_qty: 1 }] }); }, 'الخامة مكررة في نفس الأمر', 'T-MFG 3: duplicate material refused');
-throwsWith(function () { call('complete_et_manufacture', { unique_id: k1, produced_qty: 5, completion_date: '2023-03-02' }); }, 'يجب اعتماد الأمر قبل الإكمال', 'T-MFG 4: complete before approve refused');
+// What stops a complete is the production track, not the sign-off: an Open order
+// has to be started first, approved or not.
+throwsWith(function () { call('complete_et_manufacture', { unique_id: k1, produced_qty: 5, completion_date: '2023-03-02' }); }, 'يجب بدء تنفيذ الأمر قبل الإكمال', 'T-MFG 4: complete before start refused, with no mention of approval');
 ok(call('approve_et_manufacture', { unique_id: k1, version: 0 }).status === 'success', 'T-MFG 5: approve');
 throwsWith(function () { call('complete_et_manufacture', { unique_id: k1, produced_qty: 5, completion_date: '2023-03-02' }); }, 'يجب بدء تنفيذ الأمر قبل الإكمال', 'T-MFG 5: complete before start refused');
 ok(call('start_et_manufacture', { unique_id: k1, version: 1 }).status === 'success' && rows('erp_test_manufacture_orders')[0].production_status === 'In Progress', 'T-MFG 5: start → In Progress');
@@ -184,14 +186,18 @@ try { const r6 = call('add_et_sales', { header: { customer_id: 5, invoice_date: 
 ok(sell6err !== '', 'T-STOCK: selling F×6 fails with the stock error (' + sell6err.slice(0, 60) + ')');
 
 
-/* ── T-FLOW: Open → approve → In Progress → record production → review → Done ── */
+/* ── T-FLOW: Open → In Progress → record production → review → Done, with the
+      office sign-off running beside it rather than gating it ── */
 const kw = 'MO-FLOW-1';
 ok(call('add_et_manufacture', { request_key: kw, header: { mo_date: '2023-03-06', product_id: F, planned_qty: 2 }, lines: [{ product_id: A, planned_qty: 1 }] }).status === 'success', 'T-FLOW 1: order + materials added (Open)');
 const ord = function (k) { return rows('erp_test_manufacture_orders').find(function (o) { return o.unique_id === (k || kw); }); };
-throwsWith(function () { call('start_et_manufacture', { unique_id: kw }); }, 'يجب اعتماد الأمر قبل بدء التنفيذ', 'T-FLOW 2: start before approve refused');
 throwsWith(function () { call('save_et_manufacture_progress', { header: { unique_id: kw, planned_qty: 2, produced_qty: 1 }, lines: [{ product_id: A, planned_qty: 1 }] }); }, 'تسجيل الإنتاج متاح فقط لأمر قيد التنفيذ', 'T-FLOW 2: recording production on an Open order refused');
-call('approve_et_manufacture', { unique_id: kw });
-ok(call('start_et_manufacture', { unique_id: kw }).status === 'success' && ord().production_status === 'In Progress', 'T-FLOW 3: approve, start → In Progress');
+// Start does NOT wait on the sign-off: production is its own track, so whoever
+// runs the floor moves the order and the office stamps it whenever it gets to it.
+ok(call('start_et_manufacture', { unique_id: kw }).status === 'success' && ord().production_status === 'In Progress' && ord().approval_status === 'Pending',
+  'T-FLOW 3: start on an unapproved order → In Progress, still Pending');
+ok(call('approve_et_manufacture', { unique_id: kw, version: Number(ord().version) }).status === 'success' && ord().approval_status === 'Approved' && ord().production_status === 'In Progress',
+  'T-FLOW 3: the sign-off still lands after production started, and leaves the production status alone');
 ok(String(ord().started_by) === 'boss@test' && ord().started_at, 'T-FLOW 3: started_at / started_by recorded (columns added on demand)');
 throwsWith(function () { call('start_et_manufacture', { unique_id: kw }); }, 'لا يمكن بدء التنفيذ إلا لأمر مفتوح', 'T-FLOW 3: starting twice refused');
 throwsWith(function () { call('edit_et_manufacture', { header: { unique_id: kw, mo_date: '2023-03-06', product_id: F, planned_qty: 2 }, lines: [{ product_id: A, planned_qty: 1 }] }); }, 'لا يمكن تعديل', 'T-FLOW 3: the plain edit stays closed once started');
@@ -229,12 +235,11 @@ throwsWith(function () { call('save_et_manufacture_progress', { header: { unique
 throwsWith(function () { call('cancel_et_manufacture', { unique_id: kw }); }, 'الأمر مغلق', 'T-FLOW 8: a completed order cannot be cancelled');
 // cancel from In Progress
 call('add_et_manufacture', { request_key: 'MO-FLOW-2', header: { mo_date: '2023-03-08', product_id: F, planned_qty: 1 }, lines: [{ product_id: B, planned_qty: 1 }] });
-call('approve_et_manufacture', { unique_id: 'MO-FLOW-2' });
 call('start_et_manufacture', { unique_id: 'MO-FLOW-2' });
 ok(call('cancel_et_manufacture', { unique_id: 'MO-FLOW-2' }).status === 'success' && ord('MO-FLOW-2').production_status === 'Cancelled', 'T-FLOW 9: an In Progress order can be cancelled');
 // a stale version on start is refused and changes nothing
 call('add_et_manufacture', { request_key: 'MO-FLOW-3', header: { mo_date: '2023-03-09', product_id: F, planned_qty: 1 }, lines: [{ product_id: B, planned_qty: 1 }] });
-call('approve_et_manufacture', { unique_id: 'MO-FLOW-3' });
+call('approve_et_manufacture', { unique_id: 'MO-FLOW-3' });   // bumps the row to version 1
 let staleErr = '';
 try { call('start_et_manufacture', { unique_id: 'MO-FLOW-3', version: 0 }); } catch (e) { staleErr = String(e.message); }
 ok(staleErr !== '' && ord('MO-FLOW-3').production_status === 'Open', 'T-FLOW 10: start with a stale version is refused and changes nothing');
