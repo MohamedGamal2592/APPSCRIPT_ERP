@@ -467,6 +467,7 @@
     API.call('admin_list_companies', {}, SESSION_TOKEN)
       .then(function (r) {
         if (!adminReadCurrent_('companies', generation)) return;
+        window.__colorOptions = r.color_options || { colors: [], modes: [] };
         renderCompanies(r.companies || []);
       })
       .catch(function (e) { if (adminReadCurrent_('companies', generation)) showError(e); })
@@ -481,6 +482,7 @@
         name_ar: c.company_name_ar,
         name_en: c.company_name_en,
         enabled: UIC.statusPill(String(c.enabled).toLowerCase() === 'true' ? 'مفعّل' : 'معطّل', String(c.enabled).toLowerCase() === 'true' ? 'success' : 'neutral'),
+        colors: colorSwatch(c.company_colors),
         main_page: c.company_main_page || '-',
         actions: UIC.actionBtns([
           { label: 'تعديل', onclick: 'editCompany(\'' + FMT.escape(c.company_unique_id) + '\')' },
@@ -498,6 +500,7 @@
           { key: 'name_ar', label: 'الاسم العربي' },
           { key: 'name_en', label: 'الاسم الإنجليزي' },
           { key: 'enabled', label: 'الحالة' },
+          { key: 'colors', label: 'الألوان' },
           { key: 'main_page', label: 'الصفحة الرئيسية' },
           { key: 'actions', label: 'إجراءات' }
         ],
@@ -505,6 +508,24 @@
         emptyText: 'لا توجد شركات'
       });
     UIC.initTableSort('companies-table');
+  }
+
+  /* company_colors = "<colour> , <light|dark>" (AppSheet EnumList). Reads the
+     same shapes the server does (Code.js parseCompanyColors_). */
+  function parseColors(v) {
+    var parts = String(v == null ? '' : v).toLowerCase().split(',').map(function (x) { return x.trim(); }).filter(Boolean);
+    var known = {};
+    ((window.__colorOptions || {}).colors || []).forEach(function (o) { known[o.value] = o; });
+    var primary = '';
+    for (var i = 0; i < parts.length; i++) { if (known[parts[i]]) { primary = parts[i]; break; } }
+    var dark = parts.indexOf('dark') !== -1 || (parts.indexOf('light') === -1 && parts.length > 1 && parts[0] === primary && parts[1] === 'black');
+    return { primary: primary, dark: dark, option: known[primary] || null };
+  }
+  function colorSwatch(v) {
+    var c = parseColors(v);
+    if (!c.option) return '<span style="color:var(--text-muted);">الافتراضي</span>';
+    return '<span style="display:inline-flex;align-items:center;gap:6px;"><span style="width:14px;height:14px;border-radius:4px;border:1px solid var(--border-color);background:' +
+      c.option.hex + ';"></span>' + FMT.escape(c.option.label.replace(/\s*\(.*\)$/, '')) + (c.dark ? ' — داكن' : '') + '</span>';
   }
 
   function editCompany(uid) {
@@ -524,7 +545,17 @@
       UIC.field({ key: 'company_name_ar', label: 'الاسم العربي', value: c.company_name_ar, required: true }) +
       UIC.field({ key: 'company_name_en', label: 'الاسم الإنجليزي', value: c.company_name_en }) +
       UIC.field({ key: 'company_sheet_link', label: 'رابط جدول البيانات', value: c.company_sheet_link }) +
-      UIC.field({ key: 'company_colors', label: 'الألوان (مثال: yellow, black)', value: c.company_colors }) +
+      (function () {
+        var cur = parseColors(c.company_colors), opts = window.__colorOptions || { colors: [], modes: [] };
+        return '<div class="form-field"><label class="form-label" for="company_color_primary">لون الشركة</label>' +
+          '<select id="company_color_primary" class="input"><option value="">الافتراضي (ألوان الشركة المدمجة)</option>' +
+          (opts.colors || []).map(function (o) { return '<option value="' + FMT.escape(o.value) + '"' + (o.value === cur.primary ? ' selected' : '') + '>' + FMT.escape(o.label) + '</option>'; }).join('') +
+          '</select></div>' +
+          '<div class="form-field"><label class="form-label" for="company_color_mode">الخلفية</label>' +
+          '<select id="company_color_mode" class="input">' +
+          (opts.modes || []).map(function (o) { return '<option value="' + FMT.escape(o.value) + '"' + ((o.value === 'dark') === cur.dark ? ' selected' : '') + '>' + FMT.escape(o.label) + '</option>'; }).join('') +
+          '</select></div>';
+      })() +
       UIC.field({ key: 'company_logo', label: 'معرّف الشعار', value: c.company_logo }) +
       UIC.field({ key: 'company_main_page', label: 'الصفحة الرئيسية', value: c.company_main_page }) +
       '<div class="form-field"><label class="form-label">مفعّل</label><select id="enabled" class="input">' +
@@ -543,6 +574,10 @@
     var data = UIC.collectForm('company-form');
     data.enabled = document.getElementById('enabled').value;
     if (window.__editingCompanyUid) data.company_unique_id = window.__editingCompanyUid;
+    var colorPrimary = document.getElementById('company_color_primary').value;
+    data.company_colors = colorPrimary ? colorPrimary + ' , ' + document.getElementById('company_color_mode').value : '';
+    delete data.company_color_primary;
+    delete data.company_color_mode;
     if (!UIC.validateForm('company-form')) return;
     UI.showSpinner('جاري الحفظ...');
     API.call('admin_save_company', data, SESSION_TOKEN)
@@ -582,13 +617,17 @@
 
   function renderUsers(list) {
     window.__users = list;
+    var companyName = {};
+    (window.__companyOptions || []).forEach(function (c) { companyName[String(c.value)] = c.label; });
     var rows = list.filter(function (u) { return String(u.email || '').trim(); }).map(function (u) {
-      var active = String(u.status).toLowerCase() === 'active';
+      var st = String(u.status == null ? '' : u.status).trim().toLowerCase();
+      var active = st === '' || st === 'active';
+      var cid = String(u.company == null ? '' : u.company).trim();
       return {
         name: u.name,
         email: u.email,
         role: u.role,
-        company: u.company || '-',
+        company: cid ? FMT.escape(companyName[cid] || cid) : '-',
         status: UIC.statusPill(active ? 'نشط' : 'معطّل', active ? 'success' : 'danger'),
         actions: UIC.actionBtns([
           { label: 'تعديل', onclick: 'openUserModal(\'' + FMT.escape(u.email) + '\')' },
@@ -625,11 +664,12 @@
       '<form id="' + formId + '">' +
       UIC.field({ key: 'name', label: 'الاسم', value: u ? u.name : '', required: true }) +
       UIC.field({ key: 'email', label: 'البريد الإلكتروني', value: u ? u.email : '', required: true }) +
-      UIC.enumSelect({ key: 'role', label: 'الدور', value: u ? u.role : '', options: window.__roleOptions || [], required: true, placeholder: 'اختر الدور...' }) +
+      UIC.enumSelect({ key: 'role', label: 'الدور', value: u ? u.role : '', options: window.__roleOptions || [], required: true, placeholder: 'اختر الدور أو اكتب دوراً جديداً...' }) +
+      '<div style="font-size:12px;color:var(--text-muted);margin:-8px 0 12px;">يمكنك كتابة اسم دور غير موجود في القائمة واختيار «➕ إضافة جديد».</div>' +
       UIC.field({ key: 'company', label: 'الشركة', type: 'select', required: true, options: companyOptions, placeholder: 'اختر الشركة...', value: u ? u.company : '' }) +
       '<div class="form-field"><label class="form-label">الحالة</label><select id="user-status" class="input">' +
-      '<option value="Active" ' + (u && String(u.status).toLowerCase() === 'active' ? 'selected' : '') + '>نشط</option>' +
-      '<option value="InActive" ' + (u && String(u.status).toLowerCase() !== 'active' ? 'selected' : '') + '>معطّل</option>' +
+      '<option value="Active" ' + (!u || String(u.status).toLowerCase() !== 'inactive' ? 'selected' : '') + '>نشط</option>' +
+      '<option value="InActive" ' + (u && String(u.status).toLowerCase() === 'inactive' ? 'selected' : '') + '>معطّل</option>' +
       '</select></div>' +
       (u ? UIC.field({ key: 'resetPassword', label: 'كلمة مرور جديدة (اختياري)', type: 'password', placeholder: 'اتركه فارغاً لعدم التغيير' }) : '') +
       '</form>' +

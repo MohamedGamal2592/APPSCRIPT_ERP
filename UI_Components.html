@@ -3648,6 +3648,25 @@ UIC.comboFilter = function (key, text) {
       el.innerHTML = q ? UIC.comboHighlight(op.label, q) : UIC.escHtml(op.label);
     }
   });
+  /* An allowNew field offers the typed text as a new value. Without this row the
+     list simply vanished when nothing matched, which read as "not allowed". */
+  if (data && data.allowNew) {
+    var exact = opts.some(function (op) { return op.label.toLowerCase() === q || op.value.toLowerCase() === q; });
+    var addRow = list.querySelector('[data-new]');
+    if (q && !exact && !addRow && document.createElement) {
+      addRow = document.createElement('div');
+      addRow.className = 'combo-option';
+      addRow.setAttribute('role', 'option');
+      addRow.setAttribute('data-new', '1');
+      addRow.style.fontWeight = '700';
+      addRow.onmousedown = function (e) { if (e) e.preventDefault(); UIC.comboBlur(key); };
+      list.appendChild(addRow);
+    }
+    if (addRow) {
+      addRow.style.display = q && !exact ? '' : 'none';
+      if (q && !exact) { addRow.textContent = '➕ إضافة جديد: «' + String(text).trim() + '»'; visible++; }
+    }
+  }
   list.style.display = visible ? '' : 'none';
   /* Filtering changes the list's height, so an anchored list must be re-placed
      or it drifts away from its input as options disappear. */
@@ -3737,6 +3756,7 @@ UIC.comboKey = function (key, ev) {
   } else if (ev.key === 'Enter') {
     ev.preventDefault();
     const el = idx >= 0 ? visibleEls[idx] : visibleEls[0];
+    if (el.hasAttribute('data-new')) { UIC.comboBlur(key); return; }   // the «إضافة جديد» row
     UIC.comboPick(key, Number(el.getAttribute('data-i')));
     return;
   } else if (ev.key === 'Escape') {

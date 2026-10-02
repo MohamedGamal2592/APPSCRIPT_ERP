@@ -188,7 +188,7 @@
   var scanCatalogStorageKey = '';
   var pendingEntry = null;     // current editable draft only; never used by saves after dispatch
   var scanConfirmOpen = false;
-  var retainedWarehouseId = ''; // last explicit selection in this page session
+  var retainedWarehouseId = IS_FLEET ? FLEET_WAREHOUSE_ID : ''; // last explicit selection in this page session (fixed on the fleet page)
   var scanRejectedDrafts = [];
   var qrReader = null;
   var cameraActive = false;
@@ -225,7 +225,7 @@
       companyLogoUrl: COMPANY_LOGO_URL,
       companyLogoHref: scriptUrl + '?action=tc_dashboard&sessionToken=' + SESSION_TOKEN,
       companyLogoTitle: 'توب كيميكال',
-      breadcrumb: IS_FLEET ? 'توب كيميكال / الحركة والاسطول / جرد الحركة والاسطول' : 'توب كيميكال / المخازن / جرد دوري مخازن باركود',
+      breadcrumb: IS_FLEET ? 'توب كيميكال / الحركة والاسطول / جرد المخزون لمسؤول الحركة' : 'توب كيميكال / المخازن / جرد دوري مخازن باركود',
       contentId: 'scan-content',
       menuGroups: (window.TOPCHEMICAL_MENU || [])
     });
@@ -809,8 +809,6 @@
         warehouseById = Object.create(null);
         warehouses.forEach(function (w) { warehouseById[w.value] = w; });
         warehousesState = 'ready';
-        // The fleet page has exactly one warehouse: select it for every count.
-        if (IS_FLEET && warehouseById[FLEET_WAREHOUSE_ID]) retainedWarehouseId = FLEET_WAREHOUSE_ID;
         if (retainedWarehouseId && !warehouseById[retainedWarehouseId]) {
           retainedWarehouseId = '';
           currentWarehouse = null;
@@ -821,7 +819,7 @@
         renderWarehouseState();
         renderScanHistory();
         if (IS_FLEET && currentProduct && currentWarehouse) {
-          // The count form may have rendered before the list arrived.
+          // The count form may have rendered before the label arrived.
           setComboField_('warehouse', currentWarehouse.id, currentWarehouse.location);
           if (currentBalance.state === 'idle') requestBalance(currentProduct.id, currentWarehouse.id, { refresh: true });
         }
@@ -840,11 +838,11 @@
       else if (warehousesState === 'error') host.innerHTML = '<div class="scan-hint" role="status">تعذر تحميل المخازن' +
         (warehousesError ? ' — ' + esc(warehousesError) : '') +
         ' <button type="button" class="btn btn-outline" onclick="retryWarehouses()">إعادة المحاولة</button></div>';
-      else if (IS_FLEET && !warehouseById[FLEET_WAREHOUSE_ID]) host.innerHTML = '<div class="scan-hint" role="status">مخزن الحركة والاسطول غير متاح</div>';
+      else if (IS_FLEET && !warehouseById[FLEET_WAREHOUSE_ID]) host.innerHTML = '<div class="scan-hint" role="status">المخزن رقم ' + FLEET_WAREHOUSE_ID + ' غير موجود في جدول المخازن</div>';
       else host.innerHTML = '';
     }
     var sel = document.getElementById('warehouse');
-    if (sel && warehousesState === 'ready') {
+    if (sel && warehousesState === 'ready' && !IS_FLEET) {
       var current = retainedWarehouseId || '';
       try { if (sel.value) current = sel.value; } catch (e) {}
       sel.innerHTML = '<option value="">اختر المخزن...</option>' + warehouses.map(function (w) {
@@ -1062,7 +1060,7 @@
   function renderScanHistory() {
     var host = document.getElementById('scan-history');
     if (!host) return;
-    var title = '<h3 class="scan-history-title">' + (IS_FLEET ? 'سجلات جرد الحركة والاسطول من 1 سبتمبر 2026' : 'سجلات جرد المخزون من 1 سبتمبر 2026') + '</h3>';
+    var title = '<h3 class="scan-history-title">' + (IS_FLEET ? 'سجلات جرد المخزون لمسؤول الحركة من 1 سبتمبر 2026' : 'سجلات جرد المخزون من 1 سبتمبر 2026') + '</h3>';
     var pendingHtml = renderPendingScanRows();
     if (scanHistoryState === 'loading') {
       host.innerHTML = title + pendingHtml + '<div class="scan-hint" role="status">جارٍ تحميل سجلات الجرد...</div>';
@@ -1399,9 +1397,16 @@
     if (!/^[1-9]\d{0,19}$/.test(idStr)) return;
     invalidateProductSearch();
     currentProduct = { id: idStr, label: String(label == null ? '' : label), perUnit: perUnit, code: code == null ? null : String(code) };
-    currentWarehouse = retainedWarehouseId && warehouseById[retainedWarehouseId]
-      ? { id: retainedWarehouseId, location: warehouseById[retainedWarehouseId].label } : null;
     clearBalance();
+    if (IS_FLEET) {
+      // Warehouse 2 is fixed: usable before the label list arrives, unless
+      // the loaded warehouse_locations list has no row with id 2.
+      currentWarehouse = warehousesState === 'ready' && !warehouseById[FLEET_WAREHOUSE_ID]
+        ? null : { id: FLEET_WAREHOUSE_ID, location: resolveWarehouseLabel(FLEET_WAREHOUSE_ID) };
+    } else {
+      currentWarehouse = retainedWarehouseId && warehouseById[retainedWarehouseId]
+        ? { id: retainedWarehouseId, location: warehouseById[retainedWarehouseId].label } : null;
+    }
     showStep('count');
     renderCountStep();
     if (SCAN_LOCAL_CATALOG_ENABLED && scanCatalogState === 'ready' && !scanCatalogFresh()) {
@@ -1438,8 +1443,17 @@
         '<div class="name">' + esc(currentProduct.label) + '</div>' +
       '</div>' +
       '<form id="scan-form">' +
-        UIC.field({ key: 'warehouse', label: 'المخزن', type: 'select', required: true, options: warehouses, placeholder: 'اختر المخزن...',
-          value: IS_FLEET && currentWarehouse ? currentWarehouse.id : undefined }) +
+        (IS_FLEET
+          /* Fixed warehouse: shown read-only, no choice; the hidden input is
+             what collectForm sends (the server forces warehouse 2 anyway). */
+          ? '<div class="form-field" data-field="warehouse">' +
+              '<label class="form-label" for="warehouse_display">المخزن</label>' +
+              '<input id="warehouse_display" class="input scan-datetime" type="text" readonly aria-readonly="true" tabindex="-1" value="' +
+                esc(warehouseById[FLEET_WAREHOUSE_ID] ? warehouseById[FLEET_WAREHOUSE_ID].label : FLEET_WAREHOUSE_ID) + '">' +
+              '<input id="warehouse" type="hidden" value="' + FLEET_WAREHOUSE_ID + '">' +
+              '<div class="field-error" id="err-warehouse"></div>' +
+            '</div>'
+          : UIC.field({ key: 'warehouse', label: 'المخزن', type: 'select', required: true, options: warehouses, placeholder: 'اختر المخزن...' })) +
         '<div id="scan-warehouse-status"></div>' +
         '<div id="scan-balance-status" aria-live="polite"></div>' +
         UIC.field({ key: 'container_type', label: 'نوع الوعاء الخاص بالصنف', type: 'select', required: true, options: CONTAINER_TYPES, placeholder: 'اختر نوع الوعاء...', value: lastContainerFor_(currentProduct.id) }) +

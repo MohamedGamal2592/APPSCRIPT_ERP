@@ -4433,7 +4433,15 @@ function requireSuperAdmin_(authUser) {
 function adminListCompanies_(payload, sessionToken, authUser) {
   requireSuperAdmin_(authUser);
   const rows = getAllRecords_(CONFIG.AUTH_SPREADSHEET_ID, 'ERP_Companies');
-  return { status: 'success', companies: rows };
+  return { status: 'success', companies: rows, color_options: companyColorOptions_() };
+}
+
+/** The company_colors choices: the same values an AppSheet EnumList on the column must offer. */
+function companyColorOptions_() {
+  return {
+    colors: Object.keys(COMPANY_COLOR_PALETTE_).map(function (k) { return { value: k, label: COMPANY_COLOR_PALETTE_[k].ar + ' (' + k + ')', hex: COMPANY_COLOR_PALETTE_[k].p }; }),
+    modes: Object.keys(COMPANY_CANVAS_MODES_).map(function (k) { return { value: k, label: COMPANY_CANVAS_MODES_[k] + ' (' + k + ')' }; })
+  };
 }
 
 function adminSaveCompany_(payload, sessionToken, authUser) {
@@ -4455,7 +4463,14 @@ function adminSaveCompany_(payload, sessionToken, authUser) {
     company_name_ar: nameAr,
     company_name_en: nameEn,
     company_sheet_link: link,
-    company_colors: String(p.company_colors || ''),
+    // Validated against the palette and stored in AppSheet EnumList form ("navy , light").
+    company_colors: (function () {
+      const raw = String(p.company_colors || '').trim();
+      if (!raw) return '';
+      const norm = normalizeCompanyColors_(raw);
+      if (!norm) throw new Error('ألوان الشركة غير معروفة: ' + raw);
+      return norm;
+    })(),
     company_logo: String(p.company_logo || ''),
     company_main_page: String(p.company_main_page || ''),
     enabled: enabled ? 'TRUE' : 'FALSE',
@@ -4486,7 +4501,14 @@ function adminListUsers_(payload, sessionToken, authUser) {
     value: String(c.company_unique_id || '').trim(),
     label: String(c.company_name_ar || c.company_name_en || c.company_unique_id || '').trim()
   })).filter(c => c.value);
-  return { status: 'success', users: rows, role_options: roles, company_options: companies };
+  // A row with no status is Active — the same reading login makes (status || 'active').
+  const users = rows.map(function (u) {
+    const out = Object.assign({}, u);
+    out.status = String(u.status == null ? '' : u.status).trim().toLowerCase() === 'inactive' ? 'InActive'
+      : (String(u.status == null ? '' : u.status).trim() === '' || String(u.status).trim().toLowerCase() === 'active') ? 'Active' : String(u.status).trim();
+    return out;
+  });
+  return { status: 'success', users: users, role_options: roles, company_options: companies };
 }
 
 /**
@@ -4506,6 +4528,8 @@ function adminSaveUser_(payload, sessionToken, authUser) {
   if (!email || !name) throw new Error('الاسم والبريد الإلكتروني مطلوبان');
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('بريد إلكتروني غير صالح');
 
+  // On the sheets backend a patch drops fields with no column: make sure status has one.
+  try { if (systemStorageTarget_().backend === 'sheets') ensureUserStatusColumn_(); } catch (eCol) {}
   const existing = systemFindByBusinessKey_('ERP_Users', 'email', email);
 
   if (!existing && !(p.resetPassword && String(p.resetPassword).trim())) {
@@ -4540,6 +4564,51 @@ function adminSaveUser_(payload, sessionToken, authUser) {
     ['name', 'email', 'role']);
   bumpVersion_('ERP_Users');
   return { status: 'success', message: 'تمت إضافة المستخدم', user: { email: email, name: name, role: role, company: company, status: isActive } };
+}
+
+/** Adds a "status" column to the ERP_Users sheet when it has none. Returns true when added. */
+function ensureUserStatusColumn_() {
+  const sheet = getSheet_('ERP_Users', CONFIG.AUTH_SPREADSHEET_ID);
+  const headers = getHeaders_(sheet).map(function (h) { return String(h).trim().toLowerCase(); });
+  if (headers.indexOf('status') !== -1) return false;
+  sheet.getRange(1, headers.length + 1).setValue('status');
+  noteMutation_(sheet);
+  try { delete _headerCache_[sheet.getParent().getId() + '_' + sheet.getSheetId()]; } catch (e) {}
+  try { if (typeof resetRecordCache_ === 'function') resetRecordCache_(); } catch (e) {}
+  return true;
+}
+
+/**
+ * Run once from the Apps Script editor. Makes ERP_Users.status a real value on
+ * every user: adds the column to the ERP_Users sheet if missing, fills its blank
+ * cells with Active, and — on the Firestore backend — sets status: Active on every
+ * user document that has none. Blank already meant Active at login, so nobody's
+ * access changes; the users page simply stops guessing.
+ */
+function backfillUserStatus() {
+  const out = { columnAdded: false, sheetFilled: 0, storeFilled: 0, backend: '' };
+  out.columnAdded = ensureUserStatusColumn_();
+  const sheet = getSheet_('ERP_Users', CONFIG.AUTH_SPREADSHEET_ID);
+  const values = sheet.getDataRange().getValues();
+  const head = values[0].map(function (h) { return String(h).trim().toLowerCase(); });
+  const sIdx = head.indexOf('status'), eIdx = head.indexOf('email');
+  for (let r = 1; r < values.length; r++) {
+    if (eIdx !== -1 && String(values[r][eIdx] || '').trim() === '') continue;
+    if (String(values[r][sIdx] == null ? '' : values[r][sIdx]).trim() === '') { sheet.getRange(r + 1, sIdx + 1).setValue('Active'); out.sheetFilled++; }
+  }
+  noteMutation_(sheet);
+  out.backend = systemStorageTarget_().backend;
+  if (out.backend !== 'sheets') {
+    systemStore_().queryAll('ERP_Users', {}).records.forEach(function (rec) {
+      const d = rec.data || {};
+      if (!String(d.email || '').trim() || String(d.status == null ? '' : d.status).trim() !== '') return;
+      systemPatchRecord_('ERP_Users', rec.meta.documentId, { status: 'Active' }, { expectedUpdateTime: rec.meta.updateTime });
+      out.storeFilled++;
+    });
+  }
+  bumpVersion_('ERP_Users');
+  console.log(JSON.stringify(out));
+  return out;
 }
 
 function adminListMatrix_(payload, sessionToken, authUser) {
@@ -5684,24 +5753,103 @@ function themeSystemFindCompat_(tableName, fieldName, value) {
     return String(row[fieldName] == null ? '' : row[fieldName]).trim().toLowerCase() === wanted;
   }) || null;
 }
-/** Brand gradient for standalone block pages (access-denied etc.). */
+/**
+ * ERP_Companies.company_colors — the one source of a company's colours.
+ * Stored as an AppSheet EnumList ("navy , light"; a plain "navy, light" is read
+ * the same): one brand colour from COMPANY_COLOR_PALETTE_, plus an optional
+ * canvas mode, 'light' (default) or 'dark'. The older two-value form keeps its
+ * meaning: "yellow, black" = yellow brand on a dark canvas.
+ * Blank = the company keeps its built-in theme.
+ */
+var COMPANY_COLOR_PALETTE_ = {
+  //          primary    hover      subtle bg  border     ink        block gradient
+  red:    { p: '#D62828', h: '#B91C1C', sb: '#FEF2F2', b: '#FECACA', t: '#FFFFFF', g: ['#7f1d1d', '#dc2626'], ar: 'أحمر' },
+  orange: { p: '#EA580C', h: '#C2410C', sb: '#FFF7ED', b: '#FED7AA', t: '#FFFFFF', g: ['#7c2d12', '#ea580c'], ar: 'برتقالي' },
+  yellow: { p: '#D97706', h: '#B45309', sb: '#FFFBEB', b: '#FDE68A', t: '#111827', g: ['#b45309', '#f59e0b'], ar: 'أصفر' },
+  green:  { p: '#16A34A', h: '#15803D', sb: '#F0FDF4', b: '#BBF7D0', t: '#FFFFFF', g: ['#054719', '#16a34a'], ar: 'أخضر' },
+  teal:   { p: '#0F766E', h: '#115E59', sb: '#F0FDFA', b: '#99F6E4', t: '#FFFFFF', g: ['#134e4a', '#0d9488'], ar: 'فيروزي' },
+  blue:   { p: '#1D4ED8', h: '#1E40AF', sb: '#EFF6FF', b: '#BFDBFE', t: '#FFFFFF', g: ['#1e3a8a', '#3b82f6'], ar: 'أزرق' },
+  navy:   { p: '#1E3A8A', h: '#172554', sb: '#DBEAFE', b: '#93C5FD', t: '#FFFFFF', g: ['#172554', '#1e3a8a'], ar: 'كحلي' },
+  purple: { p: '#7C3AED', h: '#6D28D9', sb: '#F5F3FF', b: '#DDD6FE', t: '#FFFFFF', g: ['#4c1d95', '#7c3aed'], ar: 'بنفسجي' },
+  black:  { p: '#111827', h: '#1F2937', sb: '#F3F4F6', b: '#E5E7EB', t: '#FFFFFF', g: ['#111827', '#374151'], ar: 'أسود' },
+  white:  { p: '#FFFFFF', h: '#F9FAFB', sb: '#F9FAFB', b: '#E5E7EB', t: '#111827', g: ['#374151', '#6b7280'], ar: 'أبيض' }
+};
+var COMPANY_CANVAS_MODES_ = { light: 'فاتح', dark: 'داكن' };
+
+/** {primary, dark} from a company_colors value, or null when it names no palette colour. */
+function parseCompanyColors_(value) {
+  const parts = String(value == null ? '' : value).toLowerCase().split(',').map(function (c) { return c.trim(); }).filter(Boolean);
+  let primary = '';
+  for (let i = 0; i < parts.length; i++) { if (COMPANY_COLOR_PALETTE_[parts[i]]) { primary = parts[i]; break; } }
+  if (!primary) return null;
+  const dark = parts.indexOf('dark') !== -1 ||
+    (parts.indexOf('light') === -1 && parts.length > 1 && parts[0] === primary && parts[1] === 'black');
+  return { primary: primary, dark: dark };
+}
+
+/** The canonical stored form (AppSheet EnumList separator), or '' for a value that names no colour. */
+function normalizeCompanyColors_(value) {
+  const c = parseCompanyColors_(value);
+  return c ? c.primary + ' , ' + (c.dark ? 'dark' : 'light') : '';
+}
+
+function companyColorsFor_(companyUid) {
+  const uid = String(companyUid || '').trim().toLowerCase();
+  if (!uid) return null;
+  const row = themeSystemRowsCompat_('ERP_Companies').find(function (r) {
+    return [r.company_unique_id, r.company_name_ar, r.company_name_en].some(function (v) { return String(v || '').trim().toLowerCase() === uid; });
+  });
+  return row ? parseCompanyColors_(row.company_colors) : null;
+}
+
+/** Brand tokens + every topbar rule the built-in themes set, written in tokens, so this
+ *  layer placed after a company's own theme recolours it completely. */
+function companyColorLayerCss_(colors) {
+  const pc = COMPANY_COLOR_PALETTE_[colors.primary];
+  let css = '<style>\n:root {\n';
+  css += '  --brand-primary: ' + pc.p + ';\n  --brand-primary-hover: ' + pc.h + ';\n  --brand-subtle-bg: ' + pc.sb + ';\n';
+  css += '  --brand-border: ' + pc.b + ';\n  --btn-text-color: ' + pc.t + ';\n';
+  if (colors.dark) {
+    css += '  --bg-primary: #0F172A;\n  --bg-canvas: #0F172A;\n  --bg-surface: #1E293B;\n  --bg-subtle: #334155;\n  --text-main: #F8FAFC;\n  --text-muted: #94A3B8;\n  --border-color: #334155;\n';
+  }
+  css += '}\n';
+  const B = 'var(--brand-primary)', T = 'var(--btn-text-color)';
+  css += '.topbar { background: ' + B + '; border-bottom: 1px solid ' + B + '; }\n';
+  css += '.topbar .nav-item, .topbar .nav-dropdown-toggle { color: ' + T + '; }\n';
+  css += '.topbar .nav-item:hover, .topbar .nav-item.active, .topbar .nav-dropdown-toggle:hover, .topbar .nav-dropdown-toggle.open { color: ' + B + '; background: ' + T + '; }\n';
+  css += '.topbar .nav-dropdown-menu { background: ' + B + '; border-color: ' + T + '; }\n';
+  css += '.topbar .nav-dropdown-item { color: ' + T + '; }\n';
+  css += '.topbar .nav-dropdown-item:hover, .topbar .nav-dropdown-item-active { background: ' + T + '; color: ' + B + '; }\n';
+  css += '.topbar .user-profile-toggle { border: 1px solid ' + T + '; border-radius: 999px; padding: 4px 12px; background: ' + B + '; }\n';
+  css += '.topbar .user-profile-toggle .user-name, .topbar .user-profile-toggle .nav-dropdown-caret { color: ' + T + '; }\n';
+  css += '.topbar .user-profile-toggle:hover, .topbar .user-profile-toggle.open { background: ' + T + '; }\n';
+  css += '.topbar .user-profile-toggle:hover .user-name, .topbar .user-profile-toggle.open .user-name,\n';
+  css += '.topbar .user-profile-toggle:hover .nav-dropdown-caret, .topbar .user-profile-toggle.open .nav-dropdown-caret { color: ' + B + '; }\n';
+  css += '.topbar .user-avatar { background: ' + T + '; color: ' + B + '; }\n';
+  css += '.topbar .user-profile-name, .topbar .user-profile-logout { color: ' + T + '; }\n';
+  css += '.topbar .user-profile-email { color: var(--brand-subtle-bg); }\n';
+  css += '.topbar .user-profile-divider { background: ' + T + '; }\n';
+  css += '.topbar .user-profile-logout:hover { background: ' + T + '; color: ' + B + '; }\n';
+  css += '.topbar-hamburger { border: 1px solid ' + T + '; }\n';
+  css += '.topbar-hamburger .hamburger-bar { background: ' + T + '; }\n';
+  css += '</style>\n';
+  return css;
+}
+
+/** Brand gradient for standalone block pages (access-denied etc.). company_colors wins;
+ *  without it a company's built-in block theme, then the green default. */
 function getCompanyBlockTheme_(companyUid) {
   const uid = String(companyUid || '').trim().toLowerCase();
+  try {
+    const colors = companyColorsFor_(uid);
+    if (colors) { const g = COMPANY_COLOR_PALETTE_[colors.primary].g; return { from: g[0], to: g[1] }; }
+  } catch (e) {}
   try {
     ensureCompaniesRegistered_();
     const cfg = COMPANY_REGISTRY[uid];
     if (cfg && typeof cfg.blockTheme === 'function') return cfg.blockTheme();
   } catch (e) {}
-  let theme = { from: '#054719', to: '#16a34a' };
-  try {
-    if (uid) {
-      const row = themeSystemFindCompat_('ERP_Companies', 'company_unique_id', uid);
-      const gradMap = { red: ['#7f1d1d', '#dc2626'], green: ['#054719', '#16a34a'], yellow: ['#b45309', '#f59e0b'], black: ['#111827', '#374151'] };
-      const first = String(row && row.company_colors || '').toLowerCase().split(',').map(c => c.trim())[0];
-      if (gradMap[first]) theme = { from: gradMap[first][0], to: gradMap[first][1] };
-    }
-  } catch (e) {}
-  return theme;
+  return { from: '#054719', to: '#16a34a' };
 }
 
 function getGenericCompanyThemeCSS_(companyName) {
@@ -5719,25 +5867,11 @@ function getGenericCompanyThemeCSS_(companyName) {
   // configured company_colors still overrides it below.
   let primaryColor = 'green'; let bgColor = 'white';
   try {
-    if (companyName) {
-      const wanted = String(companyName).trim().toLowerCase();
-      const companyRow = themeSystemRowsCompat_('ERP_Companies').find(function (r) { return [r.company_unique_id, r.company_name_ar, r.company_name_en].some(function (v) { return String(v || '').trim().toLowerCase() === wanted; }); });
-      if (companyRow) {
-        const colorsArr = String(companyRow.company_colors || '').toLowerCase().split(',').map(c => c.trim());
-        if (colorsArr.length > 0 && ['red', 'green', 'yellow', 'black', 'white'].includes(colorsArr[0])) primaryColor = colorsArr[0];
-        if (colorsArr.length > 1 && ['red', 'green', 'yellow', 'black', 'white'].includes(colorsArr[1])) bgColor = colorsArr[1];
-      }
-    }
+    const colors = companyName ? companyColorsFor_(companyName) : null;
+    if (colors) { primaryColor = colors.primary; bgColor = colors.dark ? 'black' : 'white'; }
   } catch (e) { console.error('Theme Error: ' + e.message); }
 
-  const primaryMap = {
-    red: { p: '#D62828', h: '#B91C1C', sb: '#FEF2F2', b: '#FECACA', t: '#FFFFFF' },
-    green: { p: '#16A34A', h: '#15803D', sb: '#F0FDF4', b: '#BBF7D0', t: '#FFFFFF' },
-    yellow: { p: '#D97706', h: '#B45309', sb: '#FFFBEB', b: '#FDE68A', t: '#111827' },
-    black: { p: '#111827', h: '#1F2937', sb: '#F3F4F6', b: '#E5E7EB', t: '#FFFFFF' },
-    white: { p: '#FFFFFF', h: '#F9FAFB', sb: '#F9FAFB', b: '#E5E7EB', t: '#111827' }
-  };
-  const pc = primaryMap[primaryColor];
+  const pc = COMPANY_COLOR_PALETTE_[primaryColor];
   let css = "<style>\n:root {\n";
   css += '  --brand-primary: ' + pc.p + ';\n';
   css += '  --brand-primary-hover: ' + pc.h + ';\n';
@@ -5793,14 +5927,31 @@ function getGenericCompanyThemeCSS_(companyName) {
 
 
 
+/* A company with a built-in theme keeps it (fonts, semantic colours) and, when its
+   company_colors names a colour, gets companyColorLayerCss_ after it, so the column
+   decides its brand. The layer is cached on the same version key as the generic theme. */
 function getCompanyThemeCSS_(companyName) {
   try {
     ensureCompaniesRegistered_();
     const uid = String(companyName || '').trim().toLowerCase();
     const cfg = COMPANY_REGISTRY[uid];
-    if (cfg && typeof cfg.themeCss === 'function') return cfg.themeCss();
+    if (cfg && typeof cfg.themeCss === 'function') return cfg.themeCss() + companyColorLayerCached_(uid);
   } catch (e) {}
   return getGenericCompanyThemeCSS_(companyName);
+}
+
+function companyColorLayerCached_(uid) {
+  let cache = null, key = '';
+  try {
+    cache = CacheService.getScriptCache();
+    key = 'theme_layer_v_' + (cache.get('version_companies') || '0') + '_' + uid;
+    const hit = cache.get(key);
+    if (hit !== null && hit !== undefined) return hit === '-' ? '' : hit;
+  } catch (e) { cache = null; }
+  let css = '';
+  try { const colors = companyColorsFor_(uid); if (colors) css = companyColorLayerCss_(colors); } catch (e2) { css = ''; }
+  try { if (cache) cache.put(key, css || '-', CONFIG.CACHE_THEME_SECONDS); } catch (e3) {}
+  return css;
 }
 
 

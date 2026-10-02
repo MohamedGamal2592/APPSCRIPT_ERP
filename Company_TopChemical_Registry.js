@@ -37,7 +37,7 @@ function registerTopChemical_() {
       { action: 'tc_stock_revision', template: 'Company_TopChemical_StockRevision', title: 'جرد المخزون', nav: false },
       { action: 'tc_stock_scan', template: 'Company_TopChemical_StockScan', title: 'جرد دوري مخازن باركود', nav: false },
       // Same template; CURRENT_ACTION switches it to warehouse 2 + get_fleet_scan_* actions.
-      { action: 'tc_fleet_scan', template: 'Company_TopChemical_StockScan', title: 'جرد الحركة والاسطول', nav: false },
+      { action: 'tc_fleet_scan', template: 'Company_TopChemical_StockScan', title: 'جرد المخزون لمسؤول الحركة', nav: false },
       { action: 'tc_customs_office', template: 'Company_TopChemical_CustomsOffice', title: 'مكتب الجمارك', nav: false },
       { action: 'tc_purchasing', template: 'Company_TopChemical_Purchasing', title: 'توريدات ومشتريات', nav: false },
       { action: 'tc_import_follow', template: 'Company_TopChemical_ImportFollow', title: 'متابعة موافقات الاستيراد', nav: false },
