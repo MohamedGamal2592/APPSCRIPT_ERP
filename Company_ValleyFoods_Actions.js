@@ -8924,13 +8924,29 @@ const ValleyFoodsHRModules = (function () {
    *     their own under the item's client (not the MO's client);
    *   - bulk drawn from earlier production: a material line
    *     (valley_manufacture_header_products) whose product is in a bulk
-   *     category (BULK_CATEGORIES) and belongs to the same client as the
-   *     MO's produced product. That bulk was counted when it was made, so it
-   *     is subtracted from the produced product's row — e.g. a 5 t MO that
-   *     drew 3 t of fridge bulk nets 2 t of new production.
+   *     category (BULK_CATEGORIES), whoever owns it. That bulk was counted
+   *     when it was made, so it is subtracted from the produced product's
+   *     row — e.g. a 5 t MO that drew 3 t of fridge bulk nets 2 t of new
+   *     production. Another client's bulk is subtracted too (the production
+   *     sheet subtracts every mixed-in bulk); counting it again inside the
+   *     consumer's output would double the grand total. Such lines carry
+   *     cross_client and are listed under warnings.
    * Net produced = main + by-products − bulk drawn. Repacking (اعادة تعبئة)
    * only reshapes stock already made: it is reported per op for reference
    * but never enters row totals, grand totals or the KPIs.
+   *
+   * attribution: 'item' (default) puts each by-product under the client
+   * that owns the item in valley_products; 'mo' puts it under the MO's
+   * client, the way the production sheet reports a run — a by-product
+   * picked under another client's (or no client's) item still belongs to
+   * the run that made it.
+   *
+   * warnings (scope: status/period/op, plus the client filter on either
+   * side) lists what makes this report disagree with the production sheet:
+   * by-products whose item belongs to another client or none, bulk drawn
+   * from another client, repack MOs whose output does not match the bulk
+   * they drew, produced products with no client, and MOs in the period
+   * left out by the status filter.
    *
    * Filters (all optional; empty = all): client_ids[], product_ids[],
    * op_types[], statuses[] (default ['Locked']), from/to (ISO date-only,
@@ -8962,6 +8978,10 @@ const ValleyFoodsHRModules = (function () {
     var fOps = idSet(d.op_types !== undefined ? d.op_types : d.operation_type);
     var fStatus = idSet(d.statuses !== undefined ? d.statuses : d.mo_status);
     if (!Object.keys(fStatus).length) fStatus = { 'Locked': true };
+    var attribution = String(d.attribution || '').trim() === 'mo' ? 'mo' : 'item';
+    /* A repack whose output and drawn bulk differ by less than this is
+       rounding, not a data problem. */
+    var REPACK_TOLERANCE = 0.5;
     var from = vfDateBound_(d.from, false);
     var to = vfDateBound_(d.to, true);
     if (from && to && from > to) throw new Error('«من تاريخ» بعد «إلى تاريخ»');
@@ -9037,23 +9057,47 @@ const ValleyFoodsHRModules = (function () {
       if (Object.keys(fProducts).length && !fProducts[pid]) return false;
       return true;
     }
+    function dateText(v) {
+      if (Object.prototype.toString.call(v) === '[object Date]' && !isNaN(v.getTime())) {
+        var p2 = function (n) { return n < 10 ? '0' + n : String(n); };
+        return v.getFullYear() + '-' + p2(v.getMonth() + 1) + '-' + p2(v.getDate());
+      }
+      return String(v == null ? '' : v).trim().slice(0, 10);
+    }
+    function clientName(cid) { return cid ? (partyNames[cid] || ('#' + cid)) : 'بدون عميل'; }
+    function productName(pid) { return products[pid] ? products[pid].name : (pid ? ('#' + pid) : '-'); }
 
-    /* MOs in scope (status, period, op), keyed by unique_id. */
+    /* MOs in scope (status, period, op), keyed by unique_id. MOs the status
+       filter drops but the period/op keep are tallied for the warnings. */
     var moByUid = {};
     var moList = [];
+    var seenUid = {};
+    var otherStatus = {};
     hdrRows.forEach(function (r) {
       var uid = String(r.unique_id || '').trim();
-      if (!uid || moByUid[uid]) return;
-      var st = String(r.mo_status || 'Draft').trim() || 'Draft';
-      if (!fStatus[st]) return;
+      if (!uid || seenUid[uid]) return;
+      seenUid[uid] = true;
       if (!inPeriod(r.manufacture_date)) return;
       var op = String(r.operation_type || '').trim();
       if (Object.keys(fOps).length && !fOps[op]) return;
+      var st = String(r.mo_status || 'Draft').trim() || 'Draft';
       var pid = String(r.produced_product == null ? '' : r.produced_product).trim();
       var prod = products[pid] || { client_id: '' };
+      var qtyR = Math.round((Number(r.actual_qty) || 0) * 1000) / 1000;
+      if (!fStatus[st]) {
+        if (!Object.keys(fClients).length || fClients[prod.client_id]) {
+          var os = otherStatus[st] || (otherStatus[st] = { status: st, mo_count: 0, qty: 0 });
+          os.mo_count++;
+          os.qty = Math.round((os.qty + qtyR) * 1000) / 1000;
+        }
+        return;
+      }
       var mo = { uid: uid, op: op, status: st, pid: pid, client_id: prod.client_id,
-        qty: Math.round((Number(r.actual_qty) || 0) * 1000) / 1000,
-        cost: Math.round((Number(r.total_batch_cost) || 0) * 100) / 100, row: null };
+        code: String(r.transaction_code || r.id || uid),
+        date: dateText(r.manufacture_date),
+        qty: qtyR,
+        cost: Math.round((Number(r.total_batch_cost) || 0) * 100) / 100, row: null,
+        bp_qty: 0, drawn_qty: 0 };
       moByUid[uid] = mo;
       moList.push(mo);
     });
@@ -9099,43 +9143,79 @@ const ValleyFoodsHRModules = (function () {
       s.batch_cost = roundMoney(s.batch_cost + mo.cost);
     });
 
-    /* Materials used, on the MO's produced-product row. A line drawing the
-       same client's bulk is also subtracted from that row (bulk_used). */
+    /* Warning lists; a line enters when the client filter is empty or
+       either side of it (the MO's client or the item's owner) is selected. */
+    var warnBp = [], warnBulk = [];
+    function warnVisible(a, b) {
+      return !Object.keys(fClients).length || !!fClients[a] || !!fClients[b];
+    }
+    function moRef(mo) {
+      return { mo_code: mo.code, date: mo.date, op: mo.op,
+        mo_client_id: mo.client_id, mo_client_name: clientName(mo.client_id),
+        source_product_id: mo.pid, source_product_name: productName(mo.pid) };
+    }
+
+    /* Materials used, on the MO's produced-product row. A line drawing bulk
+       from earlier production — any client's — is also subtracted from that
+       row (bulk_used); another client's bulk is flagged cross_client. */
     try {
       getAllRecords_(dbId, MFG_ORDER_PRODUCTS_SHEET).forEach(function (l) {
         var mo = moByUid[String(l.valley_manufacture_header_id || '').trim()];
-        if (!mo || !mo.row) return;
+        if (!mo) return;
         var itemPid = String(l.product_id == null ? '' : l.product_id).trim();
         var itemKey = itemPid || String(l.product_name || '').trim() || '-';
         var meta = products[itemPid];
         var q = roundQty(Number(l.product_qty));
+        var isBulk = !!(meta && BULK_CATEGORIES[meta.category]);
+        var cross = isBulk && meta.client_id !== mo.client_id;
+        if (isBulk) mo.drawn_qty = roundQty(mo.drawn_qty + q);
+        if (cross && q && warnVisible(mo.client_id, meta.client_id)) {
+          var wb = moRef(mo);
+          wb.item = itemPid; wb.product_name = meta.name; wb.unit = meta.unit;
+          wb.item_client_id = meta.client_id; wb.item_client_name = clientName(meta.client_id);
+          wb.qty = q;
+          warnBulk.push(wb);
+        }
+        if (!mo.row) return;
         var row = mo.row;
         var m = row.materials[itemKey] || { item: String(l.product_name || itemKey),
           unit: (meta && meta.unit) || '', qty: 0, total_cost: 0 };
         m.qty = roundQty(m.qty + q);
         m.total_cost = roundMoney(m.total_cost + Number(l.total_cost));
         row.materials[itemKey] = m;
-        if (!meta || !BULK_CATEGORIES[meta.category] || meta.client_id !== mo.client_id) return;
+        if (!isBulk) return;
         var s = opSlot(row, mo.op);
         s.bulk_used_qty = roundQty(s.bulk_used_qty + q);
         var g = groupLine(row, 'bulk_used_by_op', mo.op, itemPid,
-          { item: itemPid, product_name: meta.name, unit: meta.unit, qty: 0, total_cost: 0 });
+          { item: itemPid, product_name: meta.name, unit: meta.unit,
+            owner_client_id: meta.client_id, owner_client_name: clientName(meta.client_id),
+            cross_client: cross, qty: 0, total_cost: 0 });
         g.qty = roundQty(g.qty + q);
         g.total_cost = roundMoney(g.total_cost + Number(l.total_cost));
       });
     } catch (e) {}
 
-    /* By-products: a row of their own under the item's client, grouped per
-       op and per source (the MO's produced product). Items with no client
-       land on the «بدون عميل» row. */
+    /* By-products: a row of their own, grouped per op and per source (the
+       MO's produced product). The row's client is the item's owner
+       (attribution 'item'; no owner → «بدون عميل») or the MO's client
+       (attribution 'mo'). */
     bpRows.forEach(function (b) {
       var mo = moByUid[String(b.valley_manufacture_header_id || '').trim()];
       if (!mo) return;
       var item = String(b.item == null ? '' : b.item).trim() || '-';
       var meta = products[item];
-      var cid = meta ? meta.client_id : '';
-      if (!lineVisible(cid, item)) return;
+      var ownerCid = meta ? meta.client_id : '';
       var bq = roundQty(Number(b.qty));
+      mo.bp_qty = roundQty(mo.bp_qty + bq);
+      if (ownerCid !== mo.client_id && bq && warnVisible(mo.client_id, ownerCid)) {
+        var wp = moRef(mo);
+        wp.item = item; wp.product_name = productName(item); wp.unit = meta ? meta.unit : '';
+        wp.item_client_id = ownerCid; wp.item_client_name = clientName(ownerCid);
+        wp.qty = bq;
+        warnBp.push(wp);
+      }
+      var cid = attribution === 'mo' ? mo.client_id : ownerCid;
+      if (!lineVisible(cid, item)) return;
       var row = rowFor(cid, item);
       var s = opSlot(row, mo.op);
       s.byproduct_qty = roundQty(s.byproduct_qty + bq);
@@ -9146,6 +9226,46 @@ const ValleyFoodsHRModules = (function () {
       g.qty = roundQty(g.qty + bq);
       g.total_cost = roundMoney(g.total_cost + Number(b.total_cost));
     });
+
+    /* Repack MOs whose output (main + by-products) is not the bulk they
+       drew: output with no bulk behind it, or bulk drawn and not packed.
+       And MOs whose produced product has no client — they can only land on
+       the «بدون عميل» row. */
+    var warnRepack = [], warnUnowned = [];
+    moList.forEach(function (mo) {
+      if (!warnVisible(mo.client_id, mo.client_id)) return;
+      if (COUNTED_OPS.indexOf(mo.op) === -1) {
+        var diff = roundQty(mo.qty + mo.bp_qty - mo.drawn_qty);
+        if (Math.abs(diff) >= REPACK_TOLERANCE) {
+          var wr = moRef(mo);
+          wr.output_qty = roundQty(mo.qty + mo.bp_qty); wr.drawn_qty = mo.drawn_qty; wr.diff_qty = diff;
+          warnRepack.push(wr);
+        }
+      }
+      if (!mo.client_id && mo.pid) {
+        var wu = moRef(mo);
+        wu.qty = mo.qty;
+        warnUnowned.push(wu);
+      }
+    });
+    function byMo(a, b) {
+      var c = String(a.date).localeCompare(String(b.date));
+      return c !== 0 ? c : String(a.mo_code).localeCompare(String(b.mo_code));
+    }
+    function sumQty(list, key) {
+      return list.reduce(function (s, x) { return roundQty(s + (Number(x[key]) || 0)); }, 0);
+    }
+    var otherStatusList = Object.keys(otherStatus).sort().map(function (k) { return otherStatus[k]; });
+    var warnings = {
+      byproduct_other_client: warnBp.sort(byMo),
+      byproduct_other_client_qty: sumQty(warnBp, 'qty'),
+      bulk_other_client: warnBulk.sort(byMo),
+      bulk_other_client_qty: sumQty(warnBulk, 'qty'),
+      repack_unbalanced: warnRepack.sort(byMo),
+      unowned_product: warnUnowned.sort(byMo),
+      unowned_product_qty: sumQty(warnUnowned, 'qty'),
+      other_status: otherStatusList
+    };
 
     var canCost = vfCanSeeCost_(user);
     var outRows = Object.keys(rows).map(function (k) { return rows[k]; }).sort(function (a, b) {
@@ -9219,7 +9339,9 @@ const ValleyFoodsHRModules = (function () {
       totals: totals,
       kpi_operation_types: COUNTED_OPS.slice(),
       kpi_totals: kpiTotals,
-      bulk_category_ids: Object.keys(BULK_CATEGORIES)
+      bulk_category_ids: Object.keys(BULK_CATEGORIES),
+      attribution: attribution,
+      warnings: warnings
     };
   }
 

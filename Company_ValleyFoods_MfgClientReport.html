@@ -135,6 +135,9 @@
     var F_CLIENT = pageParam_('client'), F_PRODUCT = pageParam_('product');
     var DATE_FROM = pageParam_('from'), DATE_TO = pageParam_('to');
     var F_OPS = {}, F_STATUS = {};
+    /* Whose row a by-product lands on: the item's owner ('item') or the
+       client of the MO that made it ('mo', the production sheet's view). */
+    var F_ATTR = pageParam_('attr') === 'mo' ? 'mo' : 'item';
     var LOAD_SEQ = 0;
     /* Filter-bar rebuild guard: rebuilding #rep-filter on every data load
        destroys the focused input and closes open combo/date popups mid-typing.
@@ -155,7 +158,8 @@
     function syncFilterUrl() {
       try {
         var q = new URLSearchParams(window.location.search);
-        [['from', DATE_FROM], ['to', DATE_TO], ['client', F_CLIENT], ['product', F_PRODUCT]].forEach(function (pair) {
+        [['from', DATE_FROM], ['to', DATE_TO], ['client', F_CLIENT], ['product', F_PRODUCT],
+          ['attr', F_ATTR === 'mo' ? 'mo' : '']].forEach(function (pair) {
           if (pair[1]) q.set(pair[0], pair[1]); else q.delete(pair[0]);
         });
         var next = window.location.pathname + (q.toString() ? '?' + q.toString() : '') + window.location.hash;
@@ -229,8 +233,13 @@
         client_ids: F_CLIENT ? [F_CLIENT] : [],
         product_ids: F_PRODUCT ? [F_PRODUCT] : [],
         op_types: checkedValues('op'),
-        statuses: checkedValues('st')
+        statuses: checkedValues('st'),
+        attribution: F_ATTR
       };
+    }
+
+    function attrLabel(a) {
+      return (a || F_ATTR) === 'mo' ? 'لعميل أمر التصنيع (زي شيت الإنتاج)' : 'للعميل المسجّل على الصنف';
     }
 
     function renderFilter() {
@@ -267,6 +276,14 @@
       '<div class="rep-filters">' +
         '<div class="rep-checks"><span class="grp-label">نوع العملية:</span>' + opBoxes + '</div>' +
         '<div class="rep-checks"><span class="grp-label">الحالة:</span>' + stBoxes + '</div>' +
+      '</div>' +
+      '<div class="rep-filters">' +
+        '<div class="rep-checks"><span class="grp-label">المنتجات الثانوية تتحسب:</span>' +
+          ['item', 'mo'].map(function (a) {
+            return '<label><input type="radio" name="mfgrep-attr" data-mfgrep-attr value="' + a + '"' +
+              (F_ATTR === a ? ' checked' : '') + '> ' + esc(attrLabel(a)) + '</label>';
+          }).join('') +
+        '</div>' +
       '</div>';
       /* UIC.comboPick dispatches change on the hidden input when a choice is picked. */
       ['rep-client', 'rep-product'].forEach(function (id) {
@@ -275,6 +292,8 @@
       });
       var boxes = host.querySelectorAll('input[data-mfgrep-check]');
       for (var i = 0; i < boxes.length; i++) boxes[i].addEventListener('change', onCheckFilterChange);
+      var attrs = host.querySelectorAll('input[data-mfgrep-attr]');
+      for (var j = 0; j < attrs.length; j++) attrs[j].addEventListener('change', onAttrChange);
       if (focusBack) {
         try {
           var back = document.getElementById(focusBack.id);
@@ -313,6 +332,14 @@
       F_OPS = {}; F_STATUS = {};
       ops.forEach(function (t) { F_OPS[t] = true; });
       sts.forEach(function (s) { F_STATUS[s] = true; });
+      load();
+    }
+
+    function onAttrChange(e) {
+      var v = (e && e.target && e.target.value) === 'mo' ? 'mo' : 'item';
+      if (v === F_ATTR) return;
+      F_ATTR = v;
+      syncFilterUrl();
       load();
     }
 
@@ -541,6 +568,89 @@
         '</tbody></table></div></div></div>';
     }
 
+    /* What makes this report differ from the production sheet, from the
+       server's warnings: one table per kind. Cells are text, or {n} for a
+       quantity (screen numCell / print pNum keep it numeric for Excel). */
+    function warningSets() {
+      var w = (DATA && DATA.warnings) || {};
+      var sets = [];
+      function moTxt(x) { return (x.mo_code || '-') + ' — ' + fmtDate(x.date); }
+      var bp = w.byproduct_other_client || [];
+      if (bp.length) sets.push({
+        title: 'منتجات ثانوية مسجّلة على صنف عميل تاني أو بدون عميل',
+        total: w.byproduct_other_client_qty,
+        note: 'اتعملت في أمر تصنيع لعميل، والصنف المختار مسجّل على عميل غيره. ' + (F_ATTR === 'mo'
+          ? 'محسوبة دلوقتي لعميل الأمر.'
+          : 'محسوبة دلوقتي لصاحب الصنف. اختار «' + attrLabel('mo') + '» عشان تتحسب لعميل التشغيلة، أو صحّح الصنف في الأمر.'),
+        head: ['أمر التصنيع', 'عميل الأمر', 'الصنف المنتج في الأمر', 'المنتج الثانوي', 'مسجّل على', 'الكمية'],
+        rows: bp.map(function (x) { return [moTxt(x), x.mo_client_name, x.source_product_name, x.product_name, x.item_client_name, { n: x.qty }]; })
+      });
+      var bk = w.bulk_other_client || [];
+      if (bk.length) sets.push({
+        title: 'بالك عميل تاني اتسحب في أمر تصنيع',
+        total: w.bulk_other_client_qty,
+        note: 'اتخصم من صافي الأمر عشان ميتحسبش مرتين. راجع إن البالك ده فعلاً اتاخد من رصيد العميل ده.',
+        head: ['أمر التصنيع', 'عميل الأمر', 'الصنف المنتج في الأمر', 'البالك المسحوب', 'صاحب البالك', 'الكمية'],
+        rows: bk.map(function (x) { return [moTxt(x), x.mo_client_name, x.source_product_name, x.product_name, x.item_client_name, { n: x.qty }]; })
+      });
+      var rp = w.repack_unbalanced || [];
+      if (rp.length) sets.push({
+        title: 'اعادة تعبئة المعبّأ فيها مش قد البالك المسحوب',
+        note: 'موجب = اتعبّى أكتر من البالك المسحوب (إنتاج مش متسجّل أو سحب بالك ناقص). سالب = بالك اتسحب ومتعبّاش (فرزة أو هالك مش متسجّلين).',
+        head: ['أمر التصنيع', 'عميل الأمر', 'الصنف', 'المعبّأ + الثانوي', 'البالك المسحوب', 'الفرق'],
+        rows: rp.map(function (x) { return [moTxt(x), x.mo_client_name, x.source_product_name, { n: x.output_qty }, { n: x.drawn_qty }, { n: x.diff_qty }]; })
+      });
+      var un = w.unowned_product || [];
+      if (un.length) sets.push({
+        title: 'أصناف منتجة مش مسجّل عليها عميل',
+        total: w.unowned_product_qty,
+        note: 'بتنزل على «بدون عميل». سجّل العميل على الصنف في شاشة الأصناف.',
+        head: ['أمر التصنيع', 'نوع العملية', 'الصنف', 'الكمية'],
+        rows: un.map(function (x) { return [moTxt(x), x.op, x.source_product_name, { n: x.qty }]; })
+      });
+      var os = w.other_status || [];
+      if (os.length) sets.push({
+        title: 'أوامر في الفترة مش داخلة في التقرير بسبب فلتر الحالة',
+        note: 'لو الأوامر دي اتنفّذت فعلاً، قفلها (Locked) أو علّم حالتها في الفلتر.',
+        head: ['الحالة', 'عدد الأوامر', 'إنتاج الأمر'],
+        rows: os.map(function (x) { return [x.status, { n: x.mo_count }, { n: x.qty }]; })
+      });
+      return sets;
+    }
+
+    function warningsHtml() {
+      var sets = warningSets();
+      if (!sets.length) return '';
+      var inner = sets.map(function (s) {
+        var body = s.rows.map(function (r) {
+          return '<tr>' + r.map(function (c, i) {
+            return (c && typeof c === 'object') ? numCell(s.head[i], c.n)
+              : '<td data-label="' + esc(s.head[i]) + '">' + esc(c == null || c === '' ? '-' : c) + '</td>';
+          }).join('') + '</tr>';
+        }).join('');
+        return '<details style="margin-bottom:10px;"><summary style="cursor:pointer;font-weight:700;">' + esc(s.title) +
+            ' (' + s.rows.length + (s.total != null ? ' — ' + qty(s.total) : '') + ')</summary>' +
+          '<p class="vf-text-muted" style="font-size:12px;margin:6px 0;">' + esc(s.note) + '</p>' +
+          '<div class="table-wrap"><table class="table rep-table"><thead><tr>' +
+          s.head.map(function (h) { return '<th>' + esc(h) + '</th>'; }).join('') +
+          '</tr></thead><tbody>' + body + '</tbody></table></div></details>';
+      }).join('');
+      return '<div class="vf-card" style="margin-bottom:14px;"><div class="vf-card-header"><h3>⚠ تنبيهات البيانات — أسباب اختلاف التقرير عن شيت الإنتاج</h3></div>' +
+        '<div class="vf-card-body">' + inner + '</div></div>';
+    }
+
+    /* The rules behind the numbers, shown under the screen report and at
+       the foot of the printed one. */
+    function noteText() {
+      var bulkCats = ((DATA && DATA.bulk_category_ids) || []).join('، ');
+      return (F_ATTR === 'mo'
+          ? 'المنتج الرئيسي بيتحسب للعميل المسجّل عليه، والمنتجات الثانوية لعميل أمر التصنيع اللي طلعت منه. '
+          : 'كل صنف بيتحسب للعميل المسجّل عليه في الأصناف، سواء منتج رئيسي أو منتج ثانوي. ') +
+        'صافي الإنتاج = إنتاج الأمر (actual_qty) + المنتجات الثانوية − البالك المسحوب من إنتاج سابق ' +
+        '(خامة من تصنيفات ' + bulkCats + '، أياً كان صاحبها، عشان متتحسبش مرتين). ' +
+        'اعادة التعبئة للعلم فقط ومش داخلة في الإجمالي.';
+    }
+
     function renderReport() {
       var b = document.getElementById('rep-body');
       if (!b) return;
@@ -567,14 +677,9 @@
         ? opSectionsHtml() + tablesSumHtml() + materialsHtml()
         : '<div class="empty-state"><span>' + esc(emptyText) + '</span></div>';
 
-      var bulkCats = ((DATA && DATA.bulk_category_ids) || []).join('، ');
-      b.innerHTML = kpis + main +
+      b.innerHTML = kpis + warningsHtml() + main +
         '<p class="vf-text-muted" style="margin-top:14px;font-size:12px;">' +
-          'كل صنف بيتحسب للعميل المسجّل عليه في الأصناف، سواء منتج رئيسي أو منتج ثانوي. ' +
-          'صافي الإنتاج = إنتاج الأمر (actual_qty) + المنتجات الثانوية − البالك المسحوب من إنتاج سابق ' +
-          '(خامة من تصنيفات ' + esc(bulkCats) + ' لنفس عميل المنتج). ' +
-          'اعادة التعبئة للعلم فقط ومش داخلة في الإجمالي. ' +
-          'التكاليف تظهر فقط للمصرح لهم بإظهار التكاليف.' +
+          esc(noteText()) + ' التكاليف تظهر فقط للمصرح لهم بإظهار التكاليف.' +
         '</p>';
     }
 
@@ -681,7 +786,8 @@
         ['العميل', F_CLIENT ? optLabel(OPTS.clients, F_CLIENT) : 'كل العملاء'],
         ['الصنف', F_PRODUCT ? optLabel(OPTS.products, F_PRODUCT) : 'كل الأصناف'],
         ['نوع العملية', opsSel.length ? opsSel.join('، ') : 'الكل'],
-        ['الحالة', stSel.length ? stSel.join('، ') : 'Locked']
+        ['الحالة', stSel.length ? stSel.join('، ') : 'Locked'],
+        ['المنتجات الثانوية', attrLabel()]
       ].map(function (f) { return '<span><b>' + f[0] + ':</b> ' + esc(f[1]) + '</span>'; }).join('');
 
       var kpis = [['إجمالي صافي الإنتاج', qty(kt.produced_qty)]];
@@ -747,11 +853,26 @@
           pCols(canCost ? [4, 52, 10, 16, 18] : [4, 64, 12, 20]) + pHead(mHead) + '<tbody>' + mBody + '</tbody></table></div>';
       }
 
-      var bulkCats = ((DATA && DATA.bulk_category_ids) || []).join('، ');
-      return html + '<div class="pr-foot">' +
-        'كل صنف بيتحسب للعميل المسجّل عليه في الأصناف. صافي الإنتاج = إنتاج الأمر + المنتجات الثانوية − البالك المسحوب من إنتاج سابق ' +
-        '(خامة من تصنيفات ' + esc(bulkCats) + ' لنفس عميل المنتج). اعادة التعبئة للعلم فقط ومش داخلة في الإجمالي.' +
-        '</div>';
+      var wsets = warningSets();
+      if (wsets.length) {
+        html += '<div class="pr-section"><h2>تنبيهات البيانات — أسباب اختلاف التقرير عن شيت الإنتاج</h2>' +
+          wsets.map(function (s) {
+            var wn = 0;
+            var head = [{ label: 'م', cls: 'i' }].concat(s.head.map(function (h, i) {
+              var numeric = s.rows.length && s.rows[0][i] && typeof s.rows[0][i] === 'object';
+              return { label: esc(h), cls: numeric ? 'n' : '' };
+            }));
+            var body = s.rows.map(function (r) {
+              return '<tr><td class="i">' + (++wn) + '</td>' + r.map(function (c) {
+                return (c && typeof c === 'object') ? pNum(c.n) : '<td>' + esc(c == null || c === '' ? '-' : c) + '</td>';
+              }).join('') + '</tr>';
+            }).join('');
+            return '<h3>' + esc(s.title) + (s.total != null ? ' — ' + qty(s.total) : '') + '</h3>' +
+              '<p class="pr-note">' + esc(s.note) + '</p><table>' + pHead(head) + '<tbody>' + body + '</tbody></table>';
+          }).join('') + '</div>';
+      }
+
+      return html + '<div class="pr-foot">' + esc(noteText()) + '</div>';
     }
 
     function fillPrint() {
